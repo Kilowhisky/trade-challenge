@@ -4,9 +4,15 @@ set -uo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.." || exit 2
 F=scripts/universe-filter.sh
 FIX=tests/fixtures/verbose-sample.txt
-pass=0; fail=0
-ok()  { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
-no()  { fail=$((fail+1)); printf 'FAIL  %s\n       %s\n' "$1" "${2:-}"; }
+pass=0; fail=0; skip=0
+ok()   { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
+no()   { fail=$((fail+1)); printf 'FAIL  %s\n       %s\n' "$1" "${2:-}"; }
+# skip() is NOT a pass. It marks an assertion that did not run (offline
+# branch of the fetch test, where there is no network to exercise the real
+# path). It must be visually and numerically distinct from ok() so a reader
+# — or a script grepping the summary line — can never mistake "the network
+# was down and we didn't check" for "we checked and it was fine".
+skip() { skip=$((skip+1)); printf '  SKIP %s (offline — not executed)\n' "$1"; }
 
 OUT=$(mktemp); ERR=$(mktemp); trap 'rm -f "$OUT" "$ERR"' EXIT
 
@@ -73,7 +79,33 @@ top=$(tail -n +2 "$OUT" | cut -f1)
 grep -q 'dropped 1' "$ERR" && ok "truncation count is reported accurately" \
   || no "truncation count is reported accurately" "stderr was: $(cat "$ERR")"
 
+echo "== directory fetch =="
+SYMS=$(mktemp)
+bash scripts/universe-fetch.sh --out "$SYMS" >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  c=$(wc -l < "$SYMS" | tr -d ' ')
+  [ "$c" -gt 5000 ] && ok "fetched a plausible symbol count ($c)" || no "fetched a plausible symbol count" "got $c"
+  grep -qx 'AAPL' "$SYMS" && ok "AAPL present" || no "AAPL present"
+  grep -qE '\$' "$SYMS" && no "test/oddball symbols excluded" "found \$ symbols" || ok "test/oddball symbols excluded"
+  # The source file's last data row is a footer ("File Creation Time: ...
+  # "), not a symbol. It must never leak into the output.
+  grep -q 'File Creation Time' "$SYMS" && no "footer line excluded from symbol list" "footer leaked into output" || ok "footer line excluded from symbol list"
+elif [ "$rc" -eq 3 ]; then
+  ok "offline: exits 3 so the caller keeps last week's universe"
+  skip "fetched a plausible symbol count"
+  skip "AAPL present / test symbols excluded"
+  skip "footer line excluded from symbol list"
+else
+  no "universe-fetch returns 0 or 3" "got $rc"
+fi
+rm -f "$SYMS"
+
 echo
 echo "-------------------------------------------"
-printf '%s passed, %s failed\n' "$pass" "$fail"
+if [ "$skip" -gt 0 ]; then
+  printf '%s passed, %s failed, %s SKIPPED (offline — network unreachable, real fetch path NOT exercised)\n' "$pass" "$fail" "$skip"
+else
+  printf '%s passed, %s failed\n' "$pass" "$fail"
+fi
 [ "$fail" -eq 0 ] || exit 1
