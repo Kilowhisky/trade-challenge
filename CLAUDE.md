@@ -86,7 +86,7 @@ or on weekends.
 **Operating limitation #2 — stops are not full protection.** A resting stop at
 Schwab triggers only during regular-session trading. It does *not* protect
 against overnight gaps, weekend news, pre/post-market moves, or a halted stock
-reopening lower. A 10% stop can and does fill well below 10% down. Stops are a
+reopening lower. A stop can and does fill well below its trigger. Stops are a
 floor on ordinary drift, not on events. §3.7 exists because of this.
 
 ---
@@ -100,11 +100,21 @@ Absolute. No argument from opportunity cost overrides these.
    requires enabling margin.
 2. **No selling options. Ever.** No naked calls, no naked puts, no covered calls,
    no cash-secured puts. We buy options only. Rationale in §2.1.
-3. **No spreads.** Schwab places spreads in an approval tier that requires a
-   margin account, which §1.1 forbids — regardless of a debit spread's
-   defined-risk math.
+3. **No spreads.** Spreads sit at Schwab approval **Level 2**, and *"securities
+   regulations require options spreads to be traded in a margin account.
+   Therefore, Levels 2 and 3 must have margin enabled."* §1.1 forbids margin
+   and is unamendable core, so this is not a discretionary tightening —
+   it is downstream of a rule that cannot move, regardless of a debit
+   spread's defined-risk math. *(Verified 2026-08-17; the only documented
+   exception is limited margin for eligible IRAs, which this account is not.)*
 4. **No penny or OTC stocks.** Nothing under $5, nothing off a major exchange.
-   This floor also applies to the underlying of any option.
+   This floor also applies to the underlying of any option. Liquidity is
+   gated on **average daily dollar volume**, not share count — a share-count
+   floor is a size-dependent proxy, and at this account's maximum §3.1
+   position a $5M/day name absorbs us at roughly 0.02% of its volume. The
+   share floor remains only as a sanity check against thin, high-priced
+   names. *(Amended 2026-08-17 — was 1M shares/day, which excluded most of
+   the mid-cap universe for no execution reason at this size.)*
 5. **No short selling** of any security, and no action that could produce a short
    position by accident (see §4.7 on orphaned stop orders).
 6. **No trading securities of any company Chris has material non-public
@@ -124,7 +134,7 @@ obligation that can outrun the account.
 
 | Instrument | Permitted | Constraints |
 |---|---|---|
-| Listed common stocks | Yes | ≥ **$5.00**<!--rule:manual_min_share_price_usd-->/share, ≥ **1000000**<!--rule:manual_min_avg_daily_volume--> avg daily volume, major exchange |
+| Listed common stocks | Yes | ≥ **$5.00**<!--rule:manual_min_share_price_usd-->/share, ≥ **5000000**<!--rule:manual_min_avg_daily_dollar_volume--> average daily **dollar** volume (and ≥ **100000**<!--rule:manual_min_avg_daily_volume--> shares), major exchange |
 | ETFs | Yes | Same liquidity floor |
 | Leveraged / inverse ETFs | Yes | 20% aggregate cap, max 5 trading day hold (§3.5) |
 | Long calls (buying) | Yes | Quality floors in §3.2 |
@@ -188,9 +198,26 @@ under no circumstances hold any option into its expiration week's final trading
 day. If a position cannot be closed for any reason, file a **Do-Not-Exercise
 instruction with Schwab the same session** and notify Chris immediately.
 
-**3.4 — Stop-loss.** Every stock and ETF position gets a **stop-limit** order
-with the trigger **10%**<!--rule:manual_stop_trigger_pct_below_entry--> below entry and the limit **5%**<!--rule:manual_stop_limit_pct_below_trigger--> below the trigger,
+**3.4 — Stop-loss.** Every stock and ETF position gets a **stop-limit** order,
 placed as a resting GTC order immediately after the entry fill is confirmed.
+
+The trigger is **scaled to the name's own daily ATR**, so risk per trade stays
+roughly constant instead of varying with volatility:
+
+```
+trigger_pct = clamp(2.5 × daily_ATR_pct, 8, 15)      # below entry
+limit_pct   = 5                                       # below the trigger
+```
+
+with **2.5**<!--rule:manual_stop_atr_multiple--> the ATR multiple, **8%**<!--rule:manual_stop_trigger_min_pct--> the floor and **15%**<!--rule:manual_stop_trigger_max_pct--> the cap. The limit sits **5%**<!--rule:manual_stop_limit_pct_below_trigger--> below the trigger.
+
+The cap is what bounds worst-case loss; the floor stops a very quiet name from
+getting a hair-trigger stop. ATR is measured on the same series the entry was
+judged on — post-gap for a catalyst entry. *(Amended 2026-08-17 — was a fixed
+10%. The fixed figure forced a strategy-level volatility ceiling that rejected
+otherwise-qualified names purely because a 10% stop did not fit them, which
+made §3.4 the rule most restricting the investable universe.)*
+
 The trigger level is a **floor**: it may be raised, never lowered.
 Long options do not get stops — option stops fill terribly on wide spreads — and
 are controlled by §3.2 sizing instead.
@@ -319,7 +346,7 @@ I meant to send.
   thesis. Option symbols are built **only** by `create_option_symbol`, never
   typed from memory. This is the hallucinated-parameter failure — a plausible,
   well-formed symbol for the wrong instrument.
-- **Order-rate ceilings.** Maximum **2**<!--rule:manual_max_orders_per_symbol_per_session--> per symbol per session and **3**<!--rule:manual_max_replaces_per_stop_per_day--> replaces per resting stop per day. A ceiling **trips on the attempt to
+- **Order-rate ceilings.** Maximum **4**<!--rule:manual_max_orders_per_symbol_per_session--> per symbol per session and **3**<!--rule:manual_max_replaces_per_stop_per_day--> replaces per resting stop per day. *(Raised from 2 on 2026-08-17: an entry fill plus its mandatory §3.4 stop consumed the whole allowance, so any stop retry or entry re-price breached by construction and forced the protective-order exception on routine operations.)* A ceiling **trips on the attempt to
   exceed it** — placing the Nth order is legal and routine; the trip is the
   would-be (N+1)th.
   Hitting any ceiling means: stop placing orders, reconcile against the

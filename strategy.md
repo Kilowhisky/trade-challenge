@@ -103,23 +103,28 @@ computes them from the live figure at order time.
 
 - Universe: large/mid caps and sector ETFs passing §1.4/§2 floors, **no
   earnings scheduled before 9/14** (verified at entry, §3.7).
-- **Sector carve-out** *(strategy rule, from the sequencing finding)*: both
-  core names come from **outside consumer-retail and mega-cap tech** —
-  industrials, healthcare, financials, energy relative-strength leaders —
-  because those two themes are the window's entire catalyst supply and §3.8
-  would otherwise let the blind 8/14–17 core deployment empty the catalyst
-  sleeve for the month.
 - Tilt: 3–6 month relative strength, uptrend, proximity to 52-week high
   (the tilt with live large-cap evidence at this horizon).
-- Volatility ceiling *(strategy rule)*: reject if 10% ÷ daily ATR% < **3**<!--rule:strategy_volatility_atr_ratio_min-->.
+- Volatility ceiling *(strategy rule)*: reject if daily ATR exceeds
+  **6%**<!--rule:strategy_max_daily_atr_pct--> — the point at which §3.4's
+  ATR-scaled stop would hit its cap and stop being proportional to the name.
   **For catalyst entries, ATR is measured on the post-gap series** — pre-gap
-  ATR systematically passes names whose post-print volatility makes a 10%
-  stop a coin flip *(comparative research #2)*.
-- **NVDA-week guard (8/24–8/28)** *(strategy rule)*: no adds and no new
-  positions while the field's correlated event (NVDA 8/26) resolves —
-  breadth is narrow, margin debt is at a 2000/2007/2021-signature record,
-  and our win path is surviving the field's event, not joining it.
-  De-grossing and anti-field expressions remain permitted. Expect a muted
+  ATR systematically passes names whose post-print volatility makes a stop a
+  coin flip *(comparative research #2)*. *(Was "reject if 10% ÷ ATR% < 3",
+  i.e. ATR% > 3.33 — a threshold that existed only to accommodate a fixed 10%
+  stop, and that rejected quality names for volatility the stop can now
+  absorb.)*
+- **NVDA-week guard (8/25–8/27)** *(strategy rule)*: through the print, no
+  adds and no new positions **in names correlated with the AI/semis complex
+  or with the broad index** (§3.8 method, >0.7). Uncorrelated single names —
+  healthcare, staples, energy, rate-sensitive financials — remain tradeable
+  on their own merits. De-grossing and anti-field expressions remain
+  permitted. Breadth is narrow and margin debt is at a
+  2000/2007/2021-signature record, so our win path is surviving the field's
+  event rather than joining it — but that argues against *correlated*
+  exposure, not against trading at all. *(Was 8/24–8/28 and a blanket freeze:
+  five sessions, 24% of the window, closed to every name regardless of
+  whether it had any connection to the event.)* Expect a muted
   tape to produce few qualified catalyst setups generally (Q4-25: under half
   of beats saw a positive next-day move); **zero qualified setups is a
   legitimate outcome.**
@@ -139,15 +144,21 @@ accordingly (§12). Entry remains **after** the print, never through it
 beat, ideally raised guidance; **gapped up and held** (closed report day in
 top half of range); §1.4/§2 floors; sector distinct from both core names
 (§3.8 — guaranteed possible by §4's carve-out); next report ~3 months out.
-Prefer the **~$20–60 price band** *(strategy rule — whole-share granularity
-and stop slippage at catalyst-sleeve size)*.
+Price is bounded by **granularity, not a fixed band** *(strategy rule)*: the
+catalyst sleeve must buy at least
+**6**<!--rule:strategy_catalyst_min_whole_shares--> whole shares, so the
+ceiling is `sleeve ÷ 6` and rises with capital. The floor is §1.4's. *(Was a
+fixed ~$20–60 band, set when the sleeve was $270 and never rescaled; at
+present sleeve size it excluded most of the S&P by price for a granularity
+problem that no longer exists.)*
 
 **Entry:** sessions 1–3 post-report, limit at/inside ask, day-only, and only
 in the first half of a session Chris intends to keep open *(strategy rule)*.
 
 **Exits — first trigger wins (no time exit; it clipped the only payoff):**
-- §3.4 stop-limit, GTC, at the manual's trigger and limit offsets below the
-  **share-weighted average entry**; re-computed via single replace on each add
+- §3.4 stop-limit, GTC, at the manual's ATR-scaled trigger and its limit
+  offset below the **share-weighted average entry**; re-computed via single
+  replace on each add
 - Stall rule: two consecutive closes below blended entry, evaluated from
   session 4 onward (entry day = session 1) → close next session
 - Stop ratchet — **active** (§3.4: the trigger is a floor, may be raised,
@@ -236,8 +247,8 @@ research — each traces to a documented incident class)*:
   quoted via `get_quotes` immediately before its order; the returned
   description and price must match the written thesis. Option symbols are
   only ever built by `create_option_symbol`, never typed from memory.
-- **Order-rate ceilings** (Knight/runaway-loop class): max **2 per symbol
-  per session**, max **3 replaces per resting stop per day**. *(The
+- **Order-rate ceilings** (Knight/runaway-loop class): per-symbol and
+  per-stop ceilings exactly as manual §4.10 states them (`rules.yml`). *(The
   5-per-session ceiling was lifted by §9 amendment 2026-08-13.)* Hitting any
   ceiling = stop placing orders, reconcile, write to the log, wait for
   Chris.

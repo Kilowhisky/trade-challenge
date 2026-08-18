@@ -69,6 +69,53 @@ it: Caution $792.00 → **$2,552.00**, Halt $720.00 → **$2,320.00**.
 | §4.10 | Protective-order exception ratified: a mandatory §3.4 stop is placed even if it breaches a ceiling, because the alternative is an unstopped position held overnight. |
 | §2 | Long puts permitted; **all** option selling prohibited. The original "no puts" rule was written believing puts carry unlimited risk — they do not. The unlimited position is the uncovered short call. |
 
+### 2026-08-17 · Restriction audit: six rules loosened, one confirmed
+
+Chris-initiated audit — "the rules are too strict and they restrict our ability
+to actually find investable assets." Account at a high; §9.3 satisfied.
+
+The audit's finding was that the premise was half right. The **core** universe
+was not rule-starved: the deep-research design already records the naive band
+as "300–500 names — unbuildable at ~5 spare chain calls/day", so the binding
+constraint there is research throughput, not rule strictness. The **catalyst**
+sleeve and the stop geometry were genuinely over-tight.
+
+| # | Change | Gate |
+|---|---|---|
+| 1 | Catalyst price band `$20–60` → **at least 6 whole shares at sleeve size** (ceiling = sleeve ÷ 6, and it scales) | strategy rule |
+| 2 | §3.4 stop: fixed 10% → **clamp(2.5 × daily ATR%, 8, 15)**; volatility ceiling re-keyed from "10% ÷ ATR% < 3" (ATR% > 3.33) to **ATR% > 6** | §9 |
+| 3 | Core sector carve-out (outside consumer-retail and mega-cap tech) **removed** — its rationale was the 8/14–17 blind deployment, which has passed | strategy rule |
+| 4 | NVDA guard: blanket 8/24–8/28 freeze → **8/25–8/27, correlated names only** (§3.8 >0.7); uncorrelated names stay tradeable | strategy rule |
+| 5 | §1.4 liquidity: ≥1M shares/day → **≥$5M/day dollar volume** (plus a ≥100k share sanity floor) | §9 |
+| 6 | §4.10 per-symbol ceiling **2 → 4** | §9 |
+| 7 | §1.3 no spreads — **confirmed, no change** | — |
+
+**On #2, the tradeoff stated plainly.** An ATR-scaled stop raises worst-case
+loss per position from 10% to as much as 15%, but holds *risk per trade*
+roughly constant instead of letting it vary inversely with volatility, and
+removes the filter that was rejecting quality names purely because a fixed
+10% stop did not fit them. The cap is what bounds the downside.
+
+**On #5**, the old floor was a size-dependent proxy: at this account's maximum
+§3.1 position, a $5M/day name absorbs us at roughly 0.02% of its volume.
+
+**On #6**, an entry fill plus its mandatory §3.4 stop consumed the entire
+2-order allowance, so any stop retry or entry re-price breached by
+construction and forced the protective-order exception on routine operations.
+
+**On #7 — §1.3 confirmed and its basis corrected.** The manual said Schwab
+"places spreads in an approval tier that requires a margin account." Verified:
+spreads are Level 2, and *"securities regulations require options spreads to
+be traded in a margin account. Therefore, Levels 2 and 3 must have margin
+enabled."* §1.1 is unamendable core, so §1.3 is downstream of a rule that
+cannot move — not a discretionary tightening. Text updated to say so.
+
+**Correction to an earlier claim in the same conversation.** The agent stated
+that §1.2 was moot because the broker blocks option selling at Level 1. That
+was wrong: Schwab Level 0 (Covered) carries covered calls, cash-secured puts
+and collars, and Level 1 (Long) includes Level 0. The binding constraint on
+option selling is **§1.2 itself**, which is unamendable core, not the broker.
+
 ### 2026-08-17 · §9.1 — the "no amendment proposed while a position is open" bar removed
 
 Chris-initiated, post-close, account at a high (competition capital $2,902.00

@@ -133,7 +133,7 @@ reached:**
       `_sweep_cursor` machinery rows, §D.3) and every row appended to
       `research/tombstones.jsonl` since the scorecard was last written.
       Each opens one entry in `## Open cohorts` with a **hypothetical
-      position** — standard sleeve sizing, a 10% stop, at the recorded
+      position** — standard sleeve sizing, a §3.4 ATR-scaled stop, at the recorded
       ref price — dated today. Because this step runs before §D.3's
       sweep in the priority order, "most recent" in practice usually
       means the **prior run's** shortlist; today's own §D.3/§D.6 output
@@ -198,7 +198,7 @@ reached:**
      wrapping to 0 past the end of `universe.md`.
      `_sweep_cursor` rows are sweep machinery, **never candidates** —
      exclude them from ranking, from any `candidates.md` promotion, and
-     from §D.2a's cohort ingestion. **Prioritize the §5 $20–60 band and
+     from §D.2a's cohort ingestion. **Prioritize the §5 granularity band and
      the options-affordability band first** within each chunk — the
      names most likely to qualify are swept before the long tail.
      Qualification against survivors: price $5 to the §3.1-derived

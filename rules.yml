@@ -29,7 +29,12 @@ manual:
 
   # §1.4 / §2 — instrument floors
   min_share_price_usd: 5.00
-  min_avg_daily_volume: 1000000
+  # Liquidity is gated on DOLLAR volume, not share count. A share-count floor
+  # is a proxy for "can we get filled" calibrated to account size; at a max
+  # §3.1 position near $1,015 a $5M/day name absorbs us at ~0.02% of volume.
+  # The share floor survives only as a sanity check on thin, high-priced names.
+  min_avg_daily_dollar_volume: 5000000
+  min_avg_daily_volume: 100000
 
   # §3.1 — single position cap, % of competition capital, after the fill
   single_position_pct: 35
@@ -47,8 +52,13 @@ manual:
   option_close_at_dte: 5
   occ_auto_exercise_itm_usd: 0.01
 
-  # §3.4 — stop-loss geometry
-  stop_trigger_pct_below_entry: 10
+  # §3.4 — stop-loss geometry. The trigger scales to the name's own daily ATR
+  # rather than sitting fixed, so risk per trade is roughly constant instead
+  # of varying with volatility. Floor and cap bound it: the cap limits
+  # worst-case loss, the floor stops a quiet name getting a hair-trigger stop.
+  stop_atr_multiple: 2.5
+  stop_trigger_min_pct: 8
+  stop_trigger_max_pct: 15
   stop_limit_pct_below_trigger: 5
 
   # §3.5 — leveraged / inverse ETFs
@@ -64,7 +74,7 @@ manual:
   correlation_threshold: 0.7
 
   # §4.10 — order-rate ceilings. Trip on the attempt to exceed (N+1).
-  max_orders_per_symbol_per_session: 2
+  max_orders_per_symbol_per_session: 4
   max_replaces_per_stop_per_day: 3
 
   # §8 — window and endgame
@@ -86,9 +96,15 @@ strategy:
   max_deployed_pct: 100
 
   # Playbook §4 — selection
-  volatility_atr_ratio_min: 3          # reject if 10% ÷ daily ATR% < this
-  catalyst_price_band_low_usd: 20
-  catalyst_price_band_high_usd: 60
+  # Was "reject if 10% ÷ daily ATR% < 3", i.e. reject ATR% > 3.33 — a filter
+  # that existed only because the stop was fixed at 10%. With an ATR-scaled
+  # stop the binding constraint is the stop cap: reject a name only when
+  # 2.5 x ATR% would exceed manual stop_trigger_max_pct.
+  max_daily_atr_pct: 6
+  # Replaces the fixed $20-60 band, set when the catalyst sleeve was $270 and
+  # never rescaled. Expressed as granularity so it moves with capital: the
+  # sleeve must buy at least this many whole shares.
+  catalyst_min_whole_shares: 6
 
   # Playbook §5 — exits
   stall_rule_consecutive_closes: 2

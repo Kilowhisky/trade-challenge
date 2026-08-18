@@ -278,11 +278,13 @@ discipline — the loop's terseness does not carry over.
    resting stop per day) governs *amendments to an already-resting stop*. A
    stop that has never rested is a **new order** and consumes a per-symbol
    slot — so after the entry fill, the first stop attempt is the symbol's
-   second and last routine order. Attempts 2 and 3 exceed **2 per symbol per
-   session** and are permitted only by §4.10's protective-order exception,
-   which treats each as a ceiling hit: reconcile, write `ALERT.md`, notify
-   Chris, and place nothing discretionary afterward. Read §4.10 before
-   relying on this.
+   second routine order of four. The §4.10 per-symbol ceiling was raised to
+   4 on 2026-08-17 precisely so an entry plus its stop no longer consumes the
+   whole allowance — a stop retry or an entry re-price is now routine rather
+   than an immediate breach. Past the ceiling, §4.10's protective-order
+   exception still applies and still counts as a ceiling hit: reconcile,
+   write `ALERT.md`, notify Chris, place nothing discretionary afterward.
+   Read §4.10 for the current numbers rather than trusting this paragraph.
 6. **Restore the invariants**: stop matches filled quantity, no orphaned stops
    (§4.7), no working entry orders left to rest past session end (§4.2).
 7. **Log it**: `trade-log.csv` row, `ALERT.md` if Chris is needed, commit.

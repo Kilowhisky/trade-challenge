@@ -108,7 +108,7 @@ timestamp was altered by that pass.
    stop must be a resting order at Schwab, never something the assistant intends
    to watch for. See §4.3.
 2. **Stops do not cover gaps.** They trigger only in regular-session trading. A
-   10% stop can fill far below 10% down on overnight news. See §0 and §3.7.
+   stop can fill far below its trigger on overnight news. See §0 and §3.7.
 3. **Long options are never held near expiration.** Auto-exercise of an
    in-the-money contract would blow through a cash account this size. See §3.3.
 4. **Every percentage is against competition capital**, not account value.
