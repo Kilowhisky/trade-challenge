@@ -34,6 +34,15 @@ cut -f1 "$OUT" | tail -n +2 > /tmp/uf_syms.$$
 grep -qx 'CSX' /tmp/uf_syms.$$ && ok "CSX passes every gate" || no "CSX passes every gate"
 grep -qx 'PENNYCO' /tmp/uf_syms.$$ && no "sub-\$5 name is dropped" "PENNYCO survived" || ok "sub-\$5 name is dropped"
 grep -qx 'TQQQ' /tmp/uf_syms.$$ && no "leveraged ETF is dropped (§3.5)" "TQQQ survived" || ok "leveraged ETF is dropped (§3.5)"
+# TDOLLAR (price 6.00, adv10 200000 -> dollar_vol 1.2M < 5M floor, shares
+# 200000 >= 100000 share floor) isolates the dollar-volume gate: it fails
+# ONLY that gate. TSHARE (price 200.00, adv10 50000 -> dollar_vol 10M >= 5M
+# floor, shares 50000 < 100000 share floor) isolates the share-sanity-floor
+# gate the same way. Mutation-tested: deleting either gate line in
+# universe-filter.sh's python block makes the corresponding assertion below
+# fail (see task-2-report.md for the mutation run).
+grep -qx 'TDOLLAR' /tmp/uf_syms.$$ && no "thin-dollar-volume name is dropped (§1.4)" "TDOLLAR survived" || ok "thin-dollar-volume name is dropped (§1.4)"
+grep -qx 'TSHARE' /tmp/uf_syms.$$ && no "thin-share-floor name is dropped (§1.4)" "TSHARE survived" || ok "thin-share-floor name is dropped (§1.4)"
 rm -f /tmp/uf_syms.$$
 
 echo "== optionable is recorded, never required =="
@@ -41,6 +50,12 @@ bash "$F" --payload "$FIX" --out "$OUT" >/dev/null 2>&1
 awk -F'\t' '$1=="PENNYCO" && $6=="false"' "$OUT" | grep -q . \
   && ok "non-optionable name is kept and flagged in the unfiltered pass" \
   || no "non-optionable name is kept and flagged in the unfiltered pass"
+
+echo "== gate-failing rows are parsed fine, not silently dropped =="
+# Proves TDOLLAR/TSHARE's absence above comes from the gate, not a parse
+# failure: both must show up in the unfiltered pass.
+grep -q '^TDOLLAR	' "$OUT" && ok "TDOLLAR is present in the unfiltered output" || no "TDOLLAR is present in the unfiltered output"
+grep -q '^TSHARE	' "$OUT" && ok "TSHARE is present in the unfiltered output" || no "TSHARE is present in the unfiltered output"
 
 echo
 echo "-------------------------------------------"
