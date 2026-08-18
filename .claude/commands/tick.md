@@ -35,14 +35,9 @@ does **not** execute §B–§D itself. Instead:
    escalation never happens inside the subagent.
 
 Why: ~78 ticks of broker payloads would otherwise accumulate in the
-trading session's context, and the subagent's tool list has **no order,
-Write, or Edit tools**, so §H's "never place an order from inside the tick
-path" is enforced by the harness, not by instruction. The subagent is
-pinned to **Opus** (`model: opus` in its frontmatter) so the ~78
-mechanical sweeps per session don't burn the primary model's usage cap —
-the parent session (escalations, orders, judgment) stays on the session
-model. Drop to `haiku` only after the tick has proven mechanical over
-several sessions.
+trading session's context, and the subagent has **no order, Write, or Edit
+tools** — so §H's "never place an order from inside the tick path" is
+enforced by the harness rather than by instruction.
 
 The **first dispatch of a session is the smoke test.** If it returns
 `FAIL:` about missing Schwab MCP tools, the agent registration is stale
@@ -295,7 +290,7 @@ The interval is a function of book state. Re-evaluate it after every tick.
 |---|---|
 | Naked position — filled, stop not yet confirmed resting | **60s** until the stop is confirmed, or until 3 failed stop attempts / 15 minutes naked force the §4.3 close — retry bounds and the ceiling interaction per §E step 5 and §4.10's protective-order exception |
 | Working entry order resting, unfilled | 5 min — catch the fill→stop window |
-| Positions open, all stops confirmed matching | **15 min** — baseline lowered from 5 min at the 2026-08-14 close review (Chris: "Lower tick latency"; 72 five-minute rows, 0 trips, ~2.4M subagent tokens on day one). Any option position open or any clock inside 2 days of its limit (§C.7) → back to 5 min |
+| Positions open, all stops confirmed matching | **15 min** baseline. Any option position open, or any clock inside 2 days of its limit (§C.7) → back to 5 min |
 | Flat, no working orders | **Stop the loop.** Cash is a position (§3.9) and idle ticks burn context |
 
 ---

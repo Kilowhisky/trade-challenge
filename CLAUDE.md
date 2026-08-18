@@ -1,41 +1,28 @@
 # Trading Competition — Operating Manual
 
-**Account owner:** Chris
-**Starting capital:** $900.00 competition capital + $900.00 settlement reserve
-  (amended 2026-08-13, pre-window, field-agreed — see §9 note below)
-**Capital amendment 2026-08-14 (mid-window, field-agreed):** **+$2,000.00**
-  transferred in after the day-one close, verified settled at the broker
-  ($3,799.38 liquidation, $3,402.48 settled cash, $0 unsettled/pending).
-  Competition capital ≈ **$2,899.38** at amendment. Every competitor made the
-  same addition (field-agreed), so the unchanged scoring formula stays
-  comparable. The §1.7 transfer prohibition was ratified as a **one-time
-  exception for this transfer only** and remains in force for the remainder
-  of the window. Chris's authorizing message is quoted verbatim in the
-  amendment commit per §9.
-**Scoring:** final account value **minus the $900.00 reserve** (formula
-  unchanged by the 2026-08-14 amendment; the field agreed rankings remain
-  comparable because every account added the same $2,000)
-**Risk anchoring:** every percentage rule in §3 — position caps, sleeve limits,
-  high-water mark, §3.6 triggers — is computed against **competition capital =
-  account value − $900.00 reserve**, never against total account value. Caution
-  and Halt are **$2,552.00 / $2,320.00** of competition value (−12% / −20%
-  from the re-anchored $2,900.00 high-water mark; before the 2026-08-14
-  amendment: $792.00 / $720.00 from $900.00). The reserve exists
-  only to bridge T+1 settlement; total position exposure never exceeds 100% of
-  competition capital. The reserve adds float, never risk.
-**Competition window:** 2026-08-14 → 2026-09-14 (one calendar month)
-**Final NYSE session:** Monday 2026-09-14 · 21 sessions total (Labor Day 2026-09-07 excluded)
-**§8 lockout — no new positions, all options closed, from:** Thursday 2026-09-10
-**Account:** ACCOUNT_REDACTED "LLM YOLO" · CASH · hash `HASH_REDACTED`
-**Initial high-water mark:** $900.00 · re-anchored **$2,900.00** on 2026-08-14
-  (round anchor chosen by Chris — absorbs day one's −$0.62 into the baseline)
-  · Caution $2,552.00 · Halt $2,320.00
-**Broker:** Charles Schwab, accessed via the Schwab MCP server
-**Account type:** Cash account (no margin)
-**Manual version:** v3
+**Manual version v3.** This file is the binding rule set for this project. It
+loads automatically at the start of every session. Read it before taking any
+action on the account.
 
-This file is the binding rule set for this project. It loads automatically at the
-start of every session. Read it before taking any action on the account.
+| | |
+|---|---|
+| **Account owner** | Chris |
+| **Account** | ACCOUNT_REDACTED "LLM YOLO" · Charles Schwab, via the Schwab MCP server · **CASH — no margin** · hash `HASH_REDACTED` |
+| **Competition capital** | Account value − the $900.00 reserve · **≈$2,899.38** at the 2026-08-14 amendment |
+| **Settlement reserve** | $900.00 — float to bridge T+1 settlement, never deployed |
+| **Scoring** | Final account value **minus the $900.00 reserve** |
+| **High-water mark** | **$2,900.00** · Caution **$2,552.00** (−12%) · Halt **$2,320.00** (−20%) |
+| **Window** | 2026-08-14 → 2026-09-14 · 21 NYSE sessions (Labor Day 9/07 excluded) |
+| **Final session** | Monday 2026-09-14 |
+| **§8 lockout** | From Thursday 2026-09-10 — no new positions, all options closed |
+
+**Risk anchoring — the misreading this manual most wants to prevent.** Every
+percentage in §3 — position caps, sleeve limits, the high-water mark, the §3.6
+triggers — is computed against **competition capital**, never against total
+account value. Reading a cap against the full balance overstates the intended
+risk by roughly a third. The reserve exists only to bridge T+1 settlement:
+it adds float, never risk, and total position exposure never exceeds 100% of
+competition capital.
 
 **This file is only half the system.** It defines the *box* — what may never be
 done. It does not define *how the account is traded*. That is the playbook:
@@ -44,16 +31,21 @@ done. It does not define *how the account is traded*. That is the playbook:
 > — sleeve architecture and the reserve invariant, core and catalyst selection
 > rules, the options sleeve, the order workflow, the monitoring loop, the
 > session protocol, and the endgame calendar. Two supporting documents in the
-> same directory record a four-agent adversarial review and a five-agent
-> comparative research synthesis with the twelve tightenings adopted from it.
+> same directory record the adversarial review and the comparative research
+> synthesis it draws on.
 
 **Read the playbook at every session open, immediately after §4.5
-reconciliation, and before any order.** It does not load automatically and a
+reconciliation, and before any order.** It does not load automatically, and a
 session that skips it will trade the box instead of the strategy — inside the
 rules, but not to the plan. Where the playbook and this manual disagree, **this
 manual wins**, and the disagreement is a defect to fix rather than a choice to
 make. Rules in the playbook marked *(strategy rule)* are stricter than this
 manual: discretionary, and changeable without a §9 amendment.
+
+Every dated change to this manual — and the value each rule used to carry — is
+recorded in **`CHANGELOG.md`**. It is deliberately not part of this file: the
+rules load every session, their history does not. Read it when you need to know
+why a rule says what it says, or what it said before.
 
 ---
 
@@ -97,11 +89,9 @@ Absolute. No argument from opportunity cost overrides these.
 6. **No trading securities of any company Chris has material non-public
    information about**, including his employer if applicable.
 7. **No moving money into or out of the account** during the window. Dividends
-   and cash-sweep interest are permitted inflows and count toward scoring.
-   *(One-time exception, ratified 2026-08-14 per §9: a single field-agreed
-   +$2,000.00 deposit after the day-one close — every competitor made the
-   same addition. The prohibition is otherwise unchanged and no further
-   transfers are permitted.)*
+   and cash-sweep interest are permitted inflows and count toward scoring. One
+   field-agreed deposit was ratified as a single exception on 2026-08-14
+   (`CHANGELOG.md`); **no further transfers are permitted.**
 
 ---
 
@@ -123,15 +113,8 @@ obligation that can outrun the account.
 
 **2.1 — Why no option selling at all, including "safe" covered calls.**
 
-Three independent reasons, any one of which is sufficient:
+Two independent reasons, either sufficient on its own:
 
-- **It's arithmetically impossible here.** A covered call needs 100 shares. At the
-  §1.4 floor of $5/share that's $500 minimum — but §3.1 caps a single position at
-  35% of $900 = $315. No stock satisfies both rules. Same for a cash-secured put:
-  a $5 strike ties up $500 of collateral, well past the cap. *(2026-08-14 note:
-  the capital amendment raised the §3.1 cap to ≈$1,015, so this leg alone no
-  longer blocks sub-$10 underlyings — but the other two reasons each remain
-  sufficient, and §1.2 is unamendable core. The prohibition stands unchanged.)*
 - **Sizing a short option on premium received is a trap.** A sold put collects
   maybe $40 while committing $500+ of collateral to a gap-down. Any premium-based
   cap waves it straight through.
@@ -140,10 +123,6 @@ Three independent reasons, any one of which is sufficient:
   left is an uncovered short call with unlimited risk, created without a single
   rule violation. Removing the whole category removes the path.
 
-**Note on the original rule set:** the competition began with "no puts," written
-believing puts carry the unlimited risk. They do not — a *long* put has the same
-capped-at-premium risk as a long call. The unlimited position is the *uncovered
-short call*. Corrected: long puts permitted, all option selling prohibited.
 
 ---
 
@@ -157,23 +136,15 @@ buys stacking into a 90% position is a violation, not a loophole.
 
 **3.2 — Option sizing and quality.** Options are capped as a percentage of
 **competition capital**, so capacity scales with the account — wins expand it,
-losses shrink it — and gated on contract quality. *(Amended 2026-08-13 per §9:
-was fixed dollar caps $135/$180 plus a $360 non-replenishing monthly
-cumulative cap; the cumulative cap is deleted.)*
+losses shrink it — and gated on contract quality.
 
 - Max premium in any single option position: **20% of competition capital at
-  entry** (≈$580 at $2,899; was 15%/≈$435 before the 2026-08-17 §9
-  amendment, $135 at $900).
+  entry** (≈$580 at $2,899).
 - Max total open option premium: **30% of competition capital** (≈$870 at
-  $2,899; was 20%/≈$580 before the 2026-08-17 §9 amendment, $180 at $900).
-  *(Amended 2026-08-17 per §9, Chris-initiated post-close, book flat: caps
-  raised 15%→20% per position, 20%→30% aggregate. Chris's words quoted in
-  the amendment commit. All quality floors, §3.3 expiration handling, §3.7,
-  and the 9/4 all-flat strategy rule unchanged.)*
-- No limit on the number of open option positions. *(Amended 2026-08-13 per
-  §9; was max 2. The 20% aggregate premium cap is the binding constraint;
-  every position still carries its own §3.3 expiration clock and §3.2
-  quality floors.)*
+  $2,899).
+- No limit on the number of open option positions. The 30% aggregate cap is
+  the binding constraint; every position still carries its own §3.3
+  expiration clock and §3.2 quality floors.
 - Cumulative premium spent is **logged** every trade (§7.2) but no longer
   capped.
 
@@ -202,7 +173,6 @@ instruction with Schwab the same session** and notify Chris immediately.
 with the trigger **10% below entry** and the limit **5% below the trigger**,
 placed as a resting GTC order immediately after the entry fill is confirmed.
 The trigger level is a **floor**: it may be raised, never lowered.
-*(Amended 2026-08-13 per §9.)*
 Long options do not get stops — option stops fill terribly on wide spreads — and
 are controlled by §3.2 sizing instead.
 
@@ -214,8 +184,7 @@ order (§4.1).
 decay when held through volatility.
 - **20% of competition capital, aggregate** across all leveraged/inverse ETFs
   combined — not per position. A 3x fund at 20% is already 60% effective
-  notional. *(Amended 2026-08-13 per §9: was "of account", 2× looser on the
-  $1,800 balance than the header's competition-capital anchoring intends.)*
+  notional.
 - Max holding period **5 trading days** (NYSE sessions, holidays excluded). A
   position still open on day five gets closed, and this survives §3.6.
 - These limits **also apply to options on leveraged ETFs**, which are otherwise
@@ -250,7 +219,7 @@ are always permitted at any drawdown level, and §3.5's forced close still appli
 
 **3.8 — Correlation cap.** Max **50% of competition capital** in positions with
 materially correlated exposure — same sector, same macro theme, or
-correlation > 0.7. *(Amended 2026-08-13 per §9: was "of account".)*
+correlation > 0.7.
 35% QQQ + 35% SPY + 20% TQQQ satisfies every individual rule and is a 90%
 single-bet on one index. That is the outcome this rule prevents.
 
@@ -320,12 +289,9 @@ I meant to send.
   typed from memory. This is the hallucinated-parameter failure — a plausible,
   well-formed symbol for the wrong instrument.
 - **Order-rate ceilings.** Maximum **2 per symbol per session** and **3
-  replaces per resting stop per day**. *(Amended 2026-08-13 per §9: the
-  5-placed-orders-per-session ceiling is lifted — Chris, pre-window, calm
-  conditions, no position open. The per-symbol and per-stop ceilings stand.)*
-  A ceiling **trips on the attempt to exceed it** — placing the Nth order is
-  legal and routine; the trip is the would-be (N+1)th. *(Ruled by Chris
-  2026-08-13 per §9: "Trips on N+1".)*
+  replaces per resting stop per day**. A ceiling **trips on the attempt to
+  exceed it** — placing the Nth order is legal and routine; the trip is the
+  would-be (N+1)th.
   Hitting any ceiling means: stop placing orders, reconcile against the
   broker, write it to the log, and wait for Chris. This is the runaway-loop
   failure, and the surviving ceilings are deliberately far below anything the
@@ -410,8 +376,7 @@ a rewrite.
 
 The file is **local-only and untracked.** `trade-log.csv`, `status/`, and
 `research/` are gitignored and were purged from this repository's history on
-2026-08-17 at Chris's instruction, ahead of publication *(amended per §9 the
-same day; his words are quoted in the amendment commit)*.
+2026-08-17 at Chris's instruction, ahead of publication.
 
 §7.3 requires stating the consequence plainly rather than letting it pass
 unremarked: **git is no longer the audit trail for order flow.** The commit
@@ -447,9 +412,7 @@ sensitive is committed, tell Chris immediately — do not attempt a silent fix.
 
 - Winner determined by **final account value minus the $900.00 settlement
   reserve, at the closing bell on the final NYSE trading session on or before
-  END_DATE** — per the header scoring line (amended 2026-08-13, pre-window,
-  field-agreed). This bullet previously said "total account value" and
-  predated the reserve; the header governs.
+  2026-09-14.**
 - Account value = settled cash + unsettled cash + marked-to-market positions.
   The score subtracts the reserve from that total.
 - **No new positions may be opened in the final 3 trading days.** Marking to
@@ -481,56 +444,31 @@ conditions.
 
 ---
 
-## Pre-competition checklist
+## Verified account facts
 
-Worked 2026-08-13. Evidence in `status/2026-08-13.md` — local-only and no
-longer in this repository (§7.1), so the citations below are to a file on the
-operating machine, not to anything a reader of the public repo can open.
+Confirmed against the broker 2026-08-13, unchanged since. The pre-competition
+checklist that established them is in `CHANGELOG.md`.
 
-- [x] Confirm account type is **cash**, not margin — `type: CASH` on ACCOUNT_REDACTED.
-      Entire margin field set absent (no `buyingPower`, `sma`, `marginBalance`,
-      `regTCall`, `dayTradingBuyingPower`). `isClosingOnlyRestricted: false`.
-- [x] Read the account's **actual options approval string** from Schwab and
-      record it. Do not rely on tier numbers — broker numbering varies and
-      differs from generic guides. Confirm specifically that **buying calls and
-      puts** is permitted. Never request an upgrade requiring margin.
-      *The MCP exposes no field carrying this string. Chris supplied it by eye
-      2026-08-13, verbatim: **"level 1 options. 'Long'"**. Independently
-      corroborated the same day — `preview_option_order` BUY_TO_OPEN 1x
-      `F 260918C00014000` returned `status: ACCEPTED`, which a permissions
-      failure would not. Long calls and puts permitted, consistent with §2, no
-      margin required. If Schwab's UI shows a fuller string, replace the quote.*
-- [x] Confirm starting balance is $900.00 and record it as the initial
-      high-water mark — $900.00 confirmed, no positions, no open orders.
-      **HWM $900.00** · Caution $792.00 · Halt $720.00.
-- [~] Confirm the Schwab MCP connects, reads balances, and can place orders —
-      **connects and reads: yes. Previews: yes, and validated live.** Order
-      placement is locked off at the MCP as **Chris's own deliberate switch** —
-      held off until the agent has earned execution authority, not an MCP
-      defect. (An earlier status note diagnosed it as an unfixable tool-surface
-      limitation; that was wrong and is corrected in `status/2026-08-13.md`.)
-      **The switch flipped 2026-08-13 evening**, ahead of schedule: Discord
-      approval mode is live and verified end-to-end (every write call blocks
-      on Chris's ✅/❌ in `#llm-yolo`; details in the day-one run sheet and
-      the `schwab-mcp-discord-approval` memory). `place_previewed_order` and
-      `cancel_order` are **present** on the tool surface; **`replace_order`
-      is absent** (see §4.10 counting). **Before the first real entry:
-      re-verify both tools exist, then run the run sheet's two-order F
-      drill.** Until that passes, treat execution as manual.
-- [x] Verify settled vs. unsettled cash fields are readable (§5 depends on this)
-      — `currentBalances.cashAvailableForTrading` (settled, gates every buy),
-      `cashAvailableForWithdrawal`, `unsettledCash`, `cashCall`. Read
-      `currentBalances`, never `initialBalances`.
-- [x] Set START_DATE and END_DATE, and identify the final NYSE session —
-      2026-08-14 → 2026-09-14. Final session Mon 2026-09-14. 21 sessions.
-      §8 lockout begins Thu 2026-09-10.
-- [x] Create `status/` directory
-- [x] Commit initial state to git
+- **Account type is CASH.** The entire margin field set is absent — no
+  `buyingPower`, `sma`, `marginBalance`, `regTCall`, `dayTradingBuyingPower`.
+  `isClosingOnlyRestricted: false`.
+- **Options approval: "level 1 options. 'Long'"** — Chris's reading of the
+  Schwab UI, corroborated live by a `preview_option_order` BUY_TO_OPEN that
+  returned `ACCEPTED`, which a permissions failure would not. Long calls and
+  puts permitted, no margin required, consistent with §2. Never request an
+  upgrade that requires margin.
+- **Cash fields — §5 depends on these.** Read `currentBalances`, never
+  `initialBalances`. `cashAvailableForTrading` is settled cash and gates every
+  buy; `cashAvailableForWithdrawal`, `unsettledCash`, and `cashCall` are also
+  readable.
+- **Order tools.** `place_previewed_order` and `cancel_order` are present;
+  **`replace_order` is absent**, so a stop amendment is cancel + immediate
+  re-place, counted per §4.10. Every write call blocks on Chris's ✅/❌ in
+  Discord `#llm-yolo`.
 
-**Known operating constraint (not yet an amendment).** Schwab refresh tokens
-expire after 7 days and cannot be extended programmatically — 4–5 manual
-re-auths across this window, each needing an interactive session from Chris. If a
-token lapses I lose all read access: no §4.5 reconciliation, no §3.6 check, no
-ability to close. Resting GTC stops still function; they live at Schwab. Also:
-only account ACCOUNT_REDACTED is in the token's scope. Keep it that way on every
-re-auth.
+**Standing operating constraint — token expiry.** Schwab refresh tokens expire
+after 7 days and cannot be extended programmatically: 4–5 manual re-auths
+across this window, each needing an interactive session from Chris. A lapsed
+token costs all read access — no §4.5 reconciliation, no §3.6 check, no ability
+to close. Resting GTC stops still function; they live at Schwab. Only account
+ACCOUNT_REDACTED is in the token's scope. Keep it that way on every re-auth.

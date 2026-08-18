@@ -1,17 +1,16 @@
 # Competition Strategy Design
 
-**Date:** 2026-08-13 (day before window opens) · **Revision 2**, incorporating
-the four-agent adversarial review (see `2026-08-13-adversarial-review.md`).
-**Status:** Amended post-review; four items marked ⏳ await Chris's ruling.
-**Governed by:** `CLAUDE.md` (Operating Manual v2, as amended). Where this
-document and the manual disagree, **the manual wins.** The competition-capital
-anchoring was propagated into the manual's §3 body text on 2026-08-13 (commit
-`8dc793e`) — manual and spec agree; if a future divergence appears, the manual
-controls and the divergence is a defect to fix, not a choice to make. Rules
-here that are stricter than the manual are marked *(strategy rule)* —
-discretionary, changeable without §9. **Revision 3** additions from the
-five-agent comparative research are recorded in
-`2026-08-13-comparative-research.md`.
+**The playbook.** How the account is actually traded, inside the box that
+`CLAUDE.md` defines. Required reading at every session open.
+
+**Governed by `CLAUDE.md`. Where this document and the manual disagree, the
+manual wins** — and the disagreement is a defect to fix, not a choice to make.
+Rules here stricter than the manual are marked *(strategy rule)*:
+discretionary, changeable without a §9 amendment.
+
+Origins: a four-agent adversarial review (`2026-08-13-adversarial-review.md`)
+and a five-agent comparative research pass
+(`2026-08-13-comparative-research.md`). Revision history in `CHANGELOG.md`.
 
 ---
 
@@ -49,21 +48,17 @@ five-agent comparative research are recorded in
 
 | Constraint | Consequence |
 |---|---|
-| Execution autonomous **once Chris flips the MCP gate**. Confirmed 2026-08-13: the gate is Chris's, deliberately held off pending demonstrated competence, and **flips 2026-08-14**. The missing `place_previewed_order` / `cancel_order` / `replace_order` tools are a withheld tool surface, **not** an MCP defect — the contrary diagnosis in `status/2026-08-13.md` was wrong and is corrected in that file's addendum | Until flipped + round-trip-tested: treat as manual. After: I place orders under §6 |
+| Execution autonomous. MCP gate flipped 2026-08-14; place/cancel round-trip drill passed the same session. `replace_order` is absent from the tool surface — a stop amendment is cancel + re-place, counted per CLAUDE.md §4.10 | I place orders under §6 |
 | Stop rejected until entry fills (verified live) | Fill→stop window real; naked-position watch is the loop's top alert |
 | T+1 cash account, zero GFV tolerance | $900 reserve as float; invariant in §3; field semantics gated (§7.6) |
 | Token expires every 7 days | **Re-auth: 8/19, 8/26, 9/2, and 9/8 pre-market** (9/8 token outlives the 9/14 bell) |
 | Loop coverage honestly ≈ 5–15% of the trading day, ≈0% at open/close | Operative deadline everywhere = **session end**, never "market close"; Chris does a 5-min 9:30 ET check any day a position is open |
-| §3.2 per-position cap (20% of comp capital; $580 at $2,899 — amended 2026-08-17 per §9, was 15%/$435) | Options on roughly sub-$140 underlyings at calm IV, ~$95–100 at realistic IV; ceiling rises as the account grows |
+| §3.2 per-position cap: 20% of comp capital, $580 at $2,899 | Options on roughly sub-$140 underlyings at calm IV, ~$95–100 at realistic IV; ceiling rises as the account grows |
 | Earnings calendar (verified): HD 8/18, TGT+LOW 8/19, WMT 8/20, NVDA+CRM 8/26, DLTR 8/27, AVGO 9/3 | Supply themes are consumer-retail and tech, clustered 8/18–9/3; desert after ~9/4 |
 
 ## 3. Capital architecture
 
-Amended figures per CLAUDE.md v3 capital amendment 2026-08-14 (`9619eaf`);
-percentages unchanged.
-
-**Competition capital = account value − $900.00 reserve** ($1,800 verified
-landed 2026-08-13, all settled).
+**Competition capital = account value − $900.00 reserve.**
 
 **The reserve invariant** *(strategy rule, replaces the old bridge wording)*:
 **total cash (settled + unsettled) ≥ $900.00 at all times.** Equivalently:
@@ -75,11 +70,11 @@ proceeds, not at original position size.**
 
 | Sleeve | Ceiling | At $2,899.38 | Positions |
 |---|---|---|---|
-| Core | 50% | $1,450 (was $450) | no name count *(amended 2026-08-17, Chris — was "2 names, ~25% each")*; per-position §3.1/§3.8 bind |
-| Catalyst | 30% | $870 (was $270) | 1, occasionally 2 |
-| Options | 30% open / 20% per position (§3.2, scales; amended 2026-08-17 per §9 — was 20%/15%) | $870 open / $580 per position | no count limit |
-| Leveraged ETF | 20% aggregate, within rows above | $580 (was $180) | gated (§6) |
-| **Max deployed** | **100%** | **$2,899.38 (was $900)** | sleeves now sum to 110% — they are individual ceilings; the 100% total-deployment line and the reserve invariant bind first |
+| Core | 50% | $1,450 | No name count *(strategy rule)*; per-position §3.1/§3.8 bind |
+| Catalyst | 30% | $870 | 1, occasionally 2 |
+| Options | 30% open / 20% per position (§3.2, scales with the account) | $870 open / $580 per position | No count limit |
+| Leveraged ETF | 20% aggregate, within rows above | $580 | Gated (§6) |
+| **Max deployed** | **100%** | **$2,899.38** | sleeves now sum to 110% — they are individual ceilings; the 100% total-deployment line and the reserve invariant bind first |
 
 - **Sleeve compliance is checked at order time only**, against competition
   capital at current marks. Mark drift never forces a sale and never frees
@@ -141,7 +136,7 @@ beat, ideally raised guidance; **gapped up and held** (closed report day in
 top half of range); §1.4/§2 floors; sector distinct from both core names
 (§3.8 — guaranteed possible by §4's carve-out); next report ~3 months out.
 Prefer the **~$20–60 price band** *(strategy rule — whole-share granularity
-and stop slippage at $870 size (was $270))*.
+and stop slippage at $870 size)*.
 
 **Entry:** sessions 1–3 post-report, limit at/inside ask, day-only, and only
 in the first half of a session Chris intends to keep open *(strategy rule)*.
@@ -151,8 +146,8 @@ in the first half of a session Chris intends to keep open *(strategy rule)*.
   limit 5% below trigger; re-computed via single replace on each add
 - Stall rule: two consecutive closes below blended entry, evaluated from
   session 4 onward (entry day = session 1) → close next session
-- Stop ratchet — **active** (§3.4 amended 2026-08-13: trigger is a floor,
-  may be raised, never lowered): +8% → breakeven, +15% → entry+8%, limit
+- Stop ratchet — **active** (§3.4: the trigger is a floor, may be raised,
+  never lowered): +8% → breakeven, +15% → entry+8%, limit
   always 5% below trigger, single-message replace only, §4.6 applies to
   replaces.
 - Endgame calendar (§10)
@@ -160,48 +155,39 @@ in the first half of a session Chris intends to keep open *(strategy rule)*.
 ## 6. Options and leveraged ETFs
 
 **Options are a standalone sleeve** (Chris, 2026-08-13: "You should be free
-to plan options at any point" — the earlier piggyback/anti-field gating was
-a strategy rule and is removed entirely). Any directional thesis I develop —
-long calls or long puts, catalyst-linked, anti-field, or independent — may
-be expressed in options, provided every position still carries its own
-written §4.9 rationale before the order. What still binds is the manual
-itself, unchanged:
-- §3.2 quality floors: ≥21 DTE, Δ≥0.35, OI≥500, spread ≤10% of mid
-- §3.2 caps **(amended 2026-08-13: scale with the account; position-count
-  limit removed; amended again 2026-08-17 per §9 — caps raised)**:
-  ≤20% of competition capital per position, ≤30% open, no
-  limit on position count. The $360 cumulative cap is deleted — capacity
-  replenishes, and wins expand it ($580/$870 at $2,899 comp capital;
-  15%/20% → $435/$580 before the 2026-08-17 amendment). Cumulative
-  premium still logged per §7.2.
-  Scarcity discipline now lives in the 20% open cap and the quality floors;
-  each open position adds its own §3.3 expiration clock to the monitoring
-  table
-- §3.7 (own-earnings reading): no option held through its **own**
-  underlying's report; third-party prints (e.g. NVDA 8/26) are ordinary
-  market risk
-- §3.8: option exposure counts toward correlation clusters
-- The $435 cap's arithmetic (was $135 at $900): effectively sub-$105
-  underlyings at calm IV, ~$70-75 at realistic IV (was sub-$40)
+to plan options at any point"). Any directional thesis — long calls or long
+puts, catalyst-linked, anti-field, or independent — may be expressed in
+options, provided the position carries its own written §4.9 rationale before
+the order.
 
-All §3.2 floors always apply (≥21 DTE, Δ≥0.35, OI≥500, spread ≤10%), plus
-two *(strategy rules)* from the comparative research: **Δ≥0.50 for long
-premium** (the manual's 0.35 floor sits on the boundary of the documented
-Δ 0.05–0.35 lottery-overpricing zone), and **unspent is the sleeve's
-default state, not its fallback** — retail long premium is documented
-negative-EV at baseline; the evidence-backed uses are (a) post-crush
-continuation calls 1–2 sessions after a qualified beat, when IV has reset
-30–60% lower, and (b) anti-field long puts.
-**All options flat by the 9/4 close** *(strategy rule — was 9/9; moved off
-the far side of the Labor Day dark stretch)*, via escalating limit reprices
-ending marketable-at-the-bid; if somehow unfilled at the bell: marketable
-limit at next open, logged as a breach with remedy per §7.3. **There is no
-cumulative premium budget** — the $360 monthly cap was deleted by the
-2026-08-13 §9 amendment and any surviving reference to it in this document is
-a defect, not a rule. The binding capacity constraint is §3.2's **20% of
-competition capital open at once** ($580 at $2,899 (was $180 at $900)), replenishing as positions
-close. Expect 2–3 shots across the window; unspent is the sleeve's default
-state, not a failure. Commission 1.3%+ per cap-sized leg.
+What binds, from the manual:
+
+| Rule | Constraint |
+|---|---|
+| §3.2 quality floors | ≥21 DTE · Δ≥0.35 · OI≥500 · spread ≤10% of mid |
+| §3.2 caps | ≤20% of competition capital per position (**$580**), ≤30% open (**$870**). No position-count limit, no cumulative budget; premium still logged per §7.2 |
+| §3.3 | Each open position carries its own expiration clock into the monitoring table |
+| §3.7 | No option held through its **own** underlying's report; third-party prints (e.g. NVDA 8/26) are ordinary market risk |
+| §3.8 | Option exposure counts toward correlation clusters |
+
+At $2,899 competition capital the $580 per-position cap reaches roughly
+sub-$140 underlyings at calm IV, ~$95–100 at realistic IV. Capacity
+replenishes as positions close and expands as the account grows; scarcity
+discipline lives in the $870 open cap and the quality floors.
+
+Two *(strategy rules)* from the comparative research tighten this:
+
+- **Δ≥0.50 for long premium** — the manual's 0.35 floor sits on the boundary
+  of the documented Δ 0.05–0.35 lottery-overpricing zone.
+- **Unspent is the sleeve's default state, not its fallback.** Retail long
+  premium is documented negative-EV at baseline. The evidence-backed uses are
+  (a) post-crush continuation calls 1–2 sessions after a qualified beat, when
+  IV has reset 30–60% lower, and (b) anti-field long puts. Expect 2–3 shots
+  across the window; commission runs 1.3%+ per cap-sized leg.
+
+**All options flat by the 9/4 close** *(strategy rule)*, via escalating limit
+reprices ending marketable-at-the-bid. If unfilled at the bell: marketable
+limit at the next open, logged as a breach with remedy per §7.3.
 
 **Leveraged ETFs: gated shut by default.** Specific short-horizon dislocation
 thesis only, uncorrelated with core+catalyst, ≤20% aggregate, calendar exit
@@ -418,15 +404,13 @@ noted in the daily status file so the human heartbeat is verifiable.
 
 ## 11. Open items
 
-All four Chris rulings received 2026-08-13 and applied (ratchet adopted;
-own-earnings §3.7 reading; catch-up branch rejected; §3 body text
-propagated). Remaining:
+1. First-sale observation of `cashAvailableForTrading` semantics (§7.8).
+   Until then every buy gates on `cashAvailableForTrading − unsettledCash`
+   (§7.8) — wrong only in the safe direction.
 
-1. Execution unlock: verify order tools appear; **place/cancel round-trip
-   test** on a far-from-market limit, plus a rehearsed **flatten drill**
-   (enumerate open orders → cancel all → verify) — both before first real
-   use.
-2. First-sale observation of `cashAvailableForTrading` semantics (§7.8).
+*(Closed: the four post-review rulings, 2026-08-13 — ratchet adopted,
+own-earnings §3.7 reading, catch-up branch rejected, §3 body text propagated.
+Execution unlock and the place/cancel round-trip drill, 2026-08-14.)*
 
 ## 12. Success criteria
 
@@ -444,3 +428,8 @@ propagated). Remaining:
 - If the month is lost, it is lost to the box's stated cost (no NVDA-scale
   variance available), not to a rule breach, a missed deadline, or an
   operational failure. Losses reported per §7.3, same detail as gains.
+
+---
+
+*Revision history for this document — and for `CLAUDE.md` — is in
+`CHANGELOG.md` at the repository root.*
