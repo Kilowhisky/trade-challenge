@@ -181,7 +181,24 @@ reached:**
      quote it in chunks, hand every payload path to
      `scripts/universe-filter.sh`, and never read a payload.
      There is no cursor and no resume — the sweep either completes or reports
-     what it missed. *(The 50-symbol chunking and `_sweep_cursor` machinery were removed
+     what it missed.
+     **Mechanics, all three mandatory:**
+     1. **Symbols** come out of the fenced TSV block `/weekly-universe`
+        writes into `research/universe.md` — column 1, header row dropped:
+        `sed -n '/^```$/,/^```$/p' research/universe.md | grep -v '^```' | tail -n +2 | cut -f1`
+        Never re-derive the list from prose or from a stale copy.
+     2. **Chunk size 150 symbols**, the same as `/weekly-universe` §B.2 —
+        chosen so each verbose response (~260 KB) exceeds the inline
+        tool-result limit and is written to a file by the harness rather
+        than landing in context. A `working_universe_size` of 500 is
+        therefore ~4 calls per run.
+     3. **`get_quotes(symbols=<chunk>, verbose=True)` — `verbose=True` is
+        not optional.** A compact payload carries no `avg10DaysVolume`,
+        no `fundLeverageFactor`, and no `regular:` sub-block, so
+        `universe-filter.sh --qualified-only` would silently return zero
+        survivors and the screen would report an empty market. Do not pass
+        `fields=` instead; the design spike found it silently ignored
+        (see `schwab-mcp-notes`). *(The 50-symbol chunking and `_sweep_cursor` machinery were removed
      2026-08-17: they existed because quote payloads entered
      agent context, and put the universe on an 11-day lap.)*
      Qualification against survivors: the §1.4 liquidity floors
@@ -343,7 +360,11 @@ these scripts are the ONLY write paths.
 - `research/screen/DATE.jsonl`, `research/iv/DATE.jsonl`,
   `research/tombstones.jsonl` — `scripts/research-append.sh`
 - `research/options-roster.md`, `research/preopen/DATE.md`,
-  `research/scorecard.md`, `research/universe.md` — `scripts/research-replace.sh`
+  `research/scorecard.md` — `scripts/research-replace.sh`
+- **`research/universe.md` is NOT on this list.** It is written by
+  `/weekly-universe` and only ever read here. Two tiers holding a write path
+  to the same file is how the weekly sweep's output gets clobbered by a
+  daily run mid-week.
 - `research/standing.md` — `scripts/research-replace.sh standing`
   (deep-run-only, design rev2 §11; see §D.8 for the refresh trigger). The
   scout reads this file but **must never write it** — its only write path

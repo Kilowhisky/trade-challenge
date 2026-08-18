@@ -73,7 +73,9 @@ after one day).
 ### 3.1 Universe screen (§4 core/drift profile)
 
 US major exchange; price $5 to the §3.1-derived unsizeable line, with the
-§5 $20–60 band flagged; ADV ≥ 1M (§2); above 50-day SMA; positive 3- and
+§5 $20–60 band flagged; the §1.4 liquidity floors (`rules.yml`:
+min_share_price_usd, min_avg_daily_dollar_volume, min_avg_daily_volume);
+above 50-day SMA; positive 3- and
 6-month returns; within ~10% of 52-week high. Output: ranked top ~15 to
 the jsonl.
 
@@ -113,7 +115,10 @@ Rationale: no earnings print (§3.7 never binds), sector expression without
 single-name gap risk, real granularity in the price bands.
 
 - **Universe:** liquid US sector/industry/broad ETFs; price-banded like
-  stocks; ADV ≥ 1M. **Leveraged/inverse funds are excluded from this track
+  stocks; the §1.4 liquidity floors, read from `rules.yml` (dollar-volume
+  floor plus a share-count sanity floor — the old flat share-count figure was
+  superseded by the 2026-08-17 §9 amendment). **Leveraged/inverse funds are
+  excluded from this track
   entirely** — §3.5 gates them separately and that gate's default is shut.
 - **Qualification:** same §4 trend tilts as stocks (above 50-day, positive
   3/6-month, near 52-week high). The binding gate is expected to be **§3.8

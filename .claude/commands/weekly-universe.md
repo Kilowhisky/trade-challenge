@@ -68,13 +68,21 @@ Fallback chain on a `FAIL:` about missing tools, same as tick.md/research.md
    ignored and `verbose` the only working switch (see `schwab-mcp-notes`).
    - The response is saved to a file and the path returned. **Record the
      path; do not read the file.**
-   - If a chunk ever returns inline instead, write it to a temp file yourself
-     in the same `{"result": "..."}` shape and carry on identically.
+   - **If a chunk ever comes back inline instead of as a path:** re-issue
+     that one chunk once. If it comes back inline again, count it in
+     `chunks_failed` (§D) and move on. **Do not try to reconstruct the
+     payload by hand** — this agent has no `Write` tool, and retyping ~260 KB
+     of JSON-escaped quote text through a shell heredoc is neither reliable
+     nor compatible with the "never read a payload" rule that is the whole
+     point of this design. A chunk lost to this costs ~150 symbols out of
+     ~11,000 for one week; a hand-transcribed payload costs correctness
+     silently, which is worse.
    - A chunk that errors is logged and skipped. One bad chunk never stops the
      sweep.
 4. **Filter, once, over every payload.** The rank size is
    `working_universe_size` — under the `strategy:` section of `rules.yml`
-   (currently 500) — never hard-coded; read it through `lib-rules.sh`:
+   (currently **500**<!--rule:strategy_working_universe_size-->) — never
+   hard-coded; read it through `lib-rules.sh`:
 
    ```bash
    . scripts/lib-rules.sh && load_rules
@@ -98,21 +106,63 @@ Fallback chain on a `FAIL:` about missing tools, same as tick.md/research.md
 
 ## §C — Write the working universe
 
-Rewrite `research/universe.md` via
-`scripts/research-replace.sh universe <<'EOF' ... EOF`. The script enforces the
-required first line `# Fallback universe` and the banner text
-`never a source for order parameters`, both verbatim — get either wrong and
-the write is refused (exit 1), not silently corrected. Include, in the body:
+Rewrite `research/universe.md` via `scripts/research-replace.sh universe`.
+The script reads the whole file from **stdin**, so **pipe the ranked TSV
+into it — never retype the table into a heredoc.** A 500-row table
+transcribed by hand is a correctness hazard and would take the payload back
+through context, which §E forbids. The working invocation:
+
+````bash
+{
+  printf '%s\n' \
+    '# Fallback universe' \
+    '' \
+    'This file is never a source for order parameters — every candidate' \
+    're-verifies live under §4.9/§4.10. Regenerated weekly by /weekly-universe;' \
+    'the daily /deep-research run only reads it.' \
+    '' \
+    "Assembled: $(date -u +%Y-%m-%dT%H:%M:%SZ) — fetched $FETCHED / quoted $QUOTED /" \
+    "qualified $QUALIFIED / ranked $RANKED / dropped $DROPPED. Skipped: ${SKIPPED:--}." \
+    '' \
+    'The playbook §4 tilts (50-day SMA, 3- and 6-month returns) are NOT applied' \
+    'here and belong to the daily tier — the verbose quote payload this pass' \
+    'reads carries no price history to compute them from.' \
+    '' \
+    'Columns: symbol, price (regular-session close), 10-day ADV, dollar volume,' \
+    '% from 52-week high, optionable, leverage (a MULTIPLE: 0 single stock,' \
+    '1.0 a 1x fund; leveraged and inverse funds are gated out by §3.5 and do' \
+    'not appear), last earnings date, ETF flag.' \
+    '' \
+    '```'
+  cat /tmp/universe-ranked.tsv
+  printf '%s\n' '```'
+} | scripts/research-replace.sh universe
+````
+
+The script enforces the required first line `# Fallback universe` and the
+banner text `never a source for order parameters`, both verbatim — get
+either wrong and the write is refused (exit 1), not silently corrected. It
+also refuses a body of 5 lines or fewer, which catches a truncated pipe.
+The body must carry, and the block above produces:
 
 - assembly timestamp and symbol counts (fetched / quoted / qualified / ranked
   / dropped)
-- the ranked table: symbol, price, 10-day ADV, dollar volume, % from 52-week
-  high, optionable, last earnings date, ETF flag — the nine columns
-  `universe-filter.sh` emits
+- the ranked table verbatim from `/tmp/universe-ranked.tsv` — the nine
+  columns `universe-filter.sh` emits: symbol, price, 10-day ADV, dollar
+  volume, % from 52-week high, optionable, **leverage**, last earnings date,
+  ETF flag
 - a plain statement that the playbook §4 tilts (50-day SMA, 3/6-month
   returns) are **not** applied here and belong to the daily tier — the
   quote payload this pass reads has no price-history field to compute them
   from
+
+**On the `leverage` column:** `universe-filter.sh` stores the leverage
+**multiple**, not the raw `fundLeverageFactor` the payload carries. Schwab
+reports that field as a *percentage* — `0` a single stock, `100.0` a 1x
+fund, `200.0`/`300.0` leveraged, negative inverse — and the column divides
+it by 100 so §3.5 reasoning reads in multiples (0, 1.0, 3.0, −1.0). The
+§3.5 gate keeps only raw 0 and raw 100; a `!= 0` test there would discard
+every ETF in the market, roughly half the fetched directory.
 
 ## §D — Run ledger
 

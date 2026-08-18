@@ -47,8 +47,28 @@ to keep payloads readable, not to respect any broker quota.
    | `fundamental.nextDivExDate` | The ex-div trap (CSX 8/31 class) |
    | `fundamental.fundLeverageFactor` | Leveraged/inverse ETF identification (§3.5) |
    | `assetMainType` / `assetSubType` | Equity vs ETF |
+   | `regular.regularMarketLastPrice` | The regular-session close — the screening price |
 
    Present on **60/60** symbols in a live 60-symbol batch.
+
+   **Two traps in this payload, both found in review 2026-08-17 and both
+   fixed in `scripts/universe-filter.sh`:**
+
+   - **`fundLeverageFactor` is a PERCENTAGE, not a multiple.** Observed:
+     AAPL `0`, SPY `100.0`, QQQ `100.0`, FTXO `100.0`, TQQQ `300.0`. A single
+     stock is `0`; a **1x fund is `100`**. So the §3.5 gate must reject
+     everything *outside* `{0, 100}` — a `!= 0` test discards every ETF in
+     the market, all 5,574 of the 11,227 in item 4 below, not just the
+     leveraged ones. `universe-filter.sh` stores the column as the
+     **multiple** (raw ÷ 100) so §3.5 reasoning reads in multiples.
+   - **`lastPrice` appears in two sub-blocks.** A real payload emits
+     `extended:` (the pre/post-market print) *before* `quote:`, and both
+     carry `lastPrice`. Live CSX: `extended` 50.54–50.67, `quote` 50.89,
+     `regular.regularMarketLastPrice` 50.58. A whole-body first-match regex
+     returns the after-hours tick. **Parse by sub-block, never by match
+     order**, and take price from `regular.regularMarketLastPrice` (falling
+     back to `quote.lastPrice`) — this is a weekend screen, so the
+     regular-session close is both the correct and the stable choice.
 
    This retires the single-day-`totalVolume`-as-ADV proxy that `universe.md`
    admits to using, and it makes "every optionable equity" free rather than a
