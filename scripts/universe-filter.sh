@@ -15,11 +15,12 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.." || exit 2
 . scripts/lib-rules.sh
 load_rules || exit 7
 
-payloads=(); out=""
+payloads=(); out=""; qualified=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --payload) shift; [ $# -gt 0 ] || { echo "universe-filter: --payload needs a path" >&2; exit 2; }; payloads+=("$1") ;;
     --out)     shift; [ $# -gt 0 ] || { echo "universe-filter: --out needs a path" >&2; exit 2; }; out="$1" ;;
+    --qualified-only) qualified=1 ;;
     *) echo "universe-filter: unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -34,11 +35,12 @@ MIN_PRICE="$(rule_get manual_min_share_price_usd)"      || exit 7
 MIN_DOLLAR="$(rule_get manual_min_avg_daily_dollar_volume)" || exit 7
 MIN_SHARES="$(rule_get manual_min_avg_daily_volume)"    || exit 7
 
-python3 - "$out" "$MIN_PRICE" "$MIN_DOLLAR" "$MIN_SHARES" "${payloads[@]}" <<'PY'
+python3 - "$out" "$MIN_PRICE" "$MIN_DOLLAR" "$MIN_SHARES" "$qualified" "${payloads[@]}" <<'PY'
 import json, re, sys
 
 out, min_price, min_dollar, min_shares = sys.argv[1], float(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4])
-paths = sys.argv[5:]
+qualified = sys.argv[5] == "1"
+paths = sys.argv[6:]
 
 def num(block, key, default=None):
     m = re.search(r'"?%s"?:\s*"?(-?[\d.]+)"?' % re.escape(key), block)
@@ -60,6 +62,12 @@ for path in paths:
         if price is None:
             skipped.append(sym)           # unquotable symbol: skip, never stall,
             continue                      # but never silently — logged below
+        if qualified:
+            if price < min_price:                    continue   # §1.4 price floor
+            if (adv or 0.0) * price < min_dollar:    continue   # §1.4 dollar volume
+            if (adv or 0.0) < min_shares:            continue   # §1.4 share sanity floor
+            lev = num(body, 'fundLeverageFactor', 0.0) or 0.0
+            if lev != 0.0:                           continue   # §3.5 gated shut by default
         rows.append({
             'symbol': sym,
             'price': price,

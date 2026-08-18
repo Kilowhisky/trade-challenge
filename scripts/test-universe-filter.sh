@@ -28,6 +28,20 @@ echo "== unquotable symbols =="
 ! grep -q '^NOQUOTE	' "$OUT" && ok "excludes an unquotable symbol from the TSV" || no "excludes an unquotable symbol from the TSV"
 grep -q 'NOQUOTE' "$ERR" && ok "names the skipped unquotable symbol on stderr" || no "names the skipped unquotable symbol on stderr" "stderr was: $(cat "$ERR")"
 
+echo "== §1.4 gates (--qualified-only) =="
+bash "$F" --payload "$FIX" --out "$OUT" --qualified-only >/dev/null 2>&1
+cut -f1 "$OUT" | tail -n +2 > /tmp/uf_syms.$$
+grep -qx 'CSX' /tmp/uf_syms.$$ && ok "CSX passes every gate" || no "CSX passes every gate"
+grep -qx 'PENNYCO' /tmp/uf_syms.$$ && no "sub-\$5 name is dropped" "PENNYCO survived" || ok "sub-\$5 name is dropped"
+grep -qx 'TQQQ' /tmp/uf_syms.$$ && no "leveraged ETF is dropped (§3.5)" "TQQQ survived" || ok "leveraged ETF is dropped (§3.5)"
+rm -f /tmp/uf_syms.$$
+
+echo "== optionable is recorded, never required =="
+bash "$F" --payload "$FIX" --out "$OUT" >/dev/null 2>&1
+awk -F'\t' '$1=="PENNYCO" && $6=="false"' "$OUT" | grep -q . \
+  && ok "non-optionable name is kept and flagged in the unfiltered pass" \
+  || no "non-optionable name is kept and flagged in the unfiltered pass"
+
 echo
 echo "-------------------------------------------"
 printf '%s passed, %s failed\n' "$pass" "$fail"
