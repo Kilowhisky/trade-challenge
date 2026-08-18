@@ -338,6 +338,19 @@ differences investigated before any order) → loop → planned actions.
   If either is missing, say so in the session-open summary as a status
   line — not ALERT.md. A dead research loop gets noticed here, not weeks
   later. (Quiet, not loud — but never invisible.)
+- **Weekly universe deadman:** check the `Assembled:` timestamp inside
+  `research/universe.md` — the line `/weekly-universe` writes into the body.
+  If it is older than 8 days, the weekly sweep has not run: say so in the
+  session-open summary as a status line (not `ALERT.md`) and **run
+  `/weekly-universe` manually** at the next weekend open. There is no weekly
+  cron — cron mechanics for a weekly cadence are an open item
+  (`.claude/commands/weekly-universe.md` §Dispatch), so there is nothing to
+  re-create; the manual run *is* the cadence until that is resolved. Read the
+  in-file stamp, **not the file mtime**: `research/universe.md` is
+  git-tracked, and a checkout, rebase, or stash touches its mtime without
+  regenerating a thing — an mtime deadman would report a fresh universe on a
+  sweep that never ran. A stale working universe silently narrows discovery,
+  which is exactly the failure the weekly tier was built to remove.
 - **Cron re-creation:** session open also re-creates the two
   `/deep-research` cron entries if absent (`.claude/commands/deep-research.md`
   §Dispatch) — the deadman above only detects a dead loop a day late;

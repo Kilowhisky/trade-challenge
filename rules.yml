@@ -116,6 +116,12 @@ strategy:
   # sleeve must buy at least this many whole shares.
   catalyst_min_whole_shares: 6
 
+  # Size of the weekly working universe handed to the daily tier. Chosen to
+  # match what the daily run can deep-vet, not everything that qualifies;
+  # universe-filter reports how many it dropped so this can be tuned on
+  # evidence rather than guessed twice.
+  working_universe_size: 500
+
   # Playbook §5 — exits
   stall_rule_consecutive_closes: 2
   stall_rule_from_session: 4
