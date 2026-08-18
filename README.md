@@ -44,7 +44,7 @@ realizable prices. Nothing is liquidated for scoring.
 | `docs/superpowers/specs/2026-08-13-adversarial-review.md` | Four red-team agents attacking the strategy; every finding and its disposition. |
 | `docs/superpowers/specs/2026-08-13-comparative-research.md` | Five research agents on what actually works in AI/small-account trading; the 12 tightenings adopted from it. |
 | `docs/archive/` | Completed and superseded working documents, kept unedited as provenance: the day-one screen, the close review, the executed deep-research plan, an API spike, and a broker-tooling patch note. |
-| `scripts/` | Pre-order compliance gate, its regression suite, the rule-consistency checker, and the append-only writers used by the research and monitoring loops. |
+| `scripts/` | Pre-order compliance gate and its regression suite, the rule-consistency checker, the weekly universe fetch/filter pair, and the append-only writers used by the research and monitoring loops. |
 | `.claude/` | Session commands and the read-only agents that run the research, monitoring, and deep-research loops. Those agents have no order tools by construction — they cannot place, cancel, or modify anything at the broker. |
 | `ALERT.md` | Created only when something needs the account owner. An unacknowledged alert forces closing-only posture at the next session open. |
 

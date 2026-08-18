@@ -129,8 +129,7 @@ reached:**
       anything, pull in what needs a cohort but doesn't have one yet:
       every name in the most recent not-yet-ingested screener shortlist
       (`research/screen/DATE.jsonl`'s ranked top ~15 from §D.3 below —
-      not just the 3–5 promoted to `candidates.md` — excluding
-      `_sweep_cursor` machinery rows, §D.3) and every row appended to
+      not just the 3–5 promoted to `candidates.md`) and every row appended to
       `research/tombstones.jsonl` since the scorecard was last written.
       Each opens one entry in `## Open cohorts` with a **hypothetical
       position** — standard sleeve sizing, a §3.4 ATR-scaled stop, at the recorded
@@ -175,56 +174,21 @@ reached:**
      requires the API spike to *succeed*, and the screener half of it
      FAILED — so `get_movers` is simply **not used by this run's
      channels**: the batched-quote universe sweep is the better available
-     channel regardless of retirement status. The screen runs as a
-     **batched `get_quotes` sweep of `research/universe.md`** (543 names)
-     in ~50-symbol chunks against this run's budget. A full sweep of the
-     list spans **multiple postclose runs** — say so plainly in
-     `skipped:` when the sweep doesn't finish.
-     **Resume via a cursor row, never the last survivor seen** — a
-     zero-survivor chunk must still advance the sweep, or it re-sweeps
-     the same dead chunk forever. Every sweep run appends one machinery
-     row to today's `research/screen/DATE.jsonl` via
-     `scripts/research-append.sh screen DATE JSON`:
-     `{"symbol":"_sweep_cursor","t":"HH:MM:SS","src":"universe_sweep","last_index":N,"swept":M}`
-     (validates fine — `research-append.sh` only requires `symbol`/`t`/
-     `src`). `swept` (M) is the count of symbols **processed through the
-     qualification filter** this chunk — quoted-but-unfiltered symbols
-     are NOT counted and the cursor does not advance past them — never
-     the count of qualifying survivors — a chunk that yields **zero
-     survivors still writes its full `swept` count** and the cursor
-     advances exactly as far as a chunk that ranked fifteen.
-     Resume point = read the **most recent** `_sweep_cursor` row across
-     `research/screen/*.jsonl` and continue from `last_index + swept`,
-     wrapping to 0 past the end of `universe.md`.
-     `_sweep_cursor` rows are sweep machinery, **never candidates** —
-     exclude them from ranking, from any `candidates.md` promotion, and
-     from §D.2a's cohort ingestion. **Prioritize the §5 granularity band and
-     the options-affordability band first** within each chunk — the
-     names most likely to qualify are swept before the long tail.
-     Qualification against survivors: price $5 to the §3.1-derived
-     unsizeable line, ADV ≥ 1M, above 50-day SMA, positive 3- and
-     6-month returns, within ~10% of 52-week high. Rank the top ~15
-     survivors of the chunk into the jsonl.
-     **Daily bars for tilt math (spike verdict 2026-08-17, in the
-     screener-api-spike doc):** for the ranked shortlist survivors only
-     (~15/day, never the whole sweep), daily bars may come from Yahoo's
-     v8 chart endpoint — with retry-after-backoff (first attempts
-     reliably 429), and a bar-count/date-set cross-check against one
-     Schwab series before trusting any derived ATR/SMA (Yahoo dropped a
-     bar in testing). On any mismatch or endpoint change, fall back to
-     Schwab daily bars for names that survive to full measurement, and
-     weekly-proxy figures stay clearly labeled as such. Schwab remains
-     the source of record; Stooq is rejected (bot-walled).
-     **Weekly refresh (Fridays only, after the day's chunk):** re-fetch
-     the S&P 500/400 constituent lists, re-quote for price/ADV, and
-     rewrite `research/universe.md` via `scripts/research-replace.sh
-     universe` (required first line `# Fallback universe`, required
-     banner text `never a source for order parameters`, both verbatim,
-     enforced by the script). A refreshed list may reorder symbols; the
-     sweep cursor's `last_index` is best-effort continuity across a
-     refresh, not an exact guarantee — an occasional re-swept or skipped
-     name at the refresh boundary is an acceptable cost of a
-     hand-assembled weekly list, not a defect to chase.
+     channel regardless of retirement status. The screen runs as a **batched `get_quotes` sweep of
+     `research/universe.md` in full, every run**. The working universe is
+     produced weekly by `/weekly-universe` and is already reduced to names
+     clearing the §1.4 floors, so it is small enough to sweep completely:
+     quote it in chunks, hand every payload path to
+     `scripts/universe-filter.sh`, and never read a payload.
+     There is no cursor and no resume — the sweep either completes or reports
+     what it missed. *(The 50-symbol chunking and `_sweep_cursor` machinery were removed
+     2026-08-17: they existed because quote payloads entered
+     agent context, and put the universe on an 11-day lap.)*
+     Apply the §4 tilts — 50-day SMA and 3/6-month returns — to the ranked
+     survivors here, where per-symbol price history is affordable. The weekly
+     pass does not and cannot apply them.
+     `research/universe.md` is regenerated weekly by `/weekly-universe`;
+     this daily run only reads it.
    - **Post-earnings drift screen:** FMP's `stable/earnings-calendar`
      endpoint (env var `FMP_API_KEY`, sourced from `.env.local` at the
      repo root — reference the variable name only, never a key value)
