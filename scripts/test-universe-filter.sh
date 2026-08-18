@@ -86,6 +86,13 @@ rc=$?
 if [ "$rc" -eq 0 ]; then
   c=$(wc -l < "$SYMS" | tr -d ' ')
   [ "$c" -gt 5000 ] && ok "fetched a plausible symbol count ($c)" || no "fetched a plausible symbol count" "got $c"
+  # Tighter than the >5000 check above: the real directory currently yields
+  # ~11,227 symbols. A window around that (not an exact match, since the
+  # live list drifts week to week) still catches a filter that's broken in
+  # a way that happens to clear 5000 but is nowhere near the real shape.
+  [ "$c" -ge 10000 ] && [ "$c" -le 12500 ] \
+    && ok "success path writes ~11,227 symbols ($c, within [10000,12500])" \
+    || no "success path writes ~11,227 symbols" "got $c, outside [10000,12500]"
   grep -qx 'AAPL' "$SYMS" && ok "AAPL present" || no "AAPL present"
   grep -qE '\$' "$SYMS" && no "test/oddball symbols excluded" "found \$ symbols" || ok "test/oddball symbols excluded"
   # The source file's last data row is a footer ("File Creation Time: ...
@@ -94,12 +101,33 @@ if [ "$rc" -eq 0 ]; then
 elif [ "$rc" -eq 3 ]; then
   ok "offline: exits 3 so the caller keeps last week's universe"
   skip "fetched a plausible symbol count"
+  skip "success path writes ~11,227 symbols"
   skip "AAPL present / test symbols excluded"
   skip "footer line excluded from symbol list"
 else
   no "universe-fetch returns 0 or 3" "got $rc"
 fi
 rm -f "$SYMS"
+
+echo "== directory fetch: decoy-page rejection (fix round 1) =="
+# Reproduces the bug the reviewer found live against nasdaqtrader.com: an
+# unknown path 302-redirects to a small "File Not Found" HTML page, which
+# curl -sf (without -L, before the fix) treats as a successful fetch. The
+# python filter then parses that HTML as pipe-delimited CSV, finds zero
+# symbols, and (pre-fix) wrote an empty universe and exited 0 — silently
+# indistinguishable from a real sweep that legitimately found nothing.
+# This does NOT depend on network reachability: tests/fixtures/
+# nasdaqtrader-decoy-404.html stands in for the decoy page via the
+# UNIVERSE_FETCH_URL test-only override (see the comment on URL= in
+# universe-fetch.sh), so this assertion runs every time, online or off.
+DECOY="tests/fixtures/nasdaqtrader-decoy-404.html"
+DOUT=$(mktemp); rm -f "$DOUT"
+UNIVERSE_FETCH_URL="file://$(pwd)/$DECOY" bash scripts/universe-fetch.sh --out "$DOUT" >/dev/null 2>"$ERR"
+drc=$?
+[ "$drc" -eq 3 ] && ok "decoy page (0 real symbols) is rejected with exit 3" || no "decoy page (0 real symbols) is rejected with exit 3" "got rc=$drc"
+[ ! -e "$DOUT" ] && ok "decoy page: no output file is written" || no "decoy page: no output file is written" "$DOUT exists with $(wc -l < "$DOUT" 2>/dev/null) lines"
+grep -q 'refusing to write' "$ERR" && ok "decoy page: refusal is named on stderr" || no "decoy page: refusal is named on stderr" "stderr was: $(cat "$ERR")"
+rm -f "$DOUT"
 
 echo
 echo "-------------------------------------------"
