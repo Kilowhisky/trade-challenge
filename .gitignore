@@ -1,0 +1,21 @@
+# Session history and transcripts — never publish
+.remember/
+
+# Local Claude Code settings (may contain machine-specific paths)
+.claude/settings.local.json
+
+# Credentials — nothing here should ever be committed
+.env
+.env.*
+*.token
+*.pem
+.mcp.json
+
+# Mac garbage
+.DS_Store
+
+# Trade information
+research/
+status/
+trade-log.csv
+

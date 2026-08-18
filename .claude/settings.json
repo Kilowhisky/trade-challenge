@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "mcp__schwab__get_account",
+      "mcp__schwab__get_accounts",
+      "mcp__schwab__get_datetime",
+      "mcp__schwab__get_market_hours",
+      "mcp__schwab__get_quotes",
+      "mcp__schwab__get_instruments",
+      "mcp__schwab__get_option_chain",
+      "mcp__schwab__get_advanced_option_chain",
+      "mcp__schwab__get_option_expiration_chain",
+      "mcp__schwab__get_advanced_price_history",
+      "mcp__schwab__get_movers",
+      "mcp__schwab__get_order",
+      "mcp__schwab__get_orders",
+      "mcp__schwab__get_transaction",
+      "mcp__schwab__get_transactions",
+      "mcp__schwab__create_option_symbol",
+      "mcp__schwab__preview_equity_order",
+      "mcp__schwab__preview_option_order",
+      "mcp__schwab__place_previewed_order",
+      "mcp__schwab__cancel_order",
+      "Read",
+      "Glob",
+      "Grep",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git show:*)",
+      "Bash(scripts/tick-append.sh:*)",
+      "Bash(./scripts/tick-append.sh:*)",
+      "Bash(scripts/data-append.sh:*)",
+      "Bash(./scripts/data-append.sh:*)",
+      "Write(/ALERT.md)",
+      "Write(/trade-log.csv)",
+      "Write(/status/**)",
+      "Edit(/ALERT.md)",
+      "Edit(/trade-log.csv)",
+      "Edit(/status/**)"
+    ],
+    "deny": [
+      "mcp__schwab__preview_option_combo_order",
+      "mcp__schwab__preview_oco_order",
+      "mcp__schwab__preview_bracket_order",
+      "mcp__schwab__preview_trigger_order",
+      "mcp__schwab__preview_equity_trailing_stop_order"
+    ]
+  }
+}
