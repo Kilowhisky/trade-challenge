@@ -206,14 +206,18 @@ reserve — recorded to date). **Checked at every session open, immediately
 after the §4.5 broker reconciliation that supplies the numbers** — and not
 only at close.
 
-| Level | Trigger | Action |
-|---|---|---|
-| **Caution** | competition capital ≤ **0.88 × high-water** | Halve all new position sizes. No new option positions. Close any option position at a loss. |
-| **Halt** | competition capital ≤ **0.80 × high-water** | **No buy orders of any kind.** Notify Chris. Trading resumes only after an explicit conversation. |
+**Halt — competition capital ≤ 0.80 × high-water (−20%).** No buy orders of
+any kind. Notify Chris. Trading resumes only after an explicit conversation.
 
 "New position" means **any buy order** — including adds to an existing position,
 re-entering a name that just stopped out, and rolling an option. Closing orders
 are always permitted at any drawdown level, and §3.5's forced close still applies.
+
+**There is no intermediate level.** Any drawdown short of −20% triggers
+nothing: position sizing is unchanged, the options sleeve is unaffected, and
+no position is closed on account of drawdown alone. A "Caution" band at −12%
+previously halved sizes and closed options; it was removed 2026-08-17 per §9
+(`CHANGELOG.md`). Do not reintroduce an intermediate level by inference.
 
 **3.7 — Event risk.** Because stops do not cover gaps (§0):
 - **Check the earnings date before every equity entry.** No position may be held

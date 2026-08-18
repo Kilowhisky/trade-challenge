@@ -171,8 +171,10 @@ A ping fires only when **all** hold:
 2. Deployable capacity exists: settled cash covers a minimum viable
    position for that sleeve, sleeve cap has room, correlation not blocking
    (§3.8) — judged from the latest tick's figures.
-3. Drawdown level permits the instrument: **Caution → no option pings**;
-   Halt never reaches here (§A.2).
+3. Not at §3.6 **Halt** — structurally guaranteed, since Halt stops the loop
+   upstream (§A.2), so this gate cannot bind here. **Halt is the only
+   drawdown level**; there is no intermediate band that restricts an
+   instrument, and none may be inferred.
 4. No calendar guard active for adds (NVDA week 8/24–8/28; endgame per §A.5).
 5. That symbol has not pinged today, and today's ping count is **< 2**
    (count `"ping"` events in today's events corpus before emitting).

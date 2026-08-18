@@ -85,12 +85,10 @@ computes them from the live figure at order time.
   capital at current marks. Mark drift never forces a sale and never frees
   option capacity. "Open premium" (§3.2) = premium **paid** on open
   positions; marks irrelevant.
-- **§3.6 thresholds ratchet:** Caution = 0.88 × HWM, Halt = 0.80 × HWM of
-  competition value. HWM resolution — source, once-per-session caching, and
-  the no-intraday-ratchet rule — is defined in tick.md §B5, one place.
-- **At Caution:** halved ceilings gate **new buys only** — existing positions
-  are never force-sold by Caution; all open options are closed, **accepting
-  losses** (pinned reading of §3.6). No new options.
+- **§3.6 threshold ratchets:** Halt = 0.80 × HWM of competition value. It is
+  the only drawdown level — nothing happens above it (§3.6). HWM resolution —
+  source, once-per-session caching, and the no-intraday-ratchet rule — is
+  defined in tick.md §B5, one place.
 - **§3.8 method** *(strategy rule)*: evaluated **at entry** — sector/theme
   classification plus trailing 60-day daily-return correlation (>0.7 =
   correlated). Mid-hold correlation convergence in a selloff is not a
@@ -285,7 +283,7 @@ Chris's 9:30 ET check-in covers the gap that matters most. Watches:
 | **Naked position** | position without resting stop | Place stop immediately; if it won't take, close (§4.3) |
 | Stop fill | position gone / stop consumed | Log exit; check orphaned remainder (§4.7); **redeploy cap = actual proceeds (§3 invariant)** |
 | Partial fill | filled qty ≠ stop qty | Replace stop (§4.4) |
-| Drawdown | comp value vs **0.88×HWM / 0.80×HWM** (recorded HWM — resolved once per session from the latest status file; ratchets only at the session-close §7.2 write, never intraday) | Caution/Halt per §3 |
+| Drawdown | comp value vs **0.80×HWM** (recorded HWM — resolved once per session from the latest status file; ratchets only at the session-close §7.2 write, never intraday) | Halt per §3.6 — the only level |
 | Reserve | total cash < $900, computed per tick.md watch 2 (canonical — a conservative min() over both candidate totals until §7.8's field-semantics observation) | Invariant breach — halt buys, investigate |
 | Clocks | option DTE, leveraged day count, **9/4** flats, 9/10 lockout | Escalating from 2 days out |
 | Correlation | weekly: 60-day corr of held names | >0.7 cluster → adds blocked |

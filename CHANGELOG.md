@@ -69,6 +69,38 @@ it: Caution $792.00 → **$2,552.00**, Halt $720.00 → **$2,320.00**.
 | §4.10 | Protective-order exception ratified: a mandatory §3.4 stop is placed even if it breaches a ceiling, because the alternative is an unstopped position held overnight. |
 | §2 | Long puts permitted; **all** option selling prohibited. The original "no puts" rule was written believing puts carry unlimited risk — they do not. The unlimited position is the uncovered short call. |
 
+### 2026-08-17 · §3.6 Caution removed; Halt is the only drawdown level
+
+Chris-initiated, post-close, market closed, no option position open, and the
+account at a **new high** — competition capital $2,902.00 against a recorded
+HWM of $2,900.00, +0.07%. §9.1 and §9.3 are satisfied on the strictest
+reading: this is not a reaction to a losing position, open or just closed.
+
+§3.6 is named in §9's **unamendable core**, so the removal was confirmed
+explicitly rather than inferred. Chris's first instruction was "Nothing should
+happen at caution. In fact, remove caution and halt"; asked how far to go, he
+chose to neutralize Caution and **keep Halt as-is**. §3.6 therefore survives,
+and stays in the unamendable core.
+
+**Removed.** The Caution band at −12% (0.88 × HWM), which halved all new
+position sizes, blocked new option positions, and closed open option
+positions. Its option clause was the ambiguity flagged earlier the same day —
+"close any option position at a loss" read either as *only the losing ones* or
+*all of them, accepting losses*, and the playbook had pinned the second while
+contradicting itself in the same sentence. Removing the band resolves the
+ambiguity by deletion.
+
+**Unchanged.** Halt at −20% (0.80 × HWM): no buy orders of any kind, notify
+Chris, resume only after an explicit conversation. §3.5's forced close and all
+closing orders still work at any drawdown.
+
+Propagated to the playbook (§3 thresholds, the §8 monitoring table), tick.md
+(§B5 compute, watch 3, the ledger `LEVEL` field — now `OK`/`HALT`),
+`research.md` and the research-loop design (the ping gate's drawdown check is
+now structurally vacuous, since Halt stops the loop upstream), and the README.
+§3.6 carries an explicit "there is no intermediate level" clause so a future
+session cannot re-infer one.
+
 ### 2026-08-17 · Cash figures removed from the rules; contradictions swept
 
 Caps and thresholds are now stated only as percentages and formulas. Dollar

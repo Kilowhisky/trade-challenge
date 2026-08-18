@@ -86,8 +86,9 @@ Parent-side, after the scout returns. A ping fires only when **all** hold:
 1. Candidate is HOT, verified in *this* pass.
 2. Deployable capacity exists: settled cash for a minimum viable position,
    sleeve room, correlation not blocking (§3.8).
-3. Drawdown level permits the instrument (Caution → no option pings; Halt →
-   no passes at all).
+3. Not at §3.6 Halt (Halt → no passes at all). Halt is the only drawdown
+   level as of 2026-08-17; the former Caution band, which blocked option
+   pings, was removed per §9.
 4. No calendar guard active (NVDA week 8/24–8/28 for adds, §8 endgame
    lockout approaching).
 5. That candidate has not already pinged today, and today's ping count < 2

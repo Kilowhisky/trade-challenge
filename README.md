@@ -15,16 +15,16 @@ provides float:
 
 | | |
 |---|---|
-| **Competition capital** | The money actually at risk — $900.00 at the open, **≈$2,899.38** after the amendment below |
+| **Competition capital** | The money actually at risk — account value minus the reserve. Recomputed from the broker every session, never carried forward |
 | **Settlement reserve** | $900.00 — float to bridge T+1 settlement, never deployed |
 | **Score** | Account value at the final closing bell **minus the $900.00 reserve** |
 
-**Mid-window amendment (2026-08-14).** After day one, **$2,000.00** was added to
-the account. Every competitor made the same addition, by agreement, so the
+**Mid-window amendment (2026-08-14).** After day one, $2,000.00 was added to
+the account, roughly tripling competition capital. Every competitor made the same addition, by agreement, so the
 scoring formula was left unchanged and rankings stay comparable. The manual's
 no-transfers rule was ratified as a one-time exception for that transfer only.
-The high-water mark was re-anchored to a round **$2,900.00**, putting the
-drawdown circuit breaker at $2,552.00 (Caution) and $2,320.00 (Halt).
+The high-water mark was re-anchored to a round $2,900.00 at that point; it
+ratchets upward from there and is not a current figure.
 
 Every risk limit in the manual — position caps, sleeve ceilings, the high-water
 mark, the drawdown circuit breaker — is computed against **competition capital**,

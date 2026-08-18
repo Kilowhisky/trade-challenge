@@ -148,14 +148,13 @@ that depends on price may proceed (§4.10).
 ```
 comp_capital = liquidationValue − 900.00          # the reserve, never in the risk math
 hwm          = recorded_hwm                        # recorded values only — see below
-caution      = 0.88 × hwm
-halt         = 0.80 × hwm
+halt         = 0.80 × hwm        # the only drawdown level (§3.6)
 drawdown_pct = (comp_capital − hwm) / hwm × 100
 ```
 
 **The HWM never ratchets intraday.** §3.6 defines it as the highest
 competition-capital value *recorded* to date; a transient bad print at 11:04
-must not permanently raise Caution/Halt and then force loss-taking closes
+must not permanently raise Halt and then force loss-taking closes
 when marks revert. New highs are recorded — and the HWM ratchets — at the
 session-close status write (§7.2), from closing marks.
 
@@ -183,7 +182,7 @@ Recovery rule: if the latest tick ledger is from a **prior day** and newer
 than the latest status file, that session died before its §7.2 close write.
 Use the **status-file HWM** for this session's thresholds — a dead
 session's intraday marks are the least trustworthy numbers in the system,
-and silently adopting a phantom print would ratchet Caution/Halt
+and silently adopting a phantom print would ratchet Halt
 permanently. But do not silently ignore them either: if the orphaned
 ledger's highest `comp_capital` exceeds the status-file HWM, write
 `ALERT.md` with that high and let Chris ratify the ratchet. The
@@ -204,7 +203,7 @@ tested first; a naked position is the loop's top *actionable* alert.
 |---|---|---|---|
 | 1 | **Restriction** | `isClosingOnlyRestricted` true, or `cashCall` ≠ 0 | §5 protocol: no further orders, `ALERT.md`, notify Chris, account read-only. Stop the loop. |
 | 2 | **Reserve invariant** | `min(cashBalance, cashAvailableForTrading + unsettledCash)` < $900.00 | Invariant breach. Halt all buys, `ALERT.md`, investigate before anything else. |
-| 3 | **Drawdown** | `comp_capital` ≤ `caution` / ≤ `halt` | §3.6 Caution or Halt. Halt → notify Chris, stop the loop, no buys of any kind. |
+| 3 | **Drawdown** | `comp_capital` ≤ `halt` | §3.6 Halt — the only level; nothing trips above it. Notify Chris, stop the loop, no buys of any kind. |
 | 4 | **Naked position** | any position with no matching resting stop in B3 | Place the stop **immediately** via §E. If it will not take, close the position (§4.3). This is the loop's reason for existing. |
 | 5 | **Partial fill** | resting stop quantity ≠ filled position quantity | Replace the stop to match filled qty (§4.4). Max 3 replaces per stop per day (§4.10). |
 | 6 | **Stop fill** | a position present last tick is gone, or its stop is consumed | Log the exit. Check for an orphaned remainder (§4.7). Redeploy cap = **actual proceeds**, not the pre-exit figure. |
@@ -227,7 +226,7 @@ scripts/tick-append.sh <DATE> <TIME_ET> <STATE> <COMP> <HWM> <DD%> <LEVEL> \
 
 `DATE`/`TIME_ET` come from B1 (Eastern), never from the machine clock — this
 box runs Pacific. `STATE` is `RTH`/`PRE`/`POST`/`STALE`/`BLIND`. `LEVEL` is
-`OK`/`CAUTION`/`HALT`. `RESERVE` is the watch-2 total-cash figure in dollars
+`OK`/`HALT`. `RESERVE` is the watch-2 total-cash figure in dollars
 (e.g. `900.00`), never the word "ok". `FLAGS` is `-` when clean, else the
 tripped watch numbers. `NOTE` carries, space-separated as applicable: the
 `CLOSING-ONLY` marker (§A.2), the `REGROUND` marker (§A.3), and `$ARGUMENTS`
