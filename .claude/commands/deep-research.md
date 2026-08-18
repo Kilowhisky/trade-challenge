@@ -184,9 +184,21 @@ reached:**
      what it missed. *(The 50-symbol chunking and `_sweep_cursor` machinery were removed
      2026-08-17: they existed because quote payloads entered
      agent context, and put the universe on an 11-day lap.)*
-     Apply the §4 tilts — 50-day SMA and 3/6-month returns — to the ranked
-     survivors here, where per-symbol price history is affordable. The weekly
-     pass does not and cannot apply them.
+     Qualification against survivors: the §1.4 liquidity floors
+     (`rules.yml`) for price and volume, up to the §3.1-derived
+     unsizeable line, above 50-day SMA, positive 3- and 6-month returns,
+     within ~10% of 52-week high. Rank the top ~15 survivors of the
+     chunk into the jsonl.
+     **Daily bars for tilt math (spike verdict 2026-08-17, in the
+     screener-api-spike doc):** for the ranked shortlist survivors only
+     (~15/day, never the whole sweep), daily bars may come from Yahoo's
+     v8 chart endpoint — with retry-after-backoff (first attempts
+     reliably 429), and a bar-count/date-set cross-check against one
+     Schwab series before trusting any derived ATR/SMA (Yahoo dropped a
+     bar in testing). On any mismatch or endpoint change, fall back to
+     Schwab daily bars for names that survive to full measurement, and
+     weekly-proxy figures stay clearly labeled as such. Schwab remains
+     the source of record; Stooq is rejected (bot-walled).
      `research/universe.md` is regenerated weekly by `/weekly-universe`;
      this daily run only reads it.
    - **Post-earnings drift screen:** FMP's `stable/earnings-calendar`
