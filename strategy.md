@@ -193,9 +193,14 @@ grows; scarcity discipline lives in the 30% open cap and the quality floors.
 
 Two *(strategy rules)* from the comparative research tighten this:
 
-- **Δ ≥ 0.50**<!--rule:strategy_option_min_delta--> **for long premium** — the
-  manual's §3.2 floor sits on the boundary of the documented Δ 0.05–0.35
-  lottery-overpricing zone.
+- **Δ ≥ 0.40**<!--rule:strategy_option_min_delta--> **for long premium** — the
+  manual's §3.2 floor of 0.35 sits exactly on the boundary of the documented
+  Δ 0.05–0.35 lottery-overpricing zone, so a strategy-level buffer above it is
+  warranted; 0.40 clears the zone while 0.50 was buying far more intrinsic
+  value than the evidence asks for. Combined with the §3.2 premium cap, a
+  0.50 floor forced deep, expensive contracts — few of them, and low
+  convexity for a book whose theses are directional and short-horizon.
+  *(Was 0.50, lowered 2026-08-17.)*
 - **Unspent is the sleeve's default state, not its fallback.** Retail long
   premium is documented negative-EV at baseline. The evidence-backed uses are
   (a) post-crush continuation calls 1–2 sessions after a qualified beat, when

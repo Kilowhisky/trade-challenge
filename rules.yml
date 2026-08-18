@@ -43,7 +43,17 @@ manual:
   option_single_position_pct: 20
   option_open_premium_pct: 30
   # §3.2 — option quality floors, all must hold at entry
-  option_min_dte: 21
+  # DERIVED, not chosen. Options carry no resting stop (§3.4 excludes them),
+  # so an option can only be closed by a live session — and §3.3's auto-exercise
+  # is the largest event risk in the account. The floor is therefore the §3.3
+  # exit plus the longest plausible blackout plus room to actually trade:
+  #   option_min_dte = option_close_at_dte + option_max_blind_days
+  #                    + option_dte_execution_margin_days
+  # check-consistency.sh enforces that identity, so changing any input without
+  # changing the floor fails the build.
+  option_min_dte: 18
+  option_max_blind_days: 10          # 7-day token lapse + a long weekend
+  option_dte_execution_margin_days: 3 # a close may need several sessions
   option_min_delta: 0.35
   option_min_open_interest: 500
   option_max_spread_pct_of_mid: 10
@@ -113,7 +123,7 @@ strategy:
   ratchet_entry_plus8_at_gain_pct: 15
 
   # Playbook §6 — options, tighter than manual §3.2
-  option_min_delta: 0.50               # manual floor is 0.35
+  option_min_delta: 0.40               # manual floor is 0.35
   leveraged_exit_session: 4            # manual limit is 5
 
   # Playbook §8 — monitoring cadence, seconds

@@ -72,6 +72,19 @@ strategy_sleeve_options_open_pct manual_option_open_premium_pct le options-open
 strategy_sleeve_leveraged_pct manual_leveraged_aggregate_pct le leveraged-aggregate
 PAIRS
 
+# --- 2b. derived rules must still equal their derivation ------------------
+echo "== derived values =="
+# §3.2's DTE floor is not a chosen number: it is the §3.3 exit plus the longest
+# plausible blackout plus room to trade. If someone shortens the §3.3 exit or
+# the token cycle lengthens, the floor must move with it -- this catches the
+# case where one input changes and the floor is left stale.
+dte_sum=$(( RULE_manual_option_close_at_dte + RULE_manual_option_max_blind_days + RULE_manual_option_dte_execution_margin_days ))
+if [ "$RULE_manual_option_min_dte" -ne "$dte_sum" ]; then
+  bad "option_min_dte is $RULE_manual_option_min_dte but its inputs sum to $dte_sum (close_at_dte + max_blind_days + execution_margin)"
+else
+  note "option_min_dte $RULE_manual_option_min_dte = $RULE_manual_option_close_at_dte + $RULE_manual_option_max_blind_days + $RULE_manual_option_dte_execution_margin_days OK"
+fi
+
 # --- 3. no hard-coded rule percentages in scripts -------------------------
 echo "== scripts do not hard-code rule values =="
 hard=0

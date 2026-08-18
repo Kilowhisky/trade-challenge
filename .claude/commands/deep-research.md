@@ -253,7 +253,8 @@ reached:**
    names**: the screener's top-ranked names inside the options
    affordability band, plus candidates.md-adjacent underlyings (held,
    WATCH, active calendar-watch). Each entry: ladder verdict (does any
-   ≥21-DTE, Δ≥0.35 contract clear OI ≥ 500 and spread ≤ 10% of mid?) with a
+   contract at the §3.2 DTE floor and the playbook's delta floor clear OI ≥ 500
+   and spread ≤ 10% of mid? — read the current numbers from `rules.yml`) with a
    timestamp. Rewrite `research/options-roster.md` via
    `scripts/research-replace.sh roster` (required first line `# Options-
    viable roster`; required banner text `never a source for order

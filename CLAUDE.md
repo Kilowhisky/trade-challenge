@@ -177,7 +177,17 @@ losses shrink it — and gated on contract quality.
   capped.
 
 Quality floors — all must hold at entry:
-- **≥ 21**<!--rule:manual_option_min_dte--> days to expiration
+- **≥ 18**<!--rule:manual_option_min_dte--> days to expiration — a **derived**
+  floor, not a chosen one. Long options get no resting stop (§3.4), so a
+  position can only be closed by a live session, and §3.3 is the largest event
+  risk in the account. The floor is the §3.3 exit plus the longest plausible
+  blackout plus room to actually trade:
+  `close_at_dte (5) + max_blind_days (10) + execution_margin (3)`, where 10
+  days is a 7-day token lapse running into a long weekend.
+  `scripts/check-consistency.sh` enforces that identity, so shortening the
+  §3.3 exit or lengthening the token cycle moves this floor rather than
+  silently leaving it stale. *(Amended 2026-08-17 — was a flat 21, which
+  carried the same protection with three days of unexamined margin on top.)*
 - **Delta ≥ 0.35**<!--rule:manual_option_min_delta--> (no far-OTM lottery tickets)
 - **Open interest ≥ 500**<!--rule:manual_option_min_open_interest--> on the specific contract
 - **Bid/ask spread ≤ 10%**<!--rule:manual_option_max_spread_pct_of_mid--> of mid

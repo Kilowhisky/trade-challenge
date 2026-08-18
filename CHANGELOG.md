@@ -69,6 +69,44 @@ it: Caution $792.00 → **$2,552.00**, Halt $720.00 → **$2,320.00**.
 | §4.10 | Protective-order exception ratified: a mandatory §3.4 stop is placed even if it breaches a ceiling, because the alternative is an unstopped position held overnight. |
 | §2 | Long puts permitted; **all** option selling prohibited. The original "no puts" rule was written believing puts carry unlimited risk — they do not. The unlimited position is the uncovered short call. |
 
+### 2026-08-17 · Options: delta floor 0.50 → 0.40, DTE floor derived (21 → 18)
+
+Chris-initiated, from a review of the options rules. The prompting question was
+why options carry "a requirement to hold for a certain number of days" — they
+do not. Nothing in the manual constrains holding period. §3.2's DTE floor is a
+*contract-selection* rule at entry and §3.3's is a *forced exit*; together they
+describe a usable window, not a minimum hold.
+
+**Δ floor 0.50 → 0.40** *(strategy rule, no §9)*. The manual's §3.2 floor of
+0.35 sits exactly on the boundary of the documented Δ 0.05–0.35
+lottery-overpricing zone, so a strategy buffer above it is warranted — but
+0.50 was buying far more intrinsic value than the evidence asks for. Combined
+with the §3.2 premium cap it forced deep, expensive contracts: few of them, and
+low convexity for a book whose theses are directional and short-horizon.
+
+**DTE floor 21 → 18, and now derived rather than chosen** *(§9)*. The floor
+exists because long options get **no resting stop** (§3.4 excludes them), so a
+position can only be closed by a live session — while §3.3 auto-exercise is
+the largest event risk in the account. It is therefore not an options-theory
+number but an operating-limitation one:
+
+```
+option_min_dte = option_close_at_dte      (5)   §3.3 forced exit
+               + option_max_blind_days    (10)  7-day token lapse + long weekend
+               + execution_margin_days    (3)   a close may need several sessions
+               = 18
+```
+
+15 would be the bare minimum, but a worst-case blackout starting at 15 DTE
+returns exactly at the §3.3 deadline with no room to trade. The 3-day execution
+margin is what makes 18 rather than 15 the answer. The old flat 21 carried the
+same protection with three days of unexamined margin on top.
+
+`check-consistency.sh` now enforces the identity, so shortening the §3.3 exit
+or lengthening the token cycle moves the floor instead of silently leaving it
+stale — verified by setting `option_close_at_dte: 7` and confirming the build
+fails.
+
 ### 2026-08-17 · Restriction audit: six rules loosened, one confirmed
 
 Chris-initiated audit — "the rules are too strict and they restrict our ability
