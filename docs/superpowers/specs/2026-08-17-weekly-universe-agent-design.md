@@ -76,7 +76,7 @@ expensive and slow-changing; tracking is cheap and wants to be daily.
   WEEKLY (new)                          DAILY (existing, simplified)
   weekly-universe agent                 deep-research agent
   ├─ Nasdaq directory  →  11,227        ├─ sweep working universe IN FULL
-  ├─ verbose sweep, ~45 calls           │    (~300-600 names, 2-3 calls)
+  ├─ verbose sweep, ~75 calls           │    (~300-600 names, 2-3 calls)
   ├─ script filter → qualified          ├─ deep-vet survivors
   └─ writes research/universe.md        └─ candidates.md tiering
      (the week's working universe)
@@ -102,7 +102,7 @@ the existing two `/deep-research` entries, and subject to the same session-open
 re-creation check (crons are session-scoped; a missing entry is re-created at
 open).
 
-**Budget:** ~45 Schwab calls, ~19 MB written to disk, **0 quote payloads into
+**Budget:** ~75 Schwab calls, ~19 MB written to disk, **0 quote payloads into
 agent context**. This exceeds the current ~15-call postclose ceiling by design
 — that ceiling governs the daily run and is not a broker limit.
 
@@ -117,12 +117,15 @@ agent context**. This exceeds the current ~15-call postclose ceiling by design
    N`, symbol ≤ 5 chars, no `$`, and reject instrument-name patterns for
    warrants, rights, units, notes, and preferreds. → ~11,227.
 
-3. **Verbose batched sweep**, 250 symbols/call. Each response exceeds the
-   tool-result limit and is written to a file by the harness, which returns the
-   path; the agent passes the path to the filter and never reads the payload.
-   *Chunk size is chosen partly so responses reliably exceed the inline limit —
-   if a chunk ever returns inline, the agent writes it to a temp file itself
-   and proceeds identically.* Symbols that fail to quote are logged and
+3. **Verbose batched sweep**, **150 symbols/call** (~260 KB/response, ~75
+   calls). Each response exceeds the tool-result limit and is written to a file
+   by the harness, which returns the path; the agent passes the path to the
+   filter and never reads the payload. *Chunk size is chosen so responses
+   reliably exceed the inline limit while staying well inside observed
+   file-save behaviour (107 KB verified). 250/call would be ~45 calls at
+   ~430 KB each, which is unverified — open item 1. If a chunk ever returns
+   inline, the agent writes it to a temp file itself and proceeds
+   identically.* Symbols that fail to quote are logged and
    skipped; a bad symbol must never stall the sweep.
 
 4. **Filter and rank** via `scripts/universe-filter.sh` (new), reading its
@@ -197,7 +200,8 @@ agent context**. This exceeds the current ~15-call postclose ceiling by design
 ## 9. Open items
 
 1. Confirm the harness reliably file-saves a ~430 KB tool result (observed at
-   51 KB and 107 KB; 250-symbol verbose is larger).
+   51 KB and 107 KB). If it does, chunk size can rise from 150 to 250 and the
+   sweep drops from ~75 calls to ~45. The plan ships at 150 until then.
 2. Decide whether ETFs sweep in the same pass or a second one — 5,574 of the
    11,227 are ETFs, and most will fail the dollar-volume gate.
 3. Cron registration mechanics for a weekly cadence, given entries are
