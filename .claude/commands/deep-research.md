@@ -190,17 +190,21 @@ reached:**
      2. **Chunk size 150 symbols**, the same as `/weekly-universe` §B.2 —
         chosen so each verbose response (~260 KB) exceeds the inline
         tool-result limit and is written to a file by the harness rather
-        than landing in context. A `working_universe_size` of 500 is
-        therefore ~4 calls per run.
+        than landing in context. A `working_universe_size` of
+        **500**<!--rule:strategy_working_universe_size--> is therefore
+        ~4 calls per run.
      3. **`get_quotes(symbols=<chunk>, verbose=True)` — `verbose=True` is
         not optional.** A compact payload carries no `avg10DaysVolume`,
         no `fundLeverageFactor`, and no `regular:` sub-block, so
         `universe-filter.sh --qualified-only` would silently return zero
         survivors and the screen would report an empty market. Do not pass
         `fields=` instead; the design spike found it silently ignored
-        (see `schwab-mcp-notes`). *(The 50-symbol chunking and `_sweep_cursor` machinery were removed
-     2026-08-17: they existed because quote payloads entered
-     agent context, and put the universe on an 11-day lap.)*
+        (see `schwab-mcp-notes`).
+
+     *(The 50-symbol chunking and `_sweep_cursor` resume machinery were
+     removed 2026-08-17: they existed only because quote payloads entered
+     agent context, and they put the universe on an 11-day lap.)*
+
      Qualification against survivors: the §1.4 liquidity floors
      (`rules.yml`) for price and volume, up to the §3.1-derived
      unsizeable line, above 50-day SMA, positive 3- and 6-month returns,

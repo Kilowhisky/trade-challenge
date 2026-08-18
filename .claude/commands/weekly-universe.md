@@ -84,14 +84,26 @@ Fallback chain on a `FAIL:` about missing tools, same as tick.md/research.md
    (currently **500**<!--rule:strategy_working_universe_size-->) — never
    hard-coded; read it through `lib-rules.sh`:
 
+   **Run this through `bash -c`, not the bare shell.** `lib-rules.sh` uses
+   `${!name}` indirection, which zsh rejects with "bad substitution" — and
+   the session shell here is zsh. The 2026-08-18 first live run lost time to
+   exactly this. The scripts are correct; the invocation is the trap.
+
    ```bash
-   . scripts/lib-rules.sh && load_rules
-   N="$(rule_get strategy_working_universe_size)"
-   scripts/universe-filter.sh \
-     --payload PATH1 --payload PATH2 ... \
-     --qualified-only --rank-top "$N" \
-     --out /tmp/universe-ranked.tsv
+   bash -c '
+     . scripts/lib-rules.sh && load_rules
+     N="$(rule_get strategy_working_universe_size)"
+     scripts/universe-filter.sh \
+       --payload PATH1 --payload PATH2 ... \
+       --qualified-only --rank-top "$N" \
+       --out /tmp/universe-ranked.tsv
+   '
    ```
+
+   `scripts/universe-filter.sh` guards itself the same way `pre-order-check.sh`
+   does — it refuses to run outside bash rather than failing obscurely — so a
+   direct call is safe; it is the `. scripts/lib-rules.sh` line above it that
+   needs the bash wrapper.
 
    Exit 0 success. Exit 2 usage — a defect in this command; stop, record in
    §D. Exit 7 — `rules.yml` missing, unreadable, or incomplete: **abort the
