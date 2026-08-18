@@ -10,8 +10,8 @@ the context that loads every time. Read it when you need to know why a rule
 says what it says, or what value it used to carry.
 
 Manual changes go through §9: an explicit conversation Chris initiates,
-recorded as a commit with his own message quoted verbatim, never while a
-position is open and never in reaction to a loss. Playbook rules marked
+recorded as a commit with his own message quoted verbatim, and never in
+reaction to a losing position. Playbook rules marked
 *(strategy rule)* are discretionary and change without §9.
 
 ---
@@ -68,6 +68,36 @@ it: Caution $792.00 → **$2,552.00**, Halt $720.00 → **$2,320.00**.
 | §4.10 | The 5-orders-per-session ceiling lifted; per-symbol and per-stop ceilings stand. Ceilings trip on the attempt to exceed (N+1), ruled by Chris. |
 | §4.10 | Protective-order exception ratified: a mandatory §3.4 stop is placed even if it breaches a ceiling, because the alternative is an unstopped position held overnight. |
 | §2 | Long puts permitted; **all** option selling prohibited. The original "no puts" rule was written believing puts carry unlimited risk — they do not. The unlimited position is the uncovered short call. |
+
+### 2026-08-17 · §9.1 — the "no amendment proposed while a position is open" bar removed
+
+Chris-initiated, post-close, account at a high (competition capital $2,902.00
+vs HWM $2,900.00). §9.1 is not in the unamendable core.
+
+**Removed:** "never proposed by me while a position is open."
+
+**Why it went.** The bar was over-broad in practice. A strategy that is
+usually holding something makes the manual effectively unimprovable for the
+entire window — the clause blocked *raising* a rule, not merely amending one,
+so any defect noticed mid-window had to wait for a flat book. It fired twice
+on 2026-08-17 alone, once against a rule-quality audit Chris had explicitly
+asked for.
+
+**What replaces it.** Nothing, deliberately — §9.3 already targets the real
+hazard. "Never as a reaction to a losing position, open or just closed"
+blocks amendment under loss pressure, which is the danger; "a position
+exists" was only ever a proxy for it, and a coarse one. §9.3 is now marked as
+the load-bearing guard, with an explicit note that a rule I have just argued
+would have benefited a current position is the clearest §9.3 breach rather
+than an edge case.
+
+**The tension, recorded rather than smoothed over.** This bar was removed
+while two positions were open (USB, CSX), immediately after the agent
+produced a list of six rules it judged too restrictive. That is precisely the
+pattern the clause was written to prevent, and the record should say so. What
+makes it defensible: Chris initiated it, the account was at a high rather
+than in drawdown, §9.2 and §9.3 still gate every actual change, and the
+unamendable core (§1.1, §1.2, §3.1, §3.6) is untouched.
 
 ### 2026-08-17 · Regression suite for the pre-order gate
 

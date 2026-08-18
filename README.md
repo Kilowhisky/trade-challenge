@@ -92,8 +92,8 @@ a real and checkable thing — and not as evidence of what it did with them.
 
 The rules themselves are still versioned here, which is the part that matters
 for reading the code: the manual can only be amended through a written procedure
-that requires the account owner's own words quoted in the commit, and never
-while a position is open or in reaction to a loss.
+that requires the account owner's own words quoted in the commit, and never in
+reaction to a losing position.
 
 **Earlier disclosed rewrite.** Before the first publication, the history was
 also rewritten to remove things that should never have been in it: the brokerage
