@@ -56,7 +56,10 @@ manual: discretionary, and changeable without a §9 amendment.
 **Every rule parameter lives in `rules.yml`,** which is the single source of
 truth for the numbers: `scripts/pre-order-check.sh` reads its caps from there
 rather than hard-coding them, and `scripts/check-consistency.sh` fails if any
-document or script disagrees with it. Numbers in this manual carry a
+document or script disagrees with it. `scripts/test-pre-order-check.sh` is the
+gate's regression suite — run it before any commit touching `rules.yml` or
+`scripts/`, because the consistency checker verifies what the rules *say*
+while only the tests verify that the arithmetic enforcing them is right. Numbers in this manual carry a
 `<!--rule:key-->` marker binding them to that file. Amending a rule means
 editing `rules.yml` and this manual **in the same commit**.
 

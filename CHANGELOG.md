@@ -69,6 +69,35 @@ it: Caution $792.00 → **$2,552.00**, Halt $720.00 → **$2,320.00**.
 | §4.10 | Protective-order exception ratified: a mandatory §3.4 stop is placed even if it breaches a ceiling, because the alternative is an unstopped position held overnight. |
 | §2 | Long puts permitted; **all** option selling prohibited. The original "no puts" rule was written believing puts carry unlimited risk — they do not. The unlimited position is the uncovered short call. |
 
+### 2026-08-17 · Regression suite for the pre-order gate
+
+`scripts/test-pre-order-check.sh` — 72 tests over the mandatory §4.9/§4.10
+arithmetic gate, which until now had none. That absence is why the §3.2 cap
+drift survived four days.
+
+Covers every exit code (0 pass, 2 usage, 3 §1.4 floor, 4 §4.10 notional,
+5 caps, 6 §5 settled cash, 7 rules-load failure); both sides of every cap
+boundary to the cent; gate precedence; that percentage caps are *floored* and
+never rounded up across a limit; that `rules.yml` genuinely drives the caps;
+and that a missing, incomplete, or malformed `rules.yml` fails **closed** at
+exit 7 rather than reading as a pass.
+
+**Validated by mutation testing** — eight deliberate bugs injected into a copy
+of the gate, each confirmed to fail the suite, with an unmutated control
+passing clean. Among them a replay of the original bug (§3.2 single cap back
+to 15%), a cap that rounds up instead of flooring, a §1.4 off-by-one, and an
+inverted settled-cash check. A suite that survives its own mutations proves
+nothing; these do not.
+
+Two defects found while writing it:
+
+- `pre-order-check.sh` relied on `BASH_SOURCE` to locate its rule library, so
+  running it under a non-bash shell resolved the library against the caller's
+  cwd. It failed closed (exit 7) but reported "command not found: load_rules".
+  It now refuses plainly with exit 2 if `BASH_VERSION` is unset.
+- The first draft of the suite invoked the gate through `$SHELL` rather than
+  `bash`, bypassing the shebang — the test bug that surfaced the one above.
+
 ### 2026-08-17 · rules.yml: one home for every rule parameter
 
 Restructure by **mutability** rather than topic, after the day's second

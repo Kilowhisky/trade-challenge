@@ -63,6 +63,13 @@
 # CLAUDE.md sections implemented: §1.4, §3.1, §3.2 (incl. prior adds to the
 # same contract), §3.5 (incl. options on leveraged ETFs), §4.10 notional
 # sanity, §5.
+# This script requires bash: it uses BASH_SOURCE to locate its rule library,
+# and arrays throughout. Running it under sh/zsh would resolve the library
+# relative to the caller's cwd and fail confusingly. Refuse plainly instead.
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "pre-order-check: must be run with bash (e.g. 'bash $0'), not $0 under another shell" >&2
+  exit 2
+fi
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-rules.sh"
 load_rules || exit 7
 
