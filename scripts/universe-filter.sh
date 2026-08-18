@@ -7,6 +7,21 @@
 #
 # python3 is used for parsing (research path only). lib-rules.sh and
 # pre-order-check.sh stay awk-only because they sit in the ORDER path.
+#
+# OUTPUT — nine tab-separated columns:
+#   symbol  price  adv10  dollar_vol  pct_from_52wk_high  optionable
+#   leverage  last_earnings  is_etf
+#
+#   price     the REGULAR-SESSION close (`regular.regularMarketLastPrice`),
+#             falling back to the consolidated `quote.lastPrice`. Never the
+#             `extended.lastPrice` after-hours tick -- see the sub-block note
+#             in the python block below.
+#   leverage  the leverage MULTIPLE, not the raw payload field. Schwab's
+#             `fundLeverageFactor` is a PERCENTAGE (0 single stock, 100.0 a
+#             1x fund, 300.0 a 3x fund, -100.0 an inverse fund); this column
+#             is that value / 100, because §3.5 reasoning reads in multiples.
+#             Under --qualified-only only raw 0 and raw 100 survive, so the
+#             column is 0.0 or 1.0 in a qualified run.
 set -uo pipefail
 if [ -z "${BASH_VERSION:-}" ]; then
   echo "universe-filter: must be run with bash" >&2; exit 2
@@ -44,13 +59,66 @@ qualified = sys.argv[5] == "1"
 ranktop   = int(sys.argv[6])
 paths     = sys.argv[7:]
 
-def num(block, key, default=None):
-    m = re.search(r'"?%s"?:\s*"?(-?[\d.]+)"?' % re.escape(key), block)
-    return float(m.group(1)) if m else default
+# ---------------------------------------------------------------------------
+# Sub-block-anchored field access.
+#
+# A verbose get_quotes symbol block is 2-space-indented YAML-ish text with
+# several named sub-blocks, emitted in this order:
+#
+#   SYM:
+#     assetMainType/assetSubType/symbol/...   <- top level, scalars
+#     extended:      <- PRE/POST-market print
+#     fundamental:   <- avg10DaysVolume, fundLeverageFactor, lastEarningsDate
+#     quote:         <- 52WeekHigh, netPercentChange, lastPrice (consolidated)
+#     reference:     <- optionable, description, exchange
+#     regular:       <- regularMarketLastPrice: the regular-session close
+#
+# Several keys appear in MORE THAN ONE sub-block -- `lastPrice` lives in both
+# `extended` and `quote`, and `extended` is emitted FIRST. A whole-body regex
+# therefore returns the after-hours print, which is what this parser used to
+# do for every gate, dollar_vol, and the 52-week rank key. Never search the
+# whole body; always name the sub-block.
+BLOCK_HEADER = re.compile(r'^  ([A-Za-z][A-Za-z0-9_]*):\s*$')
+TOP_LEVEL_KEY = re.compile(r'^  \S')
 
-def word(block, key, default=""):
-    m = re.search(r'"?%s"?:\s*"?([^"\n]*)"?' % re.escape(key), block)
-    return (m.group(1).strip() if m else default)
+def split_blocks(body):
+    """Split a symbol block into {sub-block name: text}; '' is the top level."""
+    blocks = {'': []}
+    cur = ''
+    for line in body.split('\n'):
+        m = BLOCK_HEADER.match(line)
+        if m:
+            cur = m.group(1)
+            blocks.setdefault(cur, [])
+            continue
+        if TOP_LEVEL_KEY.match(line):
+            cur = ''
+        blocks[cur].append(line)
+    return {k: '\n'.join(v) for k, v in blocks.items()}
+
+def _num(text, key):
+    m = re.search(r'"?%s"?:\s*"?(-?[\d.]+)"?' % re.escape(key), text)
+    return float(m.group(1)) if m else None
+
+def _word(text, key):
+    m = re.search(r'"?%s"?:\s*"?([^"\n]*)"?' % re.escape(key), text)
+    return m.group(1).strip() if m else None
+
+def num(blocks, where, key, default=None):
+    """Numeric field from a named sub-block. `where` may be a tuple: first hit
+    wins, so a fallback chain is explicit rather than an accident of ordering."""
+    for w in ((where,) if isinstance(where, str) else where):
+        v = _num(blocks.get(w, ''), key)
+        if v is not None:
+            return v
+    return default
+
+def word(blocks, where, key, default=""):
+    for w in ((where,) if isinstance(where, str) else where):
+        v = _word(blocks.get(w, ''), key)
+        if v is not None:
+            return v
+    return default
 
 rows = []
 skipped = []
@@ -59,28 +127,42 @@ for path in paths:
     # a new symbol block starts at column 0 as "SYM:"
     for m in re.finditer(r'(?m)^([A-Z][A-Z0-9/.\-]{0,7}):\n(.*?)(?=^\S|\Z)', raw, re.S):
         sym, body = m.group(1), m.group(2)
-        price = num(body, 'lastPrice')
-        adv   = num(body, 'avg10DaysVolume', 0.0)
+        b = split_blocks(body)
+        # PRICE: the regular-session close, falling back to the consolidated
+        # `quote:` print when a symbol carries no `regular:` block. This is a
+        # weekend screen -- the regular close is the correct and stable
+        # screening price; `extended.lastPrice` is a thin after-hours tick.
+        price = num(b, 'regular', 'regularMarketLastPrice')
+        if price is None:
+            price = num(b, 'quote', 'lastPrice')
+        adv   = num(b, 'fundamental', 'avg10DaysVolume', 0.0)
         if price is None:
             skipped.append(sym)           # unquotable symbol: skip, never stall,
             continue                      # but never silently — logged below
+        # fundLeverageFactor is a PERCENTAGE, not a multiple: 0 = single stock,
+        # 100 = a 1x fund, 200/300 = leveraged, negative = inverse. Store the
+        # MULTIPLE (raw / 100) because §3.5 reasoning is expressed in multiples.
+        lev_raw = num(b, 'fundamental', 'fundLeverageFactor', 0.0) or 0.0
         if qualified:
             if price < min_price:                    continue   # §1.4 price floor
             if (adv or 0.0) * price < min_dollar:    continue   # §1.4 dollar volume
             if (adv or 0.0) < min_shares:            continue   # §1.4 share sanity floor
-            lev = num(body, 'fundLeverageFactor', 0.0) or 0.0
-            if lev != 0.0:                           continue   # §3.5 gated shut by default
+            # §3.5 gated shut by default. Reject anything that is NOT a single
+            # stock (0) or a 1x fund (100) -- i.e. every leveraged and inverse
+            # fund. Rejecting on `!= 0` instead would discard every ETF, which
+            # is roughly half the fetched directory.
+            if lev_raw not in (0.0, 100.0):          continue
         rows.append({
             'symbol': sym,
             'price': price,
             'adv10': adv or 0.0,
             'dollar_vol': (adv or 0.0) * price,
-            'high52': num(body, '52WeekHigh', 0.0) or 0.0,
-            'pct_chg': num(body, 'netPercentChange', 0.0) or 0.0,
-            'optionable': 'true' if word(body, 'optionable') == 'true' else 'false',
-            'leverage': num(body, 'fundLeverageFactor', 0.0) or 0.0,
-            'last_earnings': (word(body, 'lastEarningsDate') or '')[:10],
-            'is_etf': 'true' if word(body, 'assetSubType') == 'ETF' else 'false',
+            'high52': num(b, 'quote', '52WeekHigh', 0.0) or 0.0,
+            'pct_chg': num(b, 'quote', 'netPercentChange', 0.0) or 0.0,
+            'optionable': 'true' if word(b, 'reference', 'optionable') == 'true' else 'false',
+            'leverage': lev_raw / 100.0,
+            'last_earnings': (word(b, 'fundamental', 'lastEarningsDate') or '')[:10],
+            'is_etf': 'true' if word(b, '', 'assetSubType') == 'ETF' else 'false',
         })
 
 for r in rows:

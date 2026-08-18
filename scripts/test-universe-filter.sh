@@ -4,6 +4,13 @@ set -uo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.." || exit 2
 F=scripts/universe-filter.sh
 FIX=tests/fixtures/verbose-sample.txt
+# Second fixture, captured verbatim from a live get_quotes(verbose=True)
+# call on 2026-08-17 (AAPL, SPY, TQQQ, CSX, SMCI). The synthetic fixture
+# above was hand-written, and two whole-market defects survived it: a
+# fundLeverageFactor scale that does not exist (3 rather than 300) and no
+# `extended:`/`regular:` sub-blocks at all. Anything about the SHAPE of a
+# real payload must be asserted against this file, not that one.
+LIVE=tests/fixtures/verbose-live-sample.txt
 pass=0; fail=0; skip=0
 ok()   { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
 no()   { fail=$((fail+1)); printf 'FAIL  %s\n       %s\n' "$1" "${2:-}"; }
@@ -40,6 +47,11 @@ cut -f1 "$OUT" | tail -n +2 > /tmp/uf_syms.$$
 grep -qx 'CSX' /tmp/uf_syms.$$ && ok "CSX passes every gate" || no "CSX passes every gate"
 grep -qx 'PENNYCO' /tmp/uf_syms.$$ && no "sub-\$5 name is dropped" "PENNYCO survived" || ok "sub-\$5 name is dropped"
 grep -qx 'TQQQ' /tmp/uf_syms.$$ && no "leveraged ETF is dropped (§3.5)" "TQQQ survived" || ok "leveraged ETF is dropped (§3.5)"
+# fundLeverageFactor is a PERCENTAGE: 0 single stock, 100 a 1x fund,
+# 200/300 leveraged, negative inverse. The gate rejects anything outside
+# {0, 100}, so 2x and inverse funds must go the same way TQQQ does.
+grep -qx 'T2X' /tmp/uf_syms.$$ && no "2x ETF is dropped (§3.5)" "T2X survived" || ok "2x ETF is dropped (§3.5)"
+grep -qx 'TINVERSE' /tmp/uf_syms.$$ && no "inverse ETF is dropped (§3.5)" "TINVERSE survived" || ok "inverse ETF is dropped (§3.5)"
 # TDOLLAR (price 6.00, adv10 200000 -> dollar_vol 1.2M < 5M floor, shares
 # 200000 >= 100000 share floor) isolates the dollar-volume gate: it fails
 # ONLY that gate. TSHARE (price 200.00, adv10 50000 -> dollar_vol 10M >= 5M
@@ -78,6 +90,61 @@ top=$(tail -n +2 "$OUT" | cut -f1)
 # Two symbols qualify (CSX, QUALB); capping to 1 must report exactly one drop.
 grep -q 'dropped 1' "$ERR" && ok "truncation count is reported accurately" \
   || no "truncation count is reported accurately" "stderr was: $(cat "$ERR")"
+
+echo "== real payload shape (live fixture) =="
+# ---- price is taken from the REGULAR-SESSION close, not the extended print --
+# CSX in the live fixture carries three different prices:
+#   extended.lastPrice            50.67   (thin after-hours tick)
+#   quote.lastPrice               50.89   (consolidated, includes extended)
+#   regular.regularMarketLastPrice 50.58  (the regular-session close) <-- want
+# `extended:` is emitted BEFORE `quote:`, so a whole-body first-match regex
+# returns 50.67 and every gate, dollar_vol, and the 52-week rank key run off
+# the after-hours print. This is the assertion that catches that.
+bash "$F" --payload "$LIVE" --out "$OUT" >/dev/null 2>"$ERR"
+csx_price=$(awk -F'\t' '$1=="CSX"{print $2}' "$OUT")
+[ "$csx_price" = "50.5800" ] \
+  && ok "CSX price is the regular-session close (50.58), not the extended print (50.67)" \
+  || no "CSX price is the regular-session close (50.58), not the extended print (50.67)" "got $csx_price"
+# Same three-way split on SMCI, whose extended/regular gap is larger still
+# (37.34 extended / 38.118 quote / 38.28 regular).
+smci_price=$(awk -F'\t' '$1=="SMCI"{print $2}' "$OUT")
+[ "$smci_price" = "38.2800" ] \
+  && ok "SMCI price is the regular-session close (38.28)" \
+  || no "SMCI price is the regular-session close (38.28)" "got $smci_price"
+
+# ---- the leverage column stores the MULTIPLE, not the raw percentage -------
+spy_lev=$(awk -F'\t' '$1=="SPY"{print $7}' "$OUT")
+[ "$spy_lev" = "1.0" ] && ok "SPY leverage column is the multiple 1.0 (raw 100)" \
+  || no "SPY leverage column is the multiple 1.0 (raw 100)" "got $spy_lev"
+tqqq_lev=$(awk -F'\t' '$1=="TQQQ"{print $7}' "$OUT")
+[ "$tqqq_lev" = "3.0" ] && ok "TQQQ leverage column is the multiple 3.0 (raw 300)" \
+  || no "TQQQ leverage column is the multiple 3.0 (raw 300)" "got $tqqq_lev"
+aapl_lev=$(awk -F'\t' '$1=="AAPL"{print $7}' "$OUT")
+[ "$aapl_lev" = "0.0" ] && ok "AAPL leverage column is 0.0 (single stock)" \
+  || no "AAPL leverage column is 0.0 (single stock)" "got $aapl_lev"
+
+# ---- the §3.5 gate keeps 1x funds and drops leveraged ones ----------------
+# Real values: AAPL 0, SPY 100.0, TQQQ 300.0. A `!= 0` gate discards EVERY
+# ETF (~5,574 of the 11,227 fetched symbols), not just the leveraged ones.
+bash "$F" --payload "$LIVE" --out "$OUT" --qualified-only >/dev/null 2>&1
+cut -f1 "$OUT" | tail -n +2 > /tmp/uf_live.$$
+grep -qx 'SPY' /tmp/uf_live.$$ && ok "SPY (1x ETF, raw leverage 100) survives --qualified-only" \
+  || no "SPY (1x ETF, raw leverage 100) survives --qualified-only" "SPY was dropped; the leverage gate is discarding every ETF"
+grep -qx 'TQQQ' /tmp/uf_live.$$ && no "TQQQ (3x ETF, raw leverage 300) is dropped (§3.5)" "TQQQ survived" \
+  || ok "TQQQ (3x ETF, raw leverage 300) is dropped (§3.5)"
+grep -qx 'AAPL' /tmp/uf_live.$$ && ok "AAPL survives every gate" || no "AAPL survives every gate"
+rm -f /tmp/uf_live.$$
+
+echo "== sub-block anchoring: extended present, regular absent =="
+# The synthetic NOREG block has extended.lastPrice 4.00 and quote.lastPrice
+# 20.00 and NO `regular:` block. The documented fallback is the `quote:`
+# sub-block -- never `extended:`, which is emitted first and would both change
+# the price and (at 4.00) flip the §1.4 price gate.
+bash "$F" --payload "$FIX" --out "$OUT" >/dev/null 2>&1
+noreg_price=$(awk -F'\t' '$1=="NOREG"{print $2}' "$OUT")
+[ "$noreg_price" = "20.0000" ] \
+  && ok "falls back to quote.lastPrice (20.00), not extended.lastPrice (4.00)" \
+  || no "falls back to quote.lastPrice (20.00), not extended.lastPrice (4.00)" "got $noreg_price"
 
 echo "== directory fetch =="
 SYMS=$(mktemp)
