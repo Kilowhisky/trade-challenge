@@ -69,6 +69,36 @@ it: Caution $792.00 → **$2,552.00**, Halt $720.00 → **$2,320.00**.
 | §4.10 | Protective-order exception ratified: a mandatory §3.4 stop is placed even if it breaches a ceiling, because the alternative is an unstopped position held overnight. |
 | §2 | Long puts permitted; **all** option selling prohibited. The original "no puts" rule was written believing puts carry unlimited risk — they do not. The unlimited position is the uncovered short call. |
 
+### 2026-08-17 · Cash figures removed from the rules; contradictions swept
+
+Caps and thresholds are now stated only as percentages and formulas. Dollar
+equivalents are resolved at the moment they are needed — competition capital
+from the live broker read, the high-water mark from the latest `status/` file,
+cap arithmetic by `scripts/pre-order-check.sh`. The $900.00 reserve and the
+§1.4 $5.00 floor are the standing exceptions, both fixed by definition.
+
+Removed from the manual: the hard-coded high-water mark, Caution and Halt
+dollar levels, the competition-capital snapshot, and the §3.2 dollar caps.
+§3.6 now states `≤ 0.88 × HWM` / `≤ 0.80 × HWM`.
+
+**Live bug found and fixed:** `scripts/pre-order-check.sh` still enforced the
+pre-2026-08-17 option caps — 15% per position and 20% aggregate, against the
+amended 20% / 30%. The §3.2 aggregate and the §3.5 leveraged aggregate were
+both 20% before the amendment and *shared one variable*, so raising §3.2 to
+30% silently missed the script. Caps are now one variable per rule
+(`cap_pos_e4`, `cap_opt_single_e4`, `cap_opt_agg_e4`, `cap_lev_e4`). The gate
+had been rejecting compliant option orders — the safe direction, and no option
+position was open while it was wrong.
+
+Contradictions fixed: §3.6 and §4.5 both claimed to be "the first action of
+every session" (§4.5 is; §3.6 follows it); tick.md §E cited the §4.10
+*replace* ceiling to license 3 stop *placement* attempts, when a
+never-rested stop is a new order against the 2-per-symbol ceiling and
+attempts past the first are protective-order-exception breaches; the playbook
+offered leveraged ETFs for the §10 catch-up branch that §10 records as
+rejected outright; the playbook's day-4 leveraged exit was stricter than the
+manual's day 5 but unmarked as a *(strategy rule)*.
+
 ---
 
 ## Playbook — `2026-08-13-competition-strategy-design.md`

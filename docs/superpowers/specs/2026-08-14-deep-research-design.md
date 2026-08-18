@@ -33,11 +33,13 @@ Day one exposed four research-quality gaps, visible in
 4. **No feedback loop on research verdicts.** Pings get counterfactuals;
    tombstones and gate-kills do not, so gate calibration is unmeasurable.
 
-The 2026-08-14 capital amendment (comp capital $900 → ~$2,899.38) widens the
-opportunity set materially — unsizeable line $314.78 → ~$1,014.78, options
-spot ceiling ~$25–36 → ~$70–105 (widened again to ~$95–140 by the
-2026-08-17 cap amendment) — which raises the cost of anecdotal
-discovery, and also raises the *scale trap* the review flagged: the widened
+The 2026-08-14 capital amendment roughly tripled competition capital, widening
+the opportunity set materially — the unsizeable line and the options spot
+ceiling both moved out by about the same multiple, and the 2026-08-17 cap
+amendment widened the options ceiling again. (Historical figures in
+`CHANGELOG.md`; current ones are derived at run time.) That raises the cost of
+anecdotal discovery, and also raises the *scale trap* the review flagged: the
+widened
 bands describe hundreds of names, far more than the call budget can deeply
 verify. This design's scope is therefore explicitly **budget-first**: every
 feature is sized to what ~30 calls/day can actually do in the **17 sessions**
@@ -163,15 +165,19 @@ Principle: **every "no" gets scored, not just every ping.**
 ## 6. Options research track
 
 The sleeve's discovery problem is affordability × ladder quality. Current
-arithmetic (manual §3.2 as amended 2026-08-17): premium cap ≈ **$580 single /
-$870 aggregate** → a Δ≈0.5, ~35-DTE contract is affordable to spot ≈ **$140**
-at calm IV, ≈ **$95–100** at realistic IV (method: the measured ~3.8%-of-spot
-premium ratio from the 8/14 WMT chain work, scaled). The manual governs these
-figures; if they diverge, that is a defect to fix here.
+arithmetic: the §3.2 caps are **20% of competition capital per position, 30%
+open**. The affordable spot ceiling for a Δ≈0.5, ~35-DTE contract follows from
+the per-position cap divided by the premium-to-spot ratio (measured at ~3.8%
+on the 8/14 WMT chain, higher at realistic IV).
 
-**Scope discipline (review finding 3):** the naive band ($10–140 since the
-2026-08-17 amendment; the count below was measured at the older $10–105 band
-and is therefore a floor, not a ceiling) is 300–500 names — unbuildable at ~5 spare chain calls/day inside a
+**Derive both at run time from the live competition-capital figure — do not
+write the dollar results into this file.** Percentages are canonical; a
+hard-coded dollar ceiling here went stale at the 2026-08-17 cap amendment and
+was not caught for four days (manual header, *Percentages are canonical*).
+
+**Scope discipline (review finding 3):** the naive price band — $5 (§1.4) up
+to the derived affordable ceiling — is 300–500 names at the capital level where
+this was measured, and grows as capital does, so treat the count as a floor — unbuildable at ~5 spare chain calls/day inside a
 17-session window. Everything below is sized to that reality.
 
 1. **Options-viable roster** (`research/options-roster.md`, script-written).

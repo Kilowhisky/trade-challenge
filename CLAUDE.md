@@ -8,10 +8,10 @@ action on the account.
 |---|---|
 | **Account owner** | Chris |
 | **Account** | ACCOUNT_REDACTED "LLM YOLO" · Charles Schwab, via the Schwab MCP server · **CASH — no margin** · hash `HASH_REDACTED` |
-| **Competition capital** | Account value − the $900.00 reserve · **≈$2,899.38** at the 2026-08-14 amendment |
+| **Competition capital** | Account value − the $900.00 reserve. Recomputed every session; never carried forward from this file |
 | **Settlement reserve** | $900.00 — float to bridge T+1 settlement, never deployed |
 | **Scoring** | Final account value **minus the $900.00 reserve** |
-| **High-water mark** | **$2,900.00** · Caution **$2,552.00** (−12%) · Halt **$2,320.00** (−20%) |
+| **High-water mark** | Highest competition capital **recorded** to date. Resolved per session from the latest `status/` file's *State recorded — current* block (tick.md §B5) — not from this file |
 | **Window** | 2026-08-14 → 2026-09-14 · 21 NYSE sessions (Labor Day 9/07 excluded) |
 | **Final session** | Monday 2026-09-14 |
 | **§8 lockout** | From Thursday 2026-09-10 — no new positions, all options closed |
@@ -23,6 +23,17 @@ account value. Reading a cap against the full balance overstates the intended
 risk by roughly a third. The reserve exists only to bridge T+1 settlement:
 it adds float, never risk, and total position exposure never exceeds 100% of
 competition capital.
+
+**Percentages are canonical; dollar figures are not.** This manual states caps
+and thresholds only as percentages and formulas, because every dollar
+equivalent drifts the moment capital or the high-water mark moves — and a
+stale dollar figure in a rule is a rule that silently stops matching itself.
+Current dollar values are resolved at the moment they are needed: competition
+capital from the live broker read (§4.5), the high-water mark from the latest
+`status/` file, and every cap arithmetic by `scripts/pre-order-check.sh`.
+**Never hard-code a dollar cap into this file, the playbook, or a command
+file.** The one standing exception is the $900.00 reserve, which is a fixed
+quantity by definition, along with the §1.4 $5.00 share-price floor.
 
 **This file is only half the system.** It defines the *box* — what may never be
 done. It does not define *how the account is traded*. That is the playbook:
@@ -123,7 +134,6 @@ Two independent reasons, either sufficient on its own:
   left is an uncovered short call with unlimited risk, created without a single
   rule violation. Removing the whole category removes the path.
 
-
 ---
 
 ## 3. Position sizing and risk limits
@@ -139,9 +149,8 @@ buys stacking into a 90% position is a violation, not a loophole.
 losses shrink it — and gated on contract quality.
 
 - Max premium in any single option position: **20% of competition capital at
-  entry** (≈$580 at $2,899).
-- Max total open option premium: **30% of competition capital** (≈$870 at
-  $2,899).
+  entry**.
+- Max total open option premium: **30% of competition capital**.
 - No limit on the number of open option positions. The 30% aggregate cap is
   the binding constraint; every position still carries its own §3.3
   expiration clock and §3.2 quality floors.
@@ -157,10 +166,11 @@ Quality floors — all must hold at entry:
 
 **3.3 — Expiration handling. This is the single largest event risk in the
 account.** The OCC auto-exercises any long option that finishes $0.01 in the
-money. On a $900 cash account that is catastrophic:
-- An ITM long call auto-exercises into a strike × 100 stock purchase — $2,000+
-  the account cannot pay — producing a cash call, forced liquidation, and a
-  violation under §5.
+money. On a cash account this size that is catastrophic:
+- An ITM long call auto-exercises into a strike × 100 stock purchase. At any
+  underlying this account can trade, that obligation exceeds competition
+  capital several times over — producing a cash call, forced liquidation, and
+  a violation under §5.
 - An ITM long put exercises into a **short stock position**, which §1.5 forbids
   and a cash account cannot hold, forcing a broker buy-in at any price.
 
@@ -192,13 +202,14 @@ decay when held through volatility.
 
 **3.6 — Drawdown circuit breaker.** Measured against the **high-water mark**
 (the highest **competition-capital** value — account value − the $900
-reserve — recorded to date). **Checked as the first action of every
-session**, not only at close.
+reserve — recorded to date). **Checked at every session open, immediately
+after the §4.5 broker reconciliation that supplies the numbers** — and not
+only at close.
 
 | Level | Trigger | Action |
 |---|---|---|
-| **Caution** | −12% from high-water (**$2,552** from $2,900) | Halve all new position sizes. No new option positions. Close any option position at a loss. |
-| **Halt** | −20% from high-water (**$2,320** from $2,900) | **No buy orders of any kind.** Notify Chris. Trading resumes only after an explicit conversation. |
+| **Caution** | competition capital ≤ **0.88 × high-water** | Halve all new position sizes. No new option positions. Close any option position at a loss. |
+| **Halt** | competition capital ≤ **0.80 × high-water** | **No buy orders of any kind.** Notify Chris. Trading resumes only after an explicit conversation. |
 
 "New position" means **any buy order** — including adds to an existing position,
 re-entering a name that just stopped out, and rolling an option. Closing orders

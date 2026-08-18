@@ -226,10 +226,14 @@ notional_e4=$(( qty * price_e4 * multiplier ))
 order_value_e4=$(( qty * price_e4 ))          # stock/ETF dollars; option: per-1-share dollars
 premium_e4=$(( qty * price_e4 * 100 ))        # option premium dollars (e4)
 
-# floored percentage caps (never rounded up across a limit)
-cap35_e4=$(( comp_e4 * 35 / 100 ))
-cap20_e4=$(( comp_e4 * 20 / 100 ))
-cap15_e4=$(( comp_e4 * 15 / 100 ))
+# Floored percentage caps (never rounded up across a limit).
+# One variable per RULE, never shared between rules: §3.2's aggregate and
+# §3.5's leveraged aggregate were both 20% before 2026-08-17 and shared a
+# variable, so raising §3.2 to 30% silently missed this file.
+cap_pos_e4=$((       comp_e4 * 35 / 100 ))   # §3.1 single position
+cap_opt_single_e4=$((comp_e4 * 20 / 100 ))   # §3.2 per option position
+cap_opt_agg_e4=$((   comp_e4 * 30 / 100 ))   # §3.2 total open premium
+cap_lev_e4=$((       comp_e4 * 20 / 100 ))   # §3.5 leveraged/inverse aggregate
 
 pass_lines=()
 
@@ -288,43 +292,43 @@ open_prem_tag=""; was_seen --open-option-premium || open_prem_tag=" (defaulted 0
 case "$instrument" in
   equity)
     total_e4=$(( existing_e4 + order_value_e4 ))
-    if [ "$total_e4" -gt "$cap35_e4" ]; then
-      fail 5 "§3.1 FAIL: $(fmt_e4 "$existing_e4") + $(fmt_e4 "$order_value_e4") = $(fmt_e4 "$total_e4") > $(fmt_e4 "$cap35_e4") (35% of comp-capital $(fmt_e4 "$comp_e4"), floored)"
+    if [ "$total_e4" -gt "$cap_pos_e4" ]; then
+      fail 5 "§3.1 FAIL: $(fmt_e4 "$existing_e4") + $(fmt_e4 "$order_value_e4") = $(fmt_e4 "$total_e4") > $(fmt_e4 "$cap_pos_e4") (35% of comp-capital $(fmt_e4 "$comp_e4"), floored)"
     fi
-    pass_lines+=("§3.1: $(fmt_e4 "$existing_e4")$existing_tag + $(fmt_e4 "$order_value_e4") = $(fmt_e4 "$total_e4") ≤ $(fmt_e4 "$cap35_e4") PASS")
+    pass_lines+=("§3.1: $(fmt_e4 "$existing_e4")$existing_tag + $(fmt_e4 "$order_value_e4") = $(fmt_e4 "$total_e4") ≤ $(fmt_e4 "$cap_pos_e4") PASS")
     ;;
   leveraged_etf)
     total31_e4=$(( existing_e4 + order_value_e4 ))
-    if [ "$total31_e4" -gt "$cap35_e4" ]; then
-      fail 5 "§3.1 FAIL: $(fmt_e4 "$existing_e4") + $(fmt_e4 "$order_value_e4") = $(fmt_e4 "$total31_e4") > $(fmt_e4 "$cap35_e4") (35% of comp-capital $(fmt_e4 "$comp_e4"), floored)"
+    if [ "$total31_e4" -gt "$cap_pos_e4" ]; then
+      fail 5 "§3.1 FAIL: $(fmt_e4 "$existing_e4") + $(fmt_e4 "$order_value_e4") = $(fmt_e4 "$total31_e4") > $(fmt_e4 "$cap_pos_e4") (35% of comp-capital $(fmt_e4 "$comp_e4"), floored)"
     fi
-    pass_lines+=("§3.1: $(fmt_e4 "$existing_e4") + $(fmt_e4 "$order_value_e4") = $(fmt_e4 "$total31_e4") ≤ $(fmt_e4 "$cap35_e4") PASS")
+    pass_lines+=("§3.1: $(fmt_e4 "$existing_e4") + $(fmt_e4 "$order_value_e4") = $(fmt_e4 "$total31_e4") ≤ $(fmt_e4 "$cap_pos_e4") PASS")
 
     total35_e4=$(( lev_agg_e4 + order_value_e4 ))
-    if [ "$total35_e4" -gt "$cap20_e4" ]; then
-      fail 5 "§3.5 FAIL: $(fmt_e4 "$lev_agg_e4") + $(fmt_e4 "$order_value_e4") = $(fmt_e4 "$total35_e4") > $(fmt_e4 "$cap20_e4") (20% of comp-capital, leveraged/inverse aggregate, floored)"
+    if [ "$total35_e4" -gt "$cap_lev_e4" ]; then
+      fail 5 "§3.5 FAIL: $(fmt_e4 "$lev_agg_e4") + $(fmt_e4 "$order_value_e4") = $(fmt_e4 "$total35_e4") > $(fmt_e4 "$cap_lev_e4") (20% of comp-capital, leveraged/inverse aggregate, floored)"
     fi
-    pass_lines+=("§3.5: $(fmt_e4 "$lev_agg_e4") + $(fmt_e4 "$order_value_e4") = $(fmt_e4 "$total35_e4") ≤ $(fmt_e4 "$cap20_e4") PASS")
+    pass_lines+=("§3.5: $(fmt_e4 "$lev_agg_e4") + $(fmt_e4 "$order_value_e4") = $(fmt_e4 "$total35_e4") ≤ $(fmt_e4 "$cap_lev_e4") PASS")
     ;;
   option)
     total_single_e4=$(( existing_prem_e4 + premium_e4 ))
-    if [ "$total_single_e4" -gt "$cap15_e4" ]; then
-      fail 5 "§3.2 FAIL (single position, incl. prior adds to this contract): $(fmt_e4 "$existing_prem_e4") + $(fmt_e4 "$premium_e4") = $(fmt_e4 "$total_single_e4") > $(fmt_e4 "$cap15_e4") (15% of comp-capital $(fmt_e4 "$comp_e4"), floored)"
+    if [ "$total_single_e4" -gt "$cap_opt_single_e4" ]; then
+      fail 5 "§3.2 FAIL (single position, incl. prior adds to this contract): $(fmt_e4 "$existing_prem_e4") + $(fmt_e4 "$premium_e4") = $(fmt_e4 "$total_single_e4") > $(fmt_e4 "$cap_opt_single_e4") (20% of comp-capital $(fmt_e4 "$comp_e4"), floored)"
     fi
-    pass_lines+=("§3.2 single: $(fmt_e4 "$existing_prem_e4") + $(fmt_e4 "$premium_e4") = $(fmt_e4 "$total_single_e4") ≤ $(fmt_e4 "$cap15_e4") PASS")
+    pass_lines+=("§3.2 single: $(fmt_e4 "$existing_prem_e4") + $(fmt_e4 "$premium_e4") = $(fmt_e4 "$total_single_e4") ≤ $(fmt_e4 "$cap_opt_single_e4") PASS")
 
     total_agg_e4=$(( open_prem_e4 + premium_e4 ))
-    if [ "$total_agg_e4" -gt "$cap20_e4" ]; then
-      fail 5 "§3.2 FAIL (aggregate): $(fmt_e4 "$open_prem_e4") + $(fmt_e4 "$premium_e4") = $(fmt_e4 "$total_agg_e4") > $(fmt_e4 "$cap20_e4") (20% of comp-capital $(fmt_e4 "$comp_e4"), floored)"
+    if [ "$total_agg_e4" -gt "$cap_opt_agg_e4" ]; then
+      fail 5 "§3.2 FAIL (aggregate): $(fmt_e4 "$open_prem_e4") + $(fmt_e4 "$premium_e4") = $(fmt_e4 "$total_agg_e4") > $(fmt_e4 "$cap_opt_agg_e4") (30% of comp-capital $(fmt_e4 "$comp_e4"), floored)"
     fi
-    pass_lines+=("§3.2 aggregate: $(fmt_e4 "$open_prem_e4")$open_prem_tag + $(fmt_e4 "$premium_e4") = $(fmt_e4 "$total_agg_e4") ≤ $(fmt_e4 "$cap20_e4") PASS")
+    pass_lines+=("§3.2 aggregate: $(fmt_e4 "$open_prem_e4")$open_prem_tag + $(fmt_e4 "$premium_e4") = $(fmt_e4 "$total_agg_e4") ≤ $(fmt_e4 "$cap_opt_agg_e4") PASS")
 
     if [ "$leveraged_underlying" -eq 1 ]; then
       total_lev_e4=$(( lev_agg_e4 + premium_e4 ))
-      if [ "$total_lev_e4" -gt "$cap20_e4" ]; then
-        fail 5 "§3.5 FAIL (option on leveraged ETF — §3.5 last bullet): $(fmt_e4 "$lev_agg_e4") + $(fmt_e4 "$premium_e4") = $(fmt_e4 "$total_lev_e4") > $(fmt_e4 "$cap20_e4") (20% of comp-capital, leveraged/inverse aggregate, floored)"
+      if [ "$total_lev_e4" -gt "$cap_lev_e4" ]; then
+        fail 5 "§3.5 FAIL (option on leveraged ETF — §3.5 last bullet): $(fmt_e4 "$lev_agg_e4") + $(fmt_e4 "$premium_e4") = $(fmt_e4 "$total_lev_e4") > $(fmt_e4 "$cap_lev_e4") (20% of comp-capital, leveraged/inverse aggregate, floored)"
       fi
-      pass_lines+=("§3.5 (option on leveraged ETF): $(fmt_e4 "$lev_agg_e4") + $(fmt_e4 "$premium_e4") = $(fmt_e4 "$total_lev_e4") ≤ $(fmt_e4 "$cap20_e4") PASS")
+      pass_lines+=("§3.5 (option on leveraged ETF): $(fmt_e4 "$lev_agg_e4") + $(fmt_e4 "$premium_e4") = $(fmt_e4 "$total_lev_e4") ≤ $(fmt_e4 "$cap_lev_e4") PASS")
     fi
     ;;
 esac

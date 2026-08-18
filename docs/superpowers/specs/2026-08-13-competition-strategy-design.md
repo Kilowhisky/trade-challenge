@@ -53,7 +53,7 @@ and a five-agent comparative research pass
 | T+1 cash account, zero GFV tolerance | $900 reserve as float; invariant in §3; field semantics gated (§7.6) |
 | Token expires every 7 days | **Re-auth: 8/19, 8/26, 9/2, and 9/8 pre-market** (9/8 token outlives the 9/14 bell) |
 | Loop coverage honestly ≈ 5–15% of the trading day, ≈0% at open/close | Operative deadline everywhere = **session end**, never "market close"; Chris does a 5-min 9:30 ET check any day a position is open |
-| §3.2 per-position cap: 20% of comp capital, $580 at $2,899 | Options on roughly sub-$140 underlyings at calm IV, ~$95–100 at realistic IV; ceiling rises as the account grows |
+| §3.2 per-position cap: 20% of competition capital | At present capital that reaches mid-priced underlyings at calm IV, appreciably less at realistic IV. Re-derive at order time — never carry a spot ceiling forward |
 | Earnings calendar (verified): HD 8/18, TGT+LOW 8/19, WMT 8/20, NVDA+CRM 8/26, DLTR 8/27, AVGO 9/3 | Supply themes are consumer-retail and tech, clustered 8/18–9/3; desert after ~9/4 |
 
 ## 3. Capital architecture
@@ -68,13 +68,18 @@ qualify. This forbids the leak where a stopped-out loss plus full-size
 redeployment quietly eats the reserve: **redeploys are capped at actual
 proceeds, not at original position size.**
 
-| Sleeve | Ceiling | At $2,899.38 | Positions |
-|---|---|---|---|
-| Core | 50% | $1,450 | No name count *(strategy rule)*; per-position §3.1/§3.8 bind |
-| Catalyst | 30% | $870 | 1, occasionally 2 |
-| Options | 30% open / 20% per position (§3.2, scales with the account) | $870 open / $580 per position | No count limit |
-| Leveraged ETF | 20% aggregate, within rows above | $580 | Gated (§6) |
-| **Max deployed** | **100%** | **$2,899.38** | sleeves now sum to 110% — they are individual ceilings; the 100% total-deployment line and the reserve invariant bind first |
+Ceilings are percentages of competition capital. Dollar equivalents are
+deliberately not written here — they drift with capital and go stale silently
+(manual header, *Percentages are canonical*). `scripts/pre-order-check.sh`
+computes them from the live figure at order time.
+
+| Sleeve | Ceiling | Positions |
+|---|---|---|
+| Core | 50% | No name count *(strategy rule)*; per-position §3.1/§3.8 bind |
+| Catalyst | 30% | 1, occasionally 2 |
+| Options | 30% open / 20% per position (§3.2) | No count limit |
+| Leveraged ETF | 20% aggregate, within the rows above | Gated (§6) |
+| **Max deployed** | **100%** | Sleeves sum to 110% — they are individual ceilings; the 100% total-deployment line and the reserve invariant bind first |
 
 - **Sleeve compliance is checked at order time only**, against competition
   capital at current marks. Mark drift never forces a sale and never frees
@@ -83,7 +88,6 @@ proceeds, not at original position size.**
 - **§3.6 thresholds ratchet:** Caution = 0.88 × HWM, Halt = 0.80 × HWM of
   competition value. HWM resolution — source, once-per-session caching, and
   the no-intraday-ratchet rule — is defined in tick.md §B5, one place.
-  (At HWM $2,900: $2,552/$2,320. At HWM $3,190: $2,807.20/$2,552.)
 - **At Caution:** halved ceilings gate **new buys only** — existing positions
   are never force-sold by Caution; all open options are closed, **accepting
   losses** (pinned reading of §3.6). No new options.
@@ -136,7 +140,7 @@ beat, ideally raised guidance; **gapped up and held** (closed report day in
 top half of range); §1.4/§2 floors; sector distinct from both core names
 (§3.8 — guaranteed possible by §4's carve-out); next report ~3 months out.
 Prefer the **~$20–60 price band** *(strategy rule — whole-share granularity
-and stop slippage at $870 size)*.
+and stop slippage at catalyst-sleeve size)*.
 
 **Entry:** sessions 1–3 post-report, limit at/inside ask, day-only, and only
 in the first half of a session Chris intends to keep open *(strategy rule)*.
@@ -165,15 +169,16 @@ What binds, from the manual:
 | Rule | Constraint |
 |---|---|
 | §3.2 quality floors | ≥21 DTE · Δ≥0.35 · OI≥500 · spread ≤10% of mid |
-| §3.2 caps | ≤20% of competition capital per position (**$580**), ≤30% open (**$870**). No position-count limit, no cumulative budget; premium still logged per §7.2 |
+| §3.2 caps | ≤20% of competition capital per position, ≤30% open. No position-count limit, no cumulative budget; premium still logged per §7.2 |
 | §3.3 | Each open position carries its own expiration clock into the monitoring table |
 | §3.7 | No option held through its **own** underlying's report; third-party prints (e.g. NVDA 8/26) are ordinary market risk |
 | §3.8 | Option exposure counts toward correlation clusters |
 
-At $2,899 competition capital the $580 per-position cap reaches roughly
-sub-$140 underlyings at calm IV, ~$95–100 at realistic IV. Capacity
-replenishes as positions close and expands as the account grows; scarcity
-discipline lives in the $870 open cap and the quality floors.
+The affordable spot ceiling follows from the per-position cap and the
+contract's premium-to-spot ratio, so it moves with capital and with IV —
+re-derive it at order time from the live chain rather than carrying a number
+forward. Capacity replenishes as positions close and expands as the account
+grows; scarcity discipline lives in the 30% open cap and the quality floors.
 
 Two *(strategy rules)* from the comparative research tighten this:
 
@@ -191,9 +196,10 @@ limit at the next open, logged as a breach with remedy per §7.3.
 
 **Leveraged ETFs: gated shut by default.** Specific short-horizon dislocation
 thesis only, uncorrelated with core+catalyst, ≤20% aggregate, calendar exit
-at trading day 4 set at entry. Last routine entry 9/1 *(strategy rule — day-5
-must never straddle the dark stretch)*. Also usable in the ⏳ catch-up branch
-(§10).
+at **trading day 4** set at entry *(strategy rule — one session inside the
+manual's §3.5 day-5 limit, so a missed session cannot breach it)*. Last
+routine entry 9/1 *(strategy rule — day-5 must never straddle the dark
+stretch)*.
 
 ## 7. Order workflow (autonomous once unlocked)
 

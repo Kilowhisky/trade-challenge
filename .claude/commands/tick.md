@@ -271,10 +271,19 @@ discipline — the loop's terseness does not carry over.
    numbers rather than trusting this parenthetical); stale-quote and halt gate.
    An order that cannot clear them is not placed.
 5. **Place it.** Limit orders only (§4.1). Verify the fill by re-query (§4.8).
-   Retry bounds: a §3.4 stop gets **3 placement attempts** (the §4.10 replace
-   ceiling); a §4.3 close gets **2**. Past either bound: place nothing more,
-   write `ALERT.md`, notify Chris, stop the loop (§G). "Protective" never
-   licenses unbounded retries.
+   Retry bounds: a §3.4 stop gets **3 placement attempts**, a §4.3 close
+   **2**. Past either bound: place nothing more, write `ALERT.md`, notify
+   Chris, stop the loop (§G). "Protective" never licenses unbounded retries.
+
+   **These bounds are not the §4.10 replace ceiling.** That ceiling (3 per
+   resting stop per day) governs *amendments to an already-resting stop*. A
+   stop that has never rested is a **new order** and consumes a per-symbol
+   slot — so after the entry fill, the first stop attempt is the symbol's
+   second and last routine order. Attempts 2 and 3 exceed **2 per symbol per
+   session** and are permitted only by §4.10's protective-order exception,
+   which treats each as a ceiling hit: reconcile, write `ALERT.md`, notify
+   Chris, and place nothing discretionary afterward. Read §4.10 before
+   relying on this.
 6. **Restore the invariants**: stop matches filled quantity, no orphaned stops
    (§4.7), no working entry orders left to rest past session end (§4.2).
 7. **Log it**: `trade-log.csv` row, `ALERT.md` if Chris is needed, commit.
