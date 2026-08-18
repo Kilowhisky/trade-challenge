@@ -22,7 +22,7 @@ Procedure — no improvisation:
    schemas via ToolSearch. Stay under the §B call budget (~8 Schwab calls +
    ~4 web fetches — ceiling, not quota).
 2. Qualification rules live in the playbook
-   (`docs/superpowers/specs/2026-08-13-competition-strategy-design.md` §4,
+   (`strategy.md` §4,
    §5, §6) and the manual (`CLAUDE.md` §1.4, §2, §3.2, §3.7). Read them
    fresh each pass; never promote a candidate to HOT from memory of the
    rules. **Zero qualified setups is a legitimate outcome** — an empty HOT

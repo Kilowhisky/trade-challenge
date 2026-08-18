@@ -8,9 +8,10 @@ manual wins** — and the disagreement is a defect to fix, not a choice to make.
 Rules here stricter than the manual are marked *(strategy rule)*:
 discretionary, changeable without a §9 amendment.
 
-Origins: a four-agent adversarial review (`2026-08-13-adversarial-review.md`)
-and a five-agent comparative research pass
-(`2026-08-13-comparative-research.md`). Revision history in `CHANGELOG.md`.
+Origins: a four-agent adversarial review and a five-agent comparative
+research pass, both in `docs/superpowers/specs/`. Revision history in
+`CHANGELOG.md`. Rule parameters live in `rules.yml` — this document cites
+manual sections rather than repeating their numbers.
 
 ---
 
@@ -75,17 +76,18 @@ computes them from the live figure at order time.
 
 | Sleeve | Ceiling | Positions |
 |---|---|---|
-| Core | 50% | No name count *(strategy rule)*; per-position §3.1/§3.8 bind |
-| Catalyst | 30% | 1, occasionally 2 |
+| Core | **50%**<!--rule:strategy_sleeve_core_pct--> | No name count *(strategy rule)*; per-position §3.1/§3.8 bind |
+| Catalyst | **30%**<!--rule:strategy_sleeve_catalyst_pct--> | 1, occasionally 2 |
 | Options | 30% open / 20% per position (§3.2) | No count limit |
-| Leveraged ETF | 20% aggregate, within the rows above | Gated (§6) |
-| **Max deployed** | **100%** | Sleeves sum to 110% — they are individual ceilings; the 100% total-deployment line and the reserve invariant bind first |
+| Leveraged ETF | **20%**<!--rule:strategy_sleeve_leveraged_pct--> aggregate, within the rows above | Gated (§6) |
+| **Max deployed** | **100%**<!--rule:strategy_max_deployed_pct--> | Sleeves sum to 110% — they are individual ceilings; the 100% total-deployment line and the reserve invariant bind first |
 
 - **Sleeve compliance is checked at order time only**, against competition
   capital at current marks. Mark drift never forces a sale and never frees
   option capacity. "Open premium" (§3.2) = premium **paid** on open
   positions; marks irrelevant.
-- **§3.6 threshold ratchets:** Halt = 0.80 × HWM of competition value. It is
+- **§3.6 threshold ratchets:** Halt is the manual's multiple of HWM of
+  competition value. It is
   the only drawdown level — nothing happens above it (§3.6). HWM resolution —
   source, once-per-session caching, and the no-intraday-ratchet rule — is
   defined in tick.md §B5, one place.
@@ -109,7 +111,7 @@ computes them from the live figure at order time.
   sleeve for the month.
 - Tilt: 3–6 month relative strength, uptrend, proximity to 52-week high
   (the tilt with live large-cap evidence at this horizon).
-- Volatility ceiling *(strategy rule)*: reject if 10% ÷ daily ATR% < 3.
+- Volatility ceiling *(strategy rule)*: reject if 10% ÷ daily ATR% < **3**<!--rule:strategy_volatility_atr_ratio_min-->.
   **For catalyst entries, ATR is measured on the post-gap series** — pre-gap
   ATR systematically passes names whose post-print volatility makes a 10%
   stop a coin flip *(comparative research #2)*.
@@ -144,12 +146,12 @@ and stop slippage at catalyst-sleeve size)*.
 in the first half of a session Chris intends to keep open *(strategy rule)*.
 
 **Exits — first trigger wins (no time exit; it clipped the only payoff):**
-- §3.4 stop-limit, GTC, trigger 10% below **share-weighted average entry**,
-  limit 5% below trigger; re-computed via single replace on each add
+- §3.4 stop-limit, GTC, at the manual's trigger and limit offsets below the
+  **share-weighted average entry**; re-computed via single replace on each add
 - Stall rule: two consecutive closes below blended entry, evaluated from
   session 4 onward (entry day = session 1) → close next session
 - Stop ratchet — **active** (§3.4: the trigger is a floor, may be raised,
-  never lowered): +8% → breakeven, +15% → entry+8%, limit
+  never lowered): **+8%**<!--rule:strategy_ratchet_breakeven_at_gain_pct--> → breakeven, **+15%**<!--rule:strategy_ratchet_entry_plus8_at_gain_pct--> → entry+8%, limit
   always 5% below trigger, single-message replace only, §4.6 applies to
   replaces.
 - Endgame calendar (§10)
@@ -166,8 +168,8 @@ What binds, from the manual:
 
 | Rule | Constraint |
 |---|---|
-| §3.2 quality floors | ≥21 DTE · Δ≥0.35 · OI≥500 · spread ≤10% of mid |
-| §3.2 caps | ≤20% of competition capital per position, ≤30% open. No position-count limit, no cumulative budget; premium still logged per §7.2 |
+| §3.2 quality floors | DTE, delta, open interest and spread floors exactly as manual §3.2 states them (`rules.yml`) |
+| §3.2 caps | Per-position and total-open premium caps per manual §3.2. No position-count limit, no cumulative budget; premium still logged per §7.2 |
 | §3.3 | Each open position carries its own expiration clock into the monitoring table |
 | §3.7 | No option held through its **own** underlying's report; third-party prints (e.g. NVDA 8/26) are ordinary market risk |
 | §3.8 | Option exposure counts toward correlation clusters |
@@ -180,8 +182,9 @@ grows; scarcity discipline lives in the 30% open cap and the quality floors.
 
 Two *(strategy rules)* from the comparative research tighten this:
 
-- **Δ≥0.50 for long premium** — the manual's 0.35 floor sits on the boundary
-  of the documented Δ 0.05–0.35 lottery-overpricing zone.
+- **Δ ≥ 0.50**<!--rule:strategy_option_min_delta--> **for long premium** — the
+  manual's §3.2 floor sits on the boundary of the documented Δ 0.05–0.35
+  lottery-overpricing zone.
 - **Unspent is the sleeve's default state, not its fallback.** Retail long
   premium is documented negative-EV at baseline. The evidence-backed uses are
   (a) post-crush continuation calls 1–2 sessions after a qualified beat, when
@@ -283,14 +286,14 @@ Chris's 9:30 ET check-in covers the gap that matters most. Watches:
 | **Naked position** | position without resting stop | Place stop immediately; if it won't take, close (§4.3) |
 | Stop fill | position gone / stop consumed | Log exit; check orphaned remainder (§4.7); **redeploy cap = actual proceeds (§3 invariant)** |
 | Partial fill | filled qty ≠ stop qty | Replace stop (§4.4) |
-| Drawdown | comp value vs **0.80×HWM** (recorded HWM — resolved once per session from the latest status file; ratchets only at the session-close §7.2 write, never intraday) | Halt per §3.6 — the only level |
+| Drawdown | comp value vs the §3.6 Halt multiple of HWM (recorded HWM — resolved once per session from the latest status file; ratchets only at the session-close §7.2 write, never intraday) | Halt per §3.6 — the only level |
 | Reserve | total cash < $900, computed per tick.md watch 2 (canonical — a conservative min() over both candidate totals until §7.8's field-semantics observation) | Invariant breach — halt buys, investigate |
 | Clocks | option DTE, leveraged day count, **9/4** flats, 9/10 lockout | Escalating from 2 days out |
 | Correlation | weekly: 60-day corr of held names | >0.7 cluster → adds blocked |
 | Restriction | `isClosingOnlyRestricted` true | §5 protocol: read-only, notify |
 
 **Research loop** *(strategy rule, added 2026-08-14 — design:
-`2026-08-14-research-loop-design.md`)*: a second pass chained after the
+`docs/superpowers/specs/2026-08-14-research-loop-design.md`)*: a second pass chained after the
 tick (`/research`, self-gated to ~45 min) maintains
 `research/candidates.md` — a WATCH/HOT tiered list of qualified candidates
 with tombstones — via the read-only `research-scout` subagent. Advisory
@@ -307,7 +310,8 @@ only — an idea source, never a signal.
 
 ## 9. Session protocol
 
-**Open:** §4.5 broker-first reconciliation → §3.6 check (ratcheted
+**Open:** §4.5 broker-first reconciliation → `scripts/check-consistency.sh`
+(rule drift is a defect, fix before trading) → §3.6 check (ratcheted
 thresholds; resolve `recorded_hwm` per tick.md §B5 **including its orphaned-
 ledger recovery rule** — at reconciliation time, before any order, not only
 at the first tick) → reserve invariant → diff vs trade log (unexplained

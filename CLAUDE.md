@@ -38,7 +38,7 @@ quantity by definition, along with the §1.4 $5.00 share-price floor.
 **This file is only half the system.** It defines the *box* — what may never be
 done. It does not define *how the account is traded*. That is the playbook:
 
-> **`docs/superpowers/specs/2026-08-13-competition-strategy-design.md`**
+> **`strategy.md`**
 > — sleeve architecture and the reserve invariant, core and catalyst selection
 > rules, the options sleeve, the order workflow, the monitoring loop, the
 > session protocol, and the endgame calendar. Two supporting documents in the
@@ -52,6 +52,13 @@ rules, but not to the plan. Where the playbook and this manual disagree, **this
 manual wins**, and the disagreement is a defect to fix rather than a choice to
 make. Rules in the playbook marked *(strategy rule)* are stricter than this
 manual: discretionary, and changeable without a §9 amendment.
+
+**Every rule parameter lives in `rules.yml`,** which is the single source of
+truth for the numbers: `scripts/pre-order-check.sh` reads its caps from there
+rather than hard-coding them, and `scripts/check-consistency.sh` fails if any
+document or script disagrees with it. Numbers in this manual carry a
+`<!--rule:key-->` marker binding them to that file. Amending a rule means
+editing `rules.yml` and this manual **in the same commit**.
 
 Every dated change to this manual — and the value each rule used to carry — is
 recorded in **`CHANGELOG.md`**. It is deliberately not part of this file: the
@@ -114,7 +121,7 @@ obligation that can outrun the account.
 
 | Instrument | Permitted | Constraints |
 |---|---|---|
-| Listed common stocks | Yes | ≥ $5/share, ≥ 1M avg daily volume, major exchange |
+| Listed common stocks | Yes | ≥ **$5.00**<!--rule:manual_min_share_price_usd-->/share, ≥ **1000000**<!--rule:manual_min_avg_daily_volume--> avg daily volume, major exchange |
 | ETFs | Yes | Same liquidity floor |
 | Leveraged / inverse ETFs | Yes | 20% aggregate cap, max 5 trading day hold (§3.5) |
 | Long calls (buying) | Yes | Quality floors in §3.2 |
@@ -138,7 +145,7 @@ Two independent reasons, either sufficient on its own:
 
 ## 3. Position sizing and risk limits
 
-**3.1 — Single position cap.** No single position may exceed **35% of
+**3.1 — Single position cap.** No single position may exceed **35%**<!--rule:manual_single_position_pct--> of
 competition capital (account value − the $900 reserve) after the order
 fills**, counting all prior adds to that position. This is
 a cap on the resulting total, not on each individual order — three compliant 30%
@@ -148,9 +155,8 @@ buys stacking into a 90% position is a violation, not a loophole.
 **competition capital**, so capacity scales with the account — wins expand it,
 losses shrink it — and gated on contract quality.
 
-- Max premium in any single option position: **20% of competition capital at
-  entry**.
-- Max total open option premium: **30% of competition capital**.
+- Max premium in any single option position: **20%**<!--rule:manual_option_single_position_pct--> of competition capital at entry.
+- Max total open option premium: **30%**<!--rule:manual_option_open_premium_pct--> of competition capital.
 - No limit on the number of open option positions. The 30% aggregate cap is
   the binding constraint; every position still carries its own §3.3
   expiration clock and §3.2 quality floors.
@@ -158,10 +164,10 @@ losses shrink it — and gated on contract quality.
   capped.
 
 Quality floors — all must hold at entry:
-- **≥ 21 days to expiration**
-- **Delta ≥ 0.35** (no far-OTM lottery tickets)
-- **Open interest ≥ 500** on the specific contract
-- **Bid/ask spread ≤ 10% of mid**
+- **≥ 21**<!--rule:manual_option_min_dte--> days to expiration
+- **Delta ≥ 0.35**<!--rule:manual_option_min_delta--> (no far-OTM lottery tickets)
+- **Open interest ≥ 500**<!--rule:manual_option_min_open_interest--> on the specific contract
+- **Bid/ask spread ≤ 10%**<!--rule:manual_option_max_spread_pct_of_mid--> of mid
 - Underlying satisfies §1.4 and the §2 liquidity floor
 
 **3.3 — Expiration handling. This is the single largest event risk in the
@@ -174,13 +180,13 @@ money. On a cash account this size that is catastrophic:
 - An ITM long put exercises into a **short stock position**, which §1.5 forbids
   and a cash account cannot hold, forcing a broker buy-in at any price.
 
-**Rules:** close every long option when it reaches **5 days to expiration**, and
+**Rules:** close every long option when it reaches **5**<!--rule:manual_option_close_at_dte--> days to expiration, and
 under no circumstances hold any option into its expiration week's final trading
 day. If a position cannot be closed for any reason, file a **Do-Not-Exercise
 instruction with Schwab the same session** and notify Chris immediately.
 
 **3.4 — Stop-loss.** Every stock and ETF position gets a **stop-limit** order
-with the trigger **10% below entry** and the limit **5% below the trigger**,
+with the trigger **10%**<!--rule:manual_stop_trigger_pct_below_entry--> below entry and the limit **5%**<!--rule:manual_stop_limit_pct_below_trigger--> below the trigger,
 placed as a resting GTC order immediately after the entry fill is confirmed.
 The trigger level is a **floor**: it may be raised, never lowered.
 Long options do not get stops — option stops fill terribly on wide spreads — and
@@ -192,10 +198,10 @@ order (§4.1).
 
 **3.5 — Leveraged ETF constraints.** Leveraged and inverse ETFs reset daily and
 decay when held through volatility.
-- **20% of competition capital, aggregate** across all leveraged/inverse ETFs
+- **20%**<!--rule:manual_leveraged_aggregate_pct--> of competition capital, aggregate, across all leveraged/inverse ETFs
   combined — not per position. A 3x fund at 20% is already 60% effective
   notional.
-- Max holding period **5 trading days** (NYSE sessions, holidays excluded). A
+- Max holding period **5**<!--rule:manual_leveraged_max_hold_sessions--> trading days (NYSE sessions, holidays excluded). A
   position still open on day five gets closed, and this survives §3.6.
 - These limits **also apply to options on leveraged ETFs**, which are otherwise
   neither "a leveraged ETF position" nor covered by the hold limit.
@@ -206,7 +212,7 @@ reserve — recorded to date). **Checked at every session open, immediately
 after the §4.5 broker reconciliation that supplies the numbers** — and not
 only at close.
 
-**Halt — competition capital ≤ 0.80 × high-water (−20%).** No buy orders of
+**Halt — competition capital ≤ 0.80**<!--rule:manual_halt_multiple_of_hwm--> **× high-water (−20%).** No buy orders of
 any kind. Notify Chris. Trading resumes only after an explicit conversation.
 
 "New position" means **any buy order** — including adds to an existing position,
@@ -232,9 +238,9 @@ previously halved sizes and closed options; it was removed 2026-08-17 per §9
 - **Halted stock:** place no orders in a halted security. Wait for the reopen,
   reassess from scratch, and log the halt.
 
-**3.8 — Correlation cap.** Max **50% of competition capital** in positions with
+**3.8 — Correlation cap.** Max **50%**<!--rule:manual_correlation_cap_pct--> of competition capital in positions with
 materially correlated exposure — same sector, same macro theme, or
-correlation > 0.7.
+correlation > **0.7**<!--rule:manual_correlation_threshold-->.
 35% QQQ + 35% SPY + 20% TQQQ satisfies every individual rule and is a 90%
 single-bet on one index. That is the outcome this rule prevents.
 
@@ -266,7 +272,14 @@ remainder before session close rather than letting it rest.
 anything else.** Read from the broker: all positions, all open orders, settled
 cash, unsettled cash, any account restriction flag, and account value. Stops
 fill, options expire, and corporate actions happen while I am not running. Never
-begin from an assumed state. Then check §3.6. Then read `ALERT.md` if one exists
+begin from an assumed state. Then check §3.6.
+
+Then run `scripts/check-consistency.sh` — it verifies that `rules.yml`, this
+manual, the playbook, and the scripts still state the same numbers. A FAIL
+means a rule has drifted somewhere: a defect to fix before trading, not a
+warning to note.
+
+Then read `ALERT.md` if one exists
 at the repo root: an alert Chris has not acknowledged puts the account in
 **closing-only posture** — exits and §3.5 forced closes still run, no buy orders
 of any kind — until he responds. Then read the playbook (see the header).
@@ -303,8 +316,7 @@ I meant to send.
   thesis. Option symbols are built **only** by `create_option_symbol`, never
   typed from memory. This is the hallucinated-parameter failure — a plausible,
   well-formed symbol for the wrong instrument.
-- **Order-rate ceilings.** Maximum **2 per symbol per session** and **3
-  replaces per resting stop per day**. A ceiling **trips on the attempt to
+- **Order-rate ceilings.** Maximum **2**<!--rule:manual_max_orders_per_symbol_per_session--> per symbol per session and **3**<!--rule:manual_max_replaces_per_stop_per_day--> replaces per resting stop per day. A ceiling **trips on the attempt to
   exceed it** — placing the Nth order is legal and routine; the trip is the
   would-be (N+1)th.
   Hitting any ceiling means: stop placing orders, reconcile against the

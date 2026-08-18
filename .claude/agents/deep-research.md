@@ -17,7 +17,7 @@ Procedure — no improvisation:
    and in its priority order. Load Schwab tool schemas via ToolSearch
    before calling any of them.
 2. Qualification rules live in the playbook
-   (`docs/superpowers/specs/2026-08-13-competition-strategy-design.md`
+   (`strategy.md`
    §4, §5, §6) and the manual (`CLAUDE.md` §1.4, §2, §3.2, §3.7). Read them
    fresh each run; never qualify a candidate from memory of the rules.
    **Zero qualified anything is a legitimate outcome** — an empty roster,

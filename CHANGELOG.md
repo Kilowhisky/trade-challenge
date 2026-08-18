@@ -1,7 +1,7 @@
 # Changelog
 
 History for `CLAUDE.md` (the operating manual) and
-`docs/superpowers/specs/2026-08-13-competition-strategy-design.md` (the
+`strategy.md` (the
 playbook).
 
 **This file is not read during a session.** It exists so those two documents
@@ -69,6 +69,43 @@ it: Caution $792.00 → **$2,552.00**, Halt $720.00 → **$2,320.00**.
 | §4.10 | Protective-order exception ratified: a mandatory §3.4 stop is placed even if it breaches a ceiling, because the alternative is an unstopped position held overnight. |
 | §2 | Long puts permitted; **all** option selling prohibited. The original "no puts" rule was written believing puts carry unlimited risk — they do not. The unlimited position is the uncovered short call. |
 
+### 2026-08-17 · rules.yml: one home for every rule parameter
+
+Restructure by **mutability** rather than topic, after the day's second
+parameter-drift bug.
+
+**`rules.yml` (new)** — every rule number, once. Two sections: `manual:`
+(§9-gated) and `strategy:` (*(strategy rule)*, discretionary). Amending a rule
+now means editing `rules.yml` and `CLAUDE.md` in the same commit.
+
+**`scripts/lib-rules.sh` (new)** — dependency-free awk loader. Fails loudly: a
+missing file or absent key returns non-zero rather than defaulting, because a
+defaulted cap is a cap that silently stops binding.
+
+**`scripts/pre-order-check.sh`** — reads its §3.1/§3.2/§3.5 caps and the §1.4
+floor from `rules.yml` instead of hard-coding them. New exit code **7** for a
+rules-load failure, kept distinct from 6 (insufficient settled cash) so a
+broken rules file can never be misread as a cash result. Verified fail-closed:
+with `rules.yml` absent the gate exits 7 and evaluates nothing.
+
+**`scripts/check-consistency.sh` (new)** — three checks. (1) Every
+`**N**<!--rule:key-->` annotation in a doc matches `rules.yml`; 27 annotations
+across `CLAUDE.md` and `strategy.md`. (2) Every strategy value that shadows a
+manual value is on the stricter side. (3) No script hard-codes a rule
+percentage. Wired into §4.5 session-open and the playbook §9 open sequence.
+All three detections were tested by deliberately introducing each drift.
+
+**`strategy.md`** — the playbook moved from
+`docs/superpowers/specs/2026-08-13-competition-strategy-design.md` to the
+repository root. It was described as "required reading at every session open"
+while living at a dated spec path. It now cites manual sections instead of
+restating their numbers.
+
+**`CLAUDE.md` keeps its name** — it auto-loads at session start by filename
+convention. Renaming it to `guardrails.md` would have stopped the binding rule
+set from loading automatically, which is the failure the manual warns about
+for the playbook. It is the guardrails file; it is named for the loader.
+
 ### 2026-08-17 · §3.6 Caution removed; Halt is the only drawdown level
 
 Chris-initiated, post-close, market closed, no option position open, and the
@@ -133,7 +170,7 @@ manual's day 5 but unmarked as a *(strategy rule)*.
 
 ---
 
-## Playbook — `2026-08-13-competition-strategy-design.md`
+## Playbook — `strategy.md`
 
 | Date | Change |
 |---|---|

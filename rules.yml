@@ -1,0 +1,110 @@
+# rules.yml — the single source of truth for every rule PARAMETER.
+#
+# Why this file exists: on 2026-08-17 a §9 amendment raised the §3.2 option
+# caps and updated the manual, but the same numbers also lived in the playbook
+# (twice), a design spec, and scripts/pre-order-check.sh. Three of the four
+# drifted, including the mandatory pre-order gate, and it went unnoticed for
+# four days. Every parameter now lives here exactly once.
+#
+# CONTRACT
+#   - `manual:` values are §9-gated. Changing one is an amendment to CLAUDE.md
+#     and requires Chris's explicit conversation, his words quoted in the
+#     commit, a flat book, and calm conditions. Change this file and CLAUDE.md
+#     in the same commit, never one without the other.
+#   - `strategy:` values are *(strategy rule)* — discretionary, stricter than
+#     the manual by construction, changeable without §9.
+#   - scripts/check-consistency.sh verifies that every number stated in the
+#     docs matches this file, and that no strategy value is looser than the
+#     manual value it tightens. Run it at session open and before any commit
+#     that touches a rule.
+#   - scripts/lib-rules.sh loads these into shell variables. Consumers read
+#     them; nothing hard-codes a rule number ever again.
+#
+# FORMAT is deliberately two levels deep and flat within a section, so a
+# dependency-free awk parser can read it. Do not add deeper nesting.
+
+manual:
+  # Capital (header). The only fixed dollar quantities in the system.
+  settlement_reserve_usd: 900.00
+
+  # §1.4 / §2 — instrument floors
+  min_share_price_usd: 5.00
+  min_avg_daily_volume: 1000000
+
+  # §3.1 — single position cap, % of competition capital, after the fill
+  single_position_pct: 35
+
+  # §3.2 — option sizing, % of competition capital
+  option_single_position_pct: 20
+  option_open_premium_pct: 30
+  # §3.2 — option quality floors, all must hold at entry
+  option_min_dte: 21
+  option_min_delta: 0.35
+  option_min_open_interest: 500
+  option_max_spread_pct_of_mid: 10
+
+  # §3.3 — expiration handling
+  option_close_at_dte: 5
+  occ_auto_exercise_itm_usd: 0.01
+
+  # §3.4 — stop-loss geometry
+  stop_trigger_pct_below_entry: 10
+  stop_limit_pct_below_trigger: 5
+
+  # §3.5 — leveraged / inverse ETFs
+  leveraged_aggregate_pct: 20
+  leveraged_max_hold_sessions: 5
+
+  # §3.6 — drawdown circuit breaker. Halt is the ONLY level; the Caution band
+  # was removed 2026-08-17 per §9. Do not add an intermediate multiple here.
+  halt_multiple_of_hwm: 0.80
+
+  # §3.8 — correlation
+  correlation_cap_pct: 50
+  correlation_threshold: 0.7
+
+  # §4.10 — order-rate ceilings. Trip on the attempt to exceed (N+1).
+  max_orders_per_symbol_per_session: 2
+  max_replaces_per_stop_per_day: 3
+
+  # §8 — window and endgame
+  window_start: 2026-08-14
+  window_end: 2026-09-14
+  final_session: 2026-09-14
+  lockout_start: 2026-09-10
+  lockout_final_sessions: 3
+
+strategy:
+  # Stricter than the manual by construction. Each must stay on the tight side
+  # of the manual value it references; check-consistency.sh enforces that.
+
+  # Playbook §3 — sleeve ceilings, % of competition capital
+  sleeve_core_pct: 50
+  sleeve_catalyst_pct: 30
+  sleeve_options_open_pct: 30
+  sleeve_leveraged_pct: 20
+  max_deployed_pct: 100
+
+  # Playbook §4 — selection
+  volatility_atr_ratio_min: 3          # reject if 10% ÷ daily ATR% < this
+  catalyst_price_band_low_usd: 20
+  catalyst_price_band_high_usd: 60
+
+  # Playbook §5 — exits
+  stall_rule_consecutive_closes: 2
+  stall_rule_from_session: 4
+  ratchet_breakeven_at_gain_pct: 8
+  ratchet_entry_plus8_at_gain_pct: 15
+
+  # Playbook §6 — options, tighter than manual §3.2
+  option_min_delta: 0.50               # manual floor is 0.35
+  leveraged_exit_session: 4            # manual limit is 5
+
+  # Playbook §8 — monitoring cadence, seconds
+  tick_interval_naked_s: 60
+  tick_interval_working_order_s: 300
+  tick_interval_positions_s: 900
+
+  # Playbook §10 — endgame calendar
+  all_options_flat_by: 2026-09-04
+  last_leveraged_entry: 2026-09-01

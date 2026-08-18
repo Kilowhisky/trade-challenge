@@ -39,11 +39,12 @@ realizable prices. Nothing is liquidated for scoring.
 | File | Purpose |
 |---|---|
 | `CLAUDE.md` | **The operating manual** — the binding rule set. Loads automatically every Claude Code session. |
-| `docs/superpowers/specs/2026-08-13-competition-strategy-design.md` | **The playbook** — how the box is actually traded: sleeve architecture, selection rules, order workflow, endgame calendar. Required reading at every session open. |
+| `rules.yml` | **Every rule parameter, once.** The caps, floors, and thresholds the manual states in prose, in one machine-readable file. `pre-order-check.sh` reads its caps from here; `check-consistency.sh` fails if any document or script disagrees. |
+| `strategy.md` | **The playbook** — how the box is actually traded: sleeve architecture, selection rules, order workflow, endgame calendar. Required reading at every session open. |
 | `docs/superpowers/specs/2026-08-13-adversarial-review.md` | Four red-team agents attacking the strategy; every finding and its disposition. |
 | `docs/superpowers/specs/2026-08-13-comparative-research.md` | Five research agents on what actually works in AI/small-account trading; the 12 tightenings adopted from it. |
 | `docs/archive/` | Completed and superseded working documents, kept unedited as provenance: the day-one screen, the close review, the executed deep-research plan, an API spike, and a broker-tooling patch note. |
-| `scripts/` | Pre-order compliance checks and the append-only writers used by the research and monitoring loops. |
+| `scripts/` | Pre-order compliance checks, the rule-consistency checker, and the append-only writers used by the research and monitoring loops. |
 | `.claude/` | Session commands and the read-only agents that run the research, monitoring, and deep-research loops. Those agents have no order tools by construction — they cannot place, cancel, or modify anything at the broker. |
 | `ALERT.md` | Created only when something needs the account owner. An unacknowledged alert forces closing-only posture at the next session open. |
 
