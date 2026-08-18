@@ -15,12 +15,13 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.." || exit 2
 . scripts/lib-rules.sh
 load_rules || exit 7
 
-payloads=(); out=""; qualified=0
+payloads=(); out=""; qualified=0; ranktop=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --payload) shift; [ $# -gt 0 ] || { echo "universe-filter: --payload needs a path" >&2; exit 2; }; payloads+=("$1") ;;
     --out)     shift; [ $# -gt 0 ] || { echo "universe-filter: --out needs a path" >&2; exit 2; }; out="$1" ;;
     --qualified-only) qualified=1 ;;
+    --rank-top) shift; [ $# -gt 0 ] || { echo "universe-filter: --rank-top needs a count" >&2; exit 2; }; ranktop="$1" ;;
     *) echo "universe-filter: unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -35,12 +36,13 @@ MIN_PRICE="$(rule_get manual_min_share_price_usd)"      || exit 7
 MIN_DOLLAR="$(rule_get manual_min_avg_daily_dollar_volume)" || exit 7
 MIN_SHARES="$(rule_get manual_min_avg_daily_volume)"    || exit 7
 
-python3 - "$out" "$MIN_PRICE" "$MIN_DOLLAR" "$MIN_SHARES" "$qualified" "${payloads[@]}" <<'PY'
+python3 - "$out" "$MIN_PRICE" "$MIN_DOLLAR" "$MIN_SHARES" "$qualified" "$ranktop" "${payloads[@]}" <<'PY'
 import json, re, sys
 
 out, min_price, min_dollar, min_shares = sys.argv[1], float(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4])
 qualified = sys.argv[5] == "1"
-paths = sys.argv[6:]
+ranktop   = int(sys.argv[6])
+paths     = sys.argv[7:]
 
 def num(block, key, default=None):
     m = re.search(r'"?%s"?:\s*"?(-?[\d.]+)"?' % re.escape(key), block)
@@ -81,12 +83,21 @@ for path in paths:
             'is_etf': 'true' if word(body, 'assetSubType') == 'ETF' else 'false',
         })
 
+for r in rows:
+    r['gap'] = ((r['high52'] - r['price']) / r['high52'] * 100.0) if r['high52'] else 999.0
+
+total = len(rows)
+rows.sort(key=lambda r: (r['gap'], -r['dollar_vol']))
+dropped = 0
+if ranktop and total > ranktop:
+    dropped = total - ranktop
+    rows = rows[:ranktop]
+
 with open(out, 'w') as f:
     f.write("symbol\tprice\tadv10\tdollar_vol\tpct_from_52wk_high\toptionable\tleverage\tlast_earnings\tis_etf\n")
     for r in rows:
-        gap = ((r['high52'] - r['price']) / r['high52'] * 100.0) if r['high52'] else 999.0
         f.write("%s\t%.4f\t%.0f\t%.0f\t%.2f\t%s\t%.1f\t%s\t%s\n" % (
-            r['symbol'], r['price'], r['adv10'], r['dollar_vol'], gap,
+            r['symbol'], r['price'], r['adv10'], r['dollar_vol'], r['gap'],
             r['optionable'], r['leverage'], r['last_earnings'], r['is_etf']))
 if skipped:
     shown = skipped[:20]
@@ -94,5 +105,7 @@ if skipped:
     suffix = " (+%d more)" % more if more > 0 else ""
     print("universe-filter: skipped %d unquotable symbol(s): %s%s" % (
         len(skipped), ", ".join(shown), suffix), file=sys.stderr)
-print("universe-filter: parsed %d symbols from %d payload(s)" % (len(rows), len(paths)), file=sys.stderr)
+print("universe-filter: parsed %d symbols from %d payload(s)" % (total, len(paths)), file=sys.stderr)
+if ranktop:
+    print("universe-filter: ranked %d of %d (dropped %d)" % (len(rows), total, dropped), file=sys.stderr)
 PY

@@ -57,6 +57,22 @@ echo "== gate-failing rows are parsed fine, not silently dropped =="
 grep -q '^TDOLLAR	' "$OUT" && ok "TDOLLAR is present in the unfiltered output" || no "TDOLLAR is present in the unfiltered output"
 grep -q '^TSHARE	' "$OUT" && ok "TSHARE is present in the unfiltered output" || no "TSHARE is present in the unfiltered output"
 
+echo "== ranking (--rank-top) =="
+# The fixture's qualified-only survivors are CSX (gap 5.06% from its 52wk
+# high) and QUALB (gap 2.00%, added to give ranking something to sort).
+# --rank-top 1 must keep the nearest-to-high name (QUALB) and drop CSX —
+# this fails if the sort key direction is reversed, and it fails if
+# truncation doesn't actually slice the row list.
+bash "$F" --payload "$FIX" --out "$OUT" --qualified-only --rank-top 1 >/dev/null 2>"$ERR"
+n=$(tail -n +2 "$OUT" | wc -l | tr -d ' ')
+top=$(tail -n +2 "$OUT" | cut -f1)
+[ "$n" -eq 1 ] && [ "$top" = "QUALB" ] \
+  && ok "--rank-top keeps the nearest-to-52wk-high row and caps the count" \
+  || no "--rank-top keeps the nearest-to-52wk-high row and caps the count" "got $n row(s): $top"
+# Two symbols qualify (CSX, QUALB); capping to 1 must report exactly one drop.
+grep -q 'dropped 1' "$ERR" && ok "truncation count is reported accurately" \
+  || no "truncation count is reported accurately" "stderr was: $(cat "$ERR")"
+
 echo
 echo "-------------------------------------------"
 printf '%s passed, %s failed\n' "$pass" "$fail"
