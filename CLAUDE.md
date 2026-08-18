@@ -403,17 +403,43 @@ approval for each order. This is Chris's explicit decision.
 
 ## 7. Logging and reporting
 
-**7.1 — Trade log.** Every order is appended to `trade-log.csv` and committed to
-git in the session it was placed. The git history is the audit trail.
+**7.1 — Trade log.** Every order is appended to `trade-log.csv` in the session
+it was placed, **before** the order goes in (§4.9) — never reconstructed
+afterward. Entries are never edited once written: a correction is a new row, not
+a rewrite.
+
+The file is **local-only and untracked.** `trade-log.csv`, `status/`, and
+`research/` are gitignored and were purged from this repository's history on
+2026-08-17 at Chris's instruction, ahead of publication *(amended per §9 the
+same day; his words are quoted in the amendment commit)*.
+
+§7.3 requires stating the consequence plainly rather than letting it pass
+unremarked: **git is no longer the audit trail for order flow.** The commit
+history still timestamps the rules, the strategy, and every amendment — it no
+longer timestamps a single trade. The log is append-only by convention, on one
+machine, with no external witness and nothing preventing a quiet retroactive
+edit. It is evidence only to the extent Chris vouches for it. That is a real
+weakening of the original design, accepted deliberately in exchange for not
+publishing the account's order flow.
 
 **7.2 — Daily status.** At each session close, write to `status/YYYY-MM-DD.md`:
 positions held, settled and unsettled cash, account value, high-water mark,
 current drawdown level, cumulative option premium spent to date, what changed and
-why, and any rule that bound a decision.
+why, and any rule that bound a decision. Also local-only and untracked per §7.1.
 
 **7.3 — Honest reporting.** Losses get reported the same way gains do, in the
 same detail, without softening. A log that only produces good news is worthless —
-and I am the one writing the log that constrains me, so this matters.
+and I am the one writing the log that constrains me, so this matters. This
+binds harder now than it did when git witnessed every trade (§7.1): the log's
+integrity rests on this rule alone.
+
+**7.4 — This repository is public.** It has been public since 2026-08-17
+(`github.com/Kilowhisky/trade-challenge`). Anything committed is permanently
+published — a later rewrite does not reliably unpublish it. Before committing,
+confirm no account number, `accountHash`, API key, token, or personal
+identifier is in the diff. Account identifiers appear in tracked files only as
+`ACCOUNT_REDACTED` and `HASH_REDACTED`; keep it that way. If something
+sensitive is committed, tell Chris immediately — do not attempt a silent fix.
 
 ---
 
@@ -432,7 +458,9 @@ and I am the one writing the log that constrains me, so this matters.
   is a bug in the scoring rule, not a strategy.
 - **All option positions must be closed by the start of the final 3 trading
   days**, bringing open premium to $0.
-- Log the final value and commit it as the last entry.
+- Log the final value as the last entry in `trade-log.csv` and in the closing
+  `status/` note. Both are local-only per §7.1 — there is no final commit of
+  the result to make.
 
 ---
 
@@ -455,7 +483,9 @@ conditions.
 
 ## Pre-competition checklist
 
-Worked 2026-08-13. Evidence in `status/2026-08-13.md`.
+Worked 2026-08-13. Evidence in `status/2026-08-13.md` — local-only and no
+longer in this repository (§7.1), so the citations below are to a file on the
+operating machine, not to anything a reader of the public repo can open.
 
 - [x] Confirm account type is **cash**, not margin — `type: CASH` on ACCOUNT_REDACTED.
       Entire margin field set absent (no `buyingPower`, `sma`, `marginBalance`,
