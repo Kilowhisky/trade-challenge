@@ -49,6 +49,7 @@ def word(block, key, default=""):
     return (m.group(1).strip() if m else default)
 
 rows = []
+skipped = []
 for path in paths:
     raw = json.load(open(path))["result"]
     # a new symbol block starts at column 0 as "SYM:"
@@ -57,7 +58,8 @@ for path in paths:
         price = num(body, 'lastPrice')
         adv   = num(body, 'avg10DaysVolume', 0.0)
         if price is None:
-            continue                      # unquotable symbol: skip, never stall
+            skipped.append(sym)           # unquotable symbol: skip, never stall,
+            continue                      # but never silently — logged below
         rows.append({
             'symbol': sym,
             'price': price,
@@ -78,5 +80,11 @@ with open(out, 'w') as f:
         f.write("%s\t%.4f\t%.0f\t%.0f\t%.2f\t%s\t%.1f\t%s\t%s\n" % (
             r['symbol'], r['price'], r['adv10'], r['dollar_vol'], gap,
             r['optionable'], r['leverage'], r['last_earnings'], r['is_etf']))
+if skipped:
+    shown = skipped[:20]
+    more = len(skipped) - len(shown)
+    suffix = " (+%d more)" % more if more > 0 else ""
+    print("universe-filter: skipped %d unquotable symbol(s): %s%s" % (
+        len(skipped), ", ".join(shown), suffix), file=sys.stderr)
 print("universe-filter: parsed %d symbols from %d payload(s)" % (len(rows), len(paths)), file=sys.stderr)
 PY
