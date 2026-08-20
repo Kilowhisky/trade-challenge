@@ -42,7 +42,10 @@ The parent does not execute §P/§D itself:
 5. Cron entries are session-scoped (harness CronCreate: in-memory, die with
    the session, 7-day auto-expiry). At session open, if the two entries are
    absent, re-create them: `15 5 * * 1-5` → `/deep-research preopen` and
-   `20 13 * * 1-5` → `/deep-research postclose` (PT local).
+   `20 13 * * 1-5` → `/deep-research postclose` (PT local). Re-creation
+   prevents *tomorrow's* miss; it cannot produce *today's* pre-open brief,
+   because a session opening after 05:15 PT has already passed the fire
+   time. That gap is closed by the playbook §9 catch-up, not here.
 
 ## §A — Preconditions
 
@@ -56,8 +59,12 @@ The parent does not execute §P/§D itself:
    rows **and** `research/screen/DATE.jsonl` exists, today's run already
    happened — no-op. (Belt-and-suspenders on top of `oi-append.sh`'s own
    exit-4 idempotency guard, design rev2 §8.1.)
+6. preopen only: if `research/preopen/DATE.md` already exists for today,
+   today's brief has already been written — no-op. The 8:15 ET cron and the
+   session-open catch-up (playbook §9) both target that one file, and
+   exactly one of them should ever write it.
 
-## §P — preopen mode (8:15 ET; FILE-ONLY, design rev2 §7.1)
+## §P — preopen mode (8:15 ET cron **or** session-open catch-up; FILE-ONLY, design rev2 §7.1)
 
 Budget ceiling: ~6 Schwab + ~8 API/web — a ceiling, never a quota; most
 runs should use far less. This mode has **no path to an
@@ -73,6 +80,18 @@ for live evaluation, not to make a decision ahead of it.
   print satisfies §C's letter and nothing else.
 - Writes **exactly one file**: `research/preopen/DATE.md`, via
   `scripts/research-replace.sh preopen DATE`.
+- **Two triggers, one output.** The 8:15 ET cron is the fast path; the
+  playbook §9 session-open catch-up is the guarantee. The catch-up fires
+  only when the cron did not (no file for today, §A.6) and only **before
+  12:00 ET**. A catch-up run is otherwise **identical** — same file, same
+  banner, same prohibitions, same budget. It additionally stamps, on the
+  line immediately below the H1:
+  `**Catch-up run — the 8:15 ET cron did not fire. Swept at HH:MM ET.**`
+  so that nothing downstream reads a 10:20 ET brief as an 8:15 one. The
+  prohibitions carry even though one of their two stated reasons has
+  expired by catch-up time: §4.5 *has* reconciled by then, but the §E.5
+  ping slots still belong to the live `/research` loop, and a file-only
+  brief must not spend them.
 - Content, in order:
   1. **Earnings digests** for calendar-watch names that printed overnight
      or pre-market: actual vs. consensus, guidance direction, pre-market
@@ -97,7 +116,7 @@ for live evaluation, not to make a decision ahead of it.
   silently lose the brief for the day rather than surface loudly.
 - Ends by logging one events-corpus line via `scripts/data-append.sh
   events DATE JSON`, the same shape §D uses below:
-  `{"t":"HH:MM:SS","event":"deep_research","mode":"preopen","skipped":"<features or ->","api_calls":N,"schwab_calls":N}` —
+  `{"t":"HH:MM:SS","event":"deep_research","mode":"preopen","catchup":true|false,"skipped":"<features or ->","api_calls":N,"schwab_calls":N}` —
   recording what this file-only run swept and what it could not reach.
 
 ## §D — postclose mode (16:20 ET; owns the POST window, design rev2 §8.1)
@@ -388,4 +407,8 @@ to the events corpus and stop; never `ALERT.md`, never a ping on failure.
 The session-open **deadman check** (mtimes of yesterday's `preopen/` and
 `screen/` outputs, flagged in the session-open summary if absent) lives in
 the session-open protocol, not here — that is a separate task's territory
-(design rev2 §8.5).
+(design rev2 §8.5). Note the division of labour, since the two look
+similar: the deadman **detects** that yesterday's loop died and reports it;
+the §9 pre-open catch-up **repairs** today's missing brief. Neither
+substitutes for the other, and the deadman is deliberately still quiet —
+it never writes `ALERT.md`.

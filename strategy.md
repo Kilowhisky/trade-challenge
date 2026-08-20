@@ -338,6 +338,21 @@ differences investigated before any order) → loop → planned actions.
   If either is missing, say so in the session-open summary as a status
   line — not ALERT.md. A dead research loop gets noticed here, not weeks
   later. (Quiet, not loud — but never invisible.)
+- **Pre-open catch-up** *(strategy rule, added 2026-08-19)*: if today's
+  `research/preopen/DATE.md` does not exist **and it is before 12:00 ET**,
+  run `/deep-research preopen` here, once — after the §3.6 check, before the
+  monitoring loop starts. The crons are session-scoped, so a session that
+  opens after 05:15 PT structurally cannot produce its own pre-open brief;
+  that cost four consecutive briefs, 8/15 through 8/19, before it was read
+  as a pattern rather than four incidents. **The cron is the fast path;
+  this is the guarantee.** If the file already exists, no-op — never
+  double-write a brief the cron already produced. **After 12:00 ET, skip it
+  and say so in the session-open summary:** by midday the live `/research`
+  loop has been reading the tape on RTH data, and a "pre-open" brief written
+  then is a backdated file describing a session already half over. The
+  catch-up inherits every §P prohibition unchanged — file-only, no pings, no
+  §E, no HOT promotions — and stamps its real run time in the body
+  (`.claude/commands/deep-research.md` §P).
 - **Weekly universe deadman:** check the `Assembled:` timestamp inside
   `research/universe.md` — the line `/weekly-universe` writes into the body.
   If it is older than 8 days, the weekly sweep has not run: say so in the

@@ -326,6 +326,7 @@ manual's day 5 but unmarked as a *(strategy rule)*.
 | 2026-08-17 | Core sleeve name count removed (was "2 names, ~25% each"); per-position §3.1/§3.8 bind instead. |
 | 2026-08-17 | All-options-flat date moved 9/9 → **9/4**, off the far side of the Labor Day dark stretch. |
 | 2026-08-17 | §6 rewritten. It had drifted to a stale $435 per-position cap and a wrong "20% open / $580" figure; both corrected against manual §3.2 (20%/$580 per position, 30%/$870 open). Duplicated lines removed. |
+| 2026-08-19 | **Pre-open brief given a catch-up path** (§9 Open). The `/deep-research preopen` cron is session-scoped and fires at 05:15 PT, so any session opening later structurally could not produce its own brief — four consecutive misses, 8/15–8/19, each logged as an incident before the pattern was read. Session open now runs the brief itself when today's file is absent and it is before 12:00 ET; after noon it is skipped and reported, because the live `/research` loop has already covered the tape on RTH data by then. Cron re-creation was never a fix for this — it prevents tomorrow's miss, not today's. Mechanics in `.claude/commands/deep-research.md` §A.6 (idempotency), §P (catch-up stamp, prohibitions carried), §Dispatch. No rule value moved; no manual change; `rules.yml` untouched. |
 
 ---
 
