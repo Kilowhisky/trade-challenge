@@ -114,7 +114,12 @@ strategy:
   # Replaces the fixed $20-60 band, set when the catalyst sleeve was $270 and
   # never rescaled. Expressed as granularity so it moves with capital: the
   # sleeve must buy at least this many whole shares.
-  catalyst_min_whole_shares: 6
+  # Lowered 6 -> 3 on 2026-08-20 (Chris). At 6 the ceiling was sleeve/6 =
+  # ~$145, which blocked TGT and HD on granularity while both remained
+  # core-eligible -- a ceiling doing thesis work it was never meant to do.
+  # Cost accepted: a 3-share position scales coarsely (partial exits move in
+  # thirds), so the ratchet, not scaling, carries the risk management.
+  catalyst_min_whole_shares: 3
 
   # Size of the weekly working universe handed to the daily tier. Chosen to
   # match what the daily run can deep-vet, not everything that qualifies;

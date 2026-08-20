@@ -146,11 +146,18 @@ top half of range); §1.4/§2 floors; sector distinct from both core names
 (§3.8 — guaranteed possible by §4's carve-out); next report ~3 months out.
 Price is bounded by **granularity, not a fixed band** *(strategy rule)*: the
 catalyst sleeve must buy at least
-**6**<!--rule:strategy_catalyst_min_whole_shares--> whole shares, so the
-ceiling is `sleeve ÷ 6` and rises with capital. The floor is §1.4's. *(Was a
+**3**<!--rule:strategy_catalyst_min_whole_shares--> whole shares, so the
+ceiling is `sleeve ÷ 3` and rises with capital. The floor is §1.4's. *(Was a
 fixed ~$20–60 band, set when the sleeve was $270 and never rescaled; at
 present sleeve size it excluded most of the S&P by price for a granularity
-problem that no longer exists.)*
+problem that no longer exists.)* *(Amended 2026-08-20 — was 6 shares, a
+~$145 ceiling that blocked TGT and HD while both stayed core-eligible. That
+made the ceiling decide **which sleeve a thesis belonged to**, which is not
+what a granularity rule is for; the alternative on the table was routing
+such names to core, which would have given a momentum trade core's slower
+exits. Chris chose the root cause. **Accepted cost: a 3-share position
+scales coarsely** — partial exits move in thirds — so on 3-share positions
+the ratchet does the work that scaling out would otherwise do.)*
 
 **Entry:** sessions 1–3 post-report, limit at/inside ask, day-only, and only
 in the first half of a session Chris intends to keep open *(strategy rule)*.
