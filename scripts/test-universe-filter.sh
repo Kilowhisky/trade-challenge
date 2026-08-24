@@ -30,9 +30,9 @@ n=$(tail -n +2 "$OUT" | wc -l | tr -d ' ')
 
 # Header must match ALL NINE columns, in order, exactly — Task 2 indexes this
 # TSV positionally, so a silently reordered or renamed column must fail here.
-EXPECTED_HEADER='symbol	price	adv10	dollar_vol	pct_from_52wk_high	optionable	leverage	last_earnings	is_etf'
+EXPECTED_HEADER='symbol	price	adv10	dollar_vol	pct_from_52wk_high	optionable	leverage	last_earnings	is_etf	session_range_pct'
 actual_header=$(head -n1 "$OUT")
-[ "$actual_header" = "$EXPECTED_HEADER" ] && ok "emits the exact TSV header (all 9 columns, in order)" || no "emits the exact TSV header (all 9 columns, in order)" "got: $actual_header"
+[ "$actual_header" = "$EXPECTED_HEADER" ] && ok "emits the exact TSV header (all 10 columns, in order)" || no "emits the exact TSV header (all 10 columns, in order)" "got: $actual_header"
 
 echo "== unquotable symbols =="
 # The fixture's NOQUOTE block has no lastPrice field — a genuinely
@@ -81,15 +81,57 @@ echo "== ranking (--rank-top) =="
 # --rank-top 1 must keep the nearest-to-high name (QUALB) and drop CSX —
 # this fails if the sort key direction is reversed, and it fails if
 # truncation doesn't actually slice the row list.
+bash "$F" --payload "$FIX" --out "$OUT" --qualified-only >/dev/null 2>/dev/null
+qualified_n=$(tail -n +2 "$OUT" | wc -l | tr -d ' ')
 bash "$F" --payload "$FIX" --out "$OUT" --qualified-only --rank-top 1 >/dev/null 2>"$ERR"
 n=$(tail -n +2 "$OUT" | wc -l | tr -d ' ')
 top=$(tail -n +2 "$OUT" | cut -f1)
 [ "$n" -eq 1 ] && [ "$top" = "QUALB" ] \
   && ok "--rank-top keeps the nearest-to-52wk-high row and caps the count" \
   || no "--rank-top keeps the nearest-to-52wk-high row and caps the count" "got $n row(s): $top"
-# Two symbols qualify (CSX, QUALB); capping to 1 must report exactly one drop.
-grep -q 'dropped 1' "$ERR" && ok "truncation count is reported accurately" \
-  || no "truncation count is reported accurately" "stderr was: $(cat "$ERR")"
+# Capping to 1 must report every other qualified row as dropped. Derived from
+# the unranked run above rather than hard-coded, so adding a fixture symbol
+# does not silently turn this into an assertion about the wrong number.
+grep -q "dropped $((qualified_n - 1))" "$ERR" && ok "truncation count is reported accurately" \
+  || no "truncation count is reported accurately" "expected dropped $((qualified_n - 1)); stderr was: $(cat "$ERR")"
+
+echo "== takeover-stub gate (§4, strategy_min_session_range_pct) =="
+# An announced all-cash deal target trades pinned a hair under its deal
+# price, which is by construction its 52-week high — so the proximity tilt
+# this universe ranks on acts as a merger detector. On 2026-08-19 nine of
+# fifteen shortlisted names were deal stubs; UTZ and DBRG reached WATCH on
+# that artifact and had to be retracted.
+bash "$F" --payload "$FIX" --out "$OUT" --qualified-only >/dev/null 2>"$ERR"
+cut -f1 "$OUT" | tail -n +2 > /tmp/uf_stub.$$
+# STUBCO: high 30.10 / low 30.00 on a 30.05 price = 0.33% range. Passes every
+# other gate, so its absence can only come from the stub gate.
+grep -qx 'STUBCO' /tmp/uf_stub.$$ && no "pinned stub is dropped" "STUBCO survived" || ok "pinned stub is dropped"
+# WIDECO: high 41.00 / low 40.00 on 40.50 = 2.47%. A live name must not be
+# caught by a gate aimed at pinned ones.
+grep -qx 'WIDECO' /tmp/uf_stub.$$ && ok "normal-range name survives the stub gate" || no "normal-range name survives the stub gate" "WIDECO was dropped"
+# ZERONGE: high = low = 0 with 5,000,000 shares of session volume. This is
+# NO DATA, not zero range, and must be kept. The rule as first specified
+# ("range == 0 AND volume == 0") would keep it only by accident of the
+# volume test; see the live-fixture SPY assertion below for the case that
+# conjunction actually gets wrong.
+grep -qx 'ZERONGE' /tmp/uf_stub.$$ && ok "no-data high/low is kept, not read as maximally pinned" || no "no-data high/low is kept, not read as maximally pinned" "ZERONGE was dropped"
+rm -f /tmp/uf_stub.$$
+grep -q 'stub-filtered 1 symbol' "$ERR" && ok "stub rejections are counted on stderr" || no "stub rejections are counted on stderr" "stderr was: $(cat "$ERR")"
+grep -q 'STUBCO' "$ERR" && ok "stub rejection names the symbol on stderr" || no "stub rejection names the symbol on stderr" "stderr was: $(cat "$ERR")"
+grep -q 'no usable high/low' "$ERR" && ok "no-data symbols are reported on stderr" || no "no-data symbols are reported on stderr" "stderr was: $(cat "$ERR")"
+
+echo "== session_range_pct column =="
+wide_rng=$(awk -F'\t' '$1=="WIDECO"{print $10}' "$OUT")
+[ "$wide_rng" = "2.47" ] && ok "session_range_pct carries the computed range (2.47)" || no "session_range_pct carries the computed range (2.47)" "got $wide_rng"
+zero_rng=$(awk -F'\t' '$1=="ZERONGE"{print $10}' "$OUT")
+[ "$zero_rng" = "-" ] && ok "session_range_pct is '-' for no-data, never 0.00" || no "session_range_pct is '-' for no-data, never 0.00" "got $zero_rng"
+
+echo "== stub gate is a gate, not a parse failure =="
+# Both must appear in the unfiltered pass, which proves STUBCO's absence
+# above comes from the gate rather than from a block the parser choked on.
+bash "$F" --payload "$FIX" --out "$OUT" >/dev/null 2>&1
+grep -q '^STUBCO	' "$OUT" && ok "STUBCO is present in the unfiltered output" || no "STUBCO is present in the unfiltered output"
+grep -q '^WIDECO	' "$OUT" && ok "WIDECO is present in the unfiltered output" || no "WIDECO is present in the unfiltered output"
 
 echo "== real payload shape (live fixture) =="
 # ---- price is taken from the REGULAR-SESSION close, not the extended print --
@@ -133,6 +175,15 @@ grep -qx 'SPY' /tmp/uf_live.$$ && ok "SPY (1x ETF, raw leverage 100) survives --
 grep -qx 'TQQQ' /tmp/uf_live.$$ && no "TQQQ (3x ETF, raw leverage 300) is dropped (§3.5)" "TQQQ survived" \
   || ok "TQQQ (3x ETF, raw leverage 300) is dropped (§3.5)"
 grep -qx 'AAPL' /tmp/uf_live.$$ && ok "AAPL survives every gate" || no "AAPL survives every gate"
+# THE REGRESSION FOR THE MIS-SPECIFIED STUB RULE. SPY in the live fixture
+# carries highPrice 0, lowPrice 0 and openPrice 0 alongside totalVolume
+# 34,356,577 — a real, maximally liquid ETF whose payload simply has no
+# consolidated OHLC. Reading that as a 0.00% range rejects it; the rule as
+# first written ("range == 0 AND volume == 0 -> no-data") does exactly that,
+# because SPY's volume is not zero. The shipped test is on high/low alone.
+grep -qx 'SPY' /tmp/uf_live.$$ \
+  && ok "SPY (high = low = 0 with 34.4M volume) survives the stub gate" \
+  || no "SPY (high = low = 0 with 34.4M volume) survives the stub gate" "SPY was dropped — the stub gate is reading no-data as maximally pinned"
 rm -f /tmp/uf_live.$$
 
 echo "== sub-block anchoring: extended present, regular absent =="

@@ -121,6 +121,24 @@ strategy:
   # thirds), so the ratchet, not scaling, carries the risk management.
   catalyst_min_whole_shares: 3
 
+  # Playbook §4 — takeover-stub rejection. A survivor whose latest session
+  # high-low range is under this percentage of its price is pinned, not
+  # quiet, and is rejected by /weekly-universe's --qualified-only pass.
+  #
+  # Why it exists: on 2026-08-19, nine of fifteen names on the shortlist were
+  # announced all-cash deal targets trading pinned under their deal price.
+  # A deal price is by construction the 52-week high, so the proximity tilt
+  # that ranks this universe was acting as a merger detector. UTZ and DBRG
+  # were promoted to WATCH on that artifact and had to be retracted.
+  #
+  # 0.75 is a VALIDATED number, not a chosen one: against the 118 survivors
+  # of 2026-08-21 it removed 17 (14.4%) — 8 known stubs, 6 newly confirmed
+  # and tombstoned (FBRX, VREX, SAFT, GBTG, PAYO, SLAB), 2 unconfirmed — and
+  # zero live momentum names. Known escape: UTZ ranges 0.82% and survives.
+  # The session_range_pct column exists so the next escape is visible in the
+  # universe file rather than only in hindsight; retune on that evidence.
+  min_session_range_pct: 0.75
+
   # Size of the weekly working universe handed to the daily tier. Chosen to
   # match what the daily run can deep-vet, not everything that qualifies;
   # universe-filter reports how many it dropped so this can be tuned on

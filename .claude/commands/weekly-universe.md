@@ -112,9 +112,40 @@ Fallback chain on a `FAIL:` about missing tools, same as tick.md/research.md
    is a stop-everything condition), keep the existing `research/universe.md`,
    record in §D.
 
-   Read stderr: a `"skipped N unquotable symbol(s)"` line when any symbol
-   could not be quoted, and a `"ranked N of M (dropped D)"` line reporting
-   qualified vs. ranked vs. dropped. Both belong in the §D ledger.
+   Read stderr — four possible lines, all of which belong in the §D ledger:
+
+   - `"skipped N unquotable symbol(s)"` when any symbol could not be quoted.
+   - `"stub-filtered N symbol(s) under X% session range"` — the takeover-stub
+     gate (below). Names are listed; tombstone the confirmed ones.
+   - `"N symbol(s) had no usable high/low"` — the stub gate could not be
+     evaluated for these and they were **kept**, never rejected.
+   - `"ranked N of M (dropped D)"` reporting qualified vs. ranked vs. dropped.
+
+   **The takeover-stub gate.** Under `--qualified-only` the filter also
+   rejects any survivor whose latest session high−low range is under
+   **0.75**<!--rule:strategy_min_session_range_pct-->% of its price. An
+   announced all-cash deal target trades pinned a hair under its deal price,
+   and that price is by construction its 52-week high — so the proximity tilt
+   this universe *ranks* on was acting as a merger detector. On 2026-08-19,
+   nine of fifteen shortlisted names were deal stubs; UTZ and DBRG reached
+   WATCH on the artifact and had to be retracted.
+
+   Two things about it that are easy to get wrong:
+
+   - **No data is not zero range.** A payload with no usable high/low reads
+     as 0.00% — maximally pinned — and must be kept, not rejected. The rule
+     was first specified as `range == 0 AND volume == 0`; that conjunction is
+     wrong, because SPY carries `highPrice: 0, lowPrice: 0` alongside 34.4M
+     shares of session volume — the most liquid ETF in the market, rejected
+     as a merger stub. It fails the same way on any payload that omits the
+     two fields entirely. The shipped test is on the high/low fields alone.
+   - **The gate has a known escape.** UTZ ranges 0.82% and survives 0.75%.
+     The threshold is validated, not exact: against the 118 survivors of
+     2026-08-21 it removed 17 (14.4%) — 8 known stubs, 6 newly confirmed
+     (FBRX, VREX, SAFT, GBTG, PAYO, SLAB), 2 unconfirmed — and **zero live
+     momentum names**. The `session_range_pct` column exists so the next
+     escape is visible in `research/universe.md` rather than only in
+     hindsight; retune on that evidence, in `rules.yml`, not here.
 
 ## §C — Write the working universe
 
@@ -143,7 +174,8 @@ through context, which §E forbids. The working invocation:
     'Columns: symbol, price (regular-session close), 10-day ADV, dollar volume,' \
     '% from 52-week high, optionable, leverage (a MULTIPLE: 0 single stock,' \
     '1.0 a 1x fund; leveraged and inverse funds are gated out by §3.5 and do' \
-    'not appear), last earnings date, ETF flag.' \
+    'not appear), last earnings date, ETF flag, latest-session range as a' \
+    "% of price (\`-\` = the payload carried no usable high/low)." \
     '' \
     '```'
   cat /tmp/universe-ranked.tsv
@@ -159,10 +191,10 @@ The body must carry, and the block above produces:
 
 - assembly timestamp and symbol counts (fetched / quoted / qualified / ranked
   / dropped)
-- the ranked table verbatim from `/tmp/universe-ranked.tsv` — the nine
+- the ranked table verbatim from `/tmp/universe-ranked.tsv` — the ten
   columns `universe-filter.sh` emits: symbol, price, 10-day ADV, dollar
   volume, % from 52-week high, optionable, **leverage**, last earnings date,
-  ETF flag
+  ETF flag, **session_range_pct**
 - a plain statement that the playbook §4 tilts (50-day SMA, 3/6-month
   returns) are **not** applied here and belong to the daily tier — the
   quote payload this pass reads has no price-history field to compute them
@@ -183,7 +215,8 @@ Append one row via
 
 ```json
 {"t":"HH:MM:SS","kind":"weekly_universe","fetched":N,"chunks":N,"chunks_failed":N,
- "quoted":N,"qualified":N,"ranked":N,"dropped":N,"schwab_calls":N,"skipped":"<or ->"}
+ "quoted":N,"qualified":N,"stub_filtered":N,"nodata":N,"ranked":N,"dropped":N,
+ "schwab_calls":N,"skipped":"<or ->"}
 ```
 
 `DATE` is the ET calendar date from `get_datetime`, never the machine clock.
