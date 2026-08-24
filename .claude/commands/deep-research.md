@@ -25,8 +25,18 @@ The parent does not execute §P/§D itself:
    sectors, comp capital SOURCE = the "State recorded — current" block of
    the latest `status/*.md` (echo the figure and its date — the exact
    resolution rule tick.md §B5 uses for HWM), active calendar guards
-   (NVDA week 8/24–8/28, endgame dates), mode (`$ARGUMENTS`: preopen |
-   postclose).
+   (**read them from playbook §4 and §10 at dispatch time — never from a
+   date hard-coded here**), mode (`$ARGUMENTS`: preopen | postclose).
+
+   This line used to name "NVDA week 8/24-8/28". That was the guard's
+   pre-amendment form and it went stale the moment playbook §4 narrowed
+   the window to **8/25-8/27** and made it correlation-conditional rather
+   than a blanket freeze — so a dispatch obeying this file would have
+   applied a wider, superseded guard and suppressed uncorrelated names
+   the playbook explicitly leaves tradeable. Caught 2026-08-24 at
+   dispatch. **A calendar date written into a command file is a date that
+   silently stops matching its rule**; the guard's dates live in the
+   playbook, which is the only place they are amended.
 3. When the agent's result arrives, parent outputs **Line 1 verbatim** to
    Chris:
    `DEEP <mode> <ET time> | screened n | roster n/M | cohorts n | skipped: <features or ->`
