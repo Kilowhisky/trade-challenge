@@ -137,6 +137,13 @@ strategy:
   # zero live momentum names. Known escape: UTZ ranges 0.82% and survives.
   # The session_range_pct column exists so the next escape is visible in the
   # universe file rather than only in hindsight; retune on that evidence.
+  #
+  # SCOPE — this catches ALL-CASH stubs only. A mixed cash-plus-stock deal
+  # target keeps a real daily range because part of its value floats with
+  # the acquirer, so no value of this threshold will catch one. ROKU
+  # (2026-08-24): pending Fox acquisition at $160.00 = $96.00 cash +
+  # 0.9693 FOX-A, ranged 0.85%, cleared the gate. Do not read a passing
+  # range as evidence that a name is not a deal target.
   min_session_range_pct: 0.75
 
   # Size of the weekly working universe handed to the daily tier. Chosen to

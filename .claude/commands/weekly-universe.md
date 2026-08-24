@@ -139,13 +139,32 @@ Fallback chain on a `FAIL:` about missing tools, same as tick.md/research.md
      shares of session volume — the most liquid ETF in the market, rejected
      as a merger stub. It fails the same way on any payload that omits the
      two fields entirely. The shipped test is on the high/low fields alone.
-   - **The gate has a known escape.** UTZ ranges 0.82% and survives 0.75%.
-     The threshold is validated, not exact: against the 118 survivors of
-     2026-08-21 it removed 17 (14.4%) — 8 known stubs, 6 newly confirmed
-     (FBRX, VREX, SAFT, GBTG, PAYO, SLAB), 2 unconfirmed — and **zero live
-     momentum names**. The `session_range_pct` column exists so the next
-     escape is visible in `research/universe.md` rather than only in
-     hindsight; retune on that evidence, in `rules.yml`, not here.
+   - **The gate has a known escape, and a structural blind spot that no
+     threshold closes.** UTZ ranges 0.82% and survives 0.75% — that one is
+     a tuning question. **ROKU is not.** Found 2026-08-24: it is a pending
+     Fox acquisition at $160.00/share, but the consideration is **mixed —
+     $96.00 cash plus 0.9693 FOX Class A shares** — so roughly 40% of the
+     deal value floats with the acquirer's stock. A mixed-consideration
+     stub therefore keeps a real daily range (ROKU printed 0.85%) and
+     **cannot be pinned by construction**. Raising the threshold does not
+     catch it; it only starts killing live names. The range test detects
+     *all-cash* stubs only, and that is the honest scope of this gate.
+     ROKU had sat on `candidates.md` since 2026-08-21 annotated "not
+     deal-pinned" — an inference drawn from its range instead of a check
+     of its deal status, which is precisely the error the range test
+     invites once you trust it too far.
+
+     The threshold itself is validated, not exact: against the 118
+     survivors of 2026-08-21 it removed 17 (14.4%) — 8 known stubs, 6
+     newly confirmed (FBRX, VREX, SAFT, GBTG, PAYO, SLAB), 2 unconfirmed —
+     and **zero live momentum names**. The `session_range_pct` column
+     exists so the next escape is visible in `research/universe.md` rather
+     than only in hindsight; retune on that evidence, in `rules.yml`, not
+     here. **But do not read a passing range as "not a deal target."** The
+     proposed complement — an explicit deal-status lookup on the top ~20
+     by proximity to 52-week high — is recorded for Chris and NOT
+     implemented; it is a different mechanism with an API-budget cost, not
+     a tuning of this one.
 
 ## §C — Write the working universe
 
