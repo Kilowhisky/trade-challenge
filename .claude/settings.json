@@ -35,9 +35,6 @@
       "Bash(./scripts/tick-append.sh:*)",
       "Bash(scripts/data-append.sh:*)",
       "Bash(./scripts/data-append.sh:*)",
-      "Write(/ALERT.md)",
-      "Write(/trade-log.csv)",
-      "Write(/status/**)",
       "Edit(/ALERT.md)",
       "Edit(/trade-log.csv)",
       "Edit(/status/**)"
