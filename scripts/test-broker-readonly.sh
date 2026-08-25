@@ -86,8 +86,25 @@ TC_DATA_DIR=/tmp
 IMAGE_TAG=local
 DUMMY
   fi
+  cfg_err="$(docker compose -f docker/docker-compose.yml --env-file "$envf" config 2>&1 >/dev/null)"
   cfg="$(docker compose -f docker/docker-compose.yml --env-file "$envf" config 2>/dev/null)"
   [ -n "$tmpenv" ] && rm -f "$tmpenv"
+
+  # A failed render must NOT be reported as a security-property failure. The
+  # `:?` guards abort interpolation for the WHOLE file on one missing variable,
+  # so an unset CLAUDE_CODE_OAUTH_TOKEN blanks the broker section too — and the
+  # first version of this test then announced "broker has no TC_DISCORD_TOKEN",
+  # pointing at the wrong thing entirely. A test that cries security wolf over
+  # a missing env var teaches you to ignore it.
+  if [ -z "$cfg" ]; then
+    echo "  skip — compose config did not render; the env is incomplete, not the security property:"
+    printf '         %s\n' "${cfg_err:-unknown error}" | head -4
+    echo
+    echo "-------------------------------------------"
+    echo "$pass passed, $fail failed"
+    [ "$fail" -eq 0 ]
+    exit $?
+  fi
   broker_env="$(awk '/^  broker:$/{f=1;next} /^  [a-z-]+:$/{f=0} f' <<<"$cfg")"
   if grep -q 'SCHWAB_MCP_DISCORD' <<<"$broker_env"; then
     bad "broker service exposes SCHWAB_MCP_DISCORD_* — this ENABLES order execution"
