@@ -156,6 +156,13 @@ jobs:
           # Both arches, not just amd64. arm64 is the leg that actually ships to
           # the Pi and the only one QEMU can get wrong; checking amd64 alone
           # verifies the architecture nothing in production runs.
+          #
+          # The image is REMOVED between legs. The runner's classic image store
+          # keys local images by reference, and one digest reference cannot hold
+          # two platform variants at once — the arm64 pull after the amd64 leg
+          # fails with "cannot overwrite digest", docker run emits nothing, and
+          # the version check compares against an empty string. Measured on the
+          # first real run of this workflow (run 32814102782, 2026-08-25).
           for plat in linux/amd64 linux/arm64; do
             echo "--- $plat ---"
             claude_v=$(docker run --rm --platform "$plat" --entrypoint claude "$img" --version \
@@ -163,6 +170,7 @@ jobs:
             [ "$claude_v" = "$want_claude" ] || { echo "$plat: claude $claude_v != pinned $want_claude"; exit 1; }
             docker run --rm --platform "$plat" --entrypoint schwab-mcp "$img" --help >/dev/null
             docker run --rm --platform "$plat" -v "$PWD:/app:ro" --entrypoint supercronic "$img" -test /app/docker/crontab
+            docker image rm -f "$img" >/dev/null
           done
 
           # The deploy target is arm64. Asserting the manifest carries it here is
