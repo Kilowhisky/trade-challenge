@@ -47,23 +47,45 @@ fi
 
 command -v docker >/dev/null 2>&1 || { say "docker not found"; exit 2; }
 
-running="$(docker inspect --format '{{index .Image}}' tc-scheduler 2>/dev/null || true)"
-docker pull --quiet "$image" >/dev/null 2>&1 || { say "pull of $image failed"; exit 2; }
-latest="$(docker inspect --format '{{.Id}}' "$image" 2>/dev/null || true)"
+# Capture what is deployed NOW as a REGISTRY-ADDRESSABLE reference, before
+# pulling over it. The obvious `docker inspect --format '{{.Id}}'` gives a
+# LOCAL image id, which is not a reference at all: feeding it back produced
+# `ghcr.io/…:sha256:0f8b…`, docker refused it as an invalid reference, the
+# rollback silently did nothing, and the Discord message said "restored". A
+# rollback that lies is worse than no rollback, because it is trusted at the
+# exact moment something is already broken.
+repo_digest() { docker image inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "$1" 2>/dev/null || true; }
 
-if [ -z "$latest" ]; then say "could not resolve $image"; exit 2; fi
-if [ "$running" = "$latest" ]; then
-  [ "$check_only" -eq 1 ] && say "up to date (${latest:7:12})"
+prior_ref="$(repo_digest "$image")"
+docker pull --quiet "$image" >/dev/null 2>&1 || { say "pull of $image failed"; exit 2; }
+latest_ref="$(repo_digest "$image")"
+
+if [ -z "$latest_ref" ]; then
+  # A locally-built image has no RepoDigests. Legitimate on a box that built
+  # its own first image; just say so rather than inventing a reference.
+  say "$image has no registry digest (built locally?) — cannot manage it by digest"
+  exit 2
+fi
+
+if [ "$prior_ref" = "$latest_ref" ]; then
+  [ "$check_only" -eq 1 ] && say "up to date (${latest_ref##*@})"
   exit 0                       # quiet: the daily common case
 fi
 
 if [ "$check_only" -eq 1 ]; then
-  say "update available: ${running:7:12} -> ${latest:7:12}"
+  say "update available: ${prior_ref##*@} -> ${latest_ref##*@}"
   exit 0
 fi
 
-say "deploying ${running:7:12} -> ${latest:7:12}"
-[ -n "$running" ] && printf '%s\n' "$running" > "$digest_file"
+say "deploying ${prior_ref##*@} -> ${latest_ref##*@}"
+if [ -n "$prior_ref" ]; then
+  printf '%s\n' "$prior_ref" > "$digest_file"
+else
+  # Nothing to roll back TO. Say it now, loudly, rather than discovering it
+  # during a failed health check.
+  say "WARNING: no previous image recorded — a failed deploy cannot be rolled back automatically"
+  rm -f "$digest_file"
+fi
 
 compose up -d --quiet-pull 2>&1 | sed 's/^/  /' >&2
 
@@ -87,20 +109,31 @@ if [ "$healthy" -eq 1 ]; then
 fi
 
 if [ "$healthy" -eq 1 ]; then
-  notify "✅ **Deploy OK** — image \`${latest:7:12}\` live. Broker healthy, smoke run reached Schwab."
-  say "deployed ${latest:7:12}"
+  notify "✅ **Deploy OK** — \`${latest_ref##*@}\` live. Broker healthy, smoke run reached Schwab."
+  say "deployed ${latest_ref##*@}"
   exit 0
 fi
 
 # --- rollback -------------------------------------------------------------
 prior="$(cat "$digest_file" 2>/dev/null || true)"
 if [ -z "$prior" ]; then
-  say "HEALTH CHECK FAILED and no prior digest recorded — cannot roll back automatically"
-  notify "🚨 **Deploy FAILED and could not roll back** — image \`${latest:7:12}\` is unhealthy and no prior digest was recorded. Manual intervention needed on the server."
+  say "HEALTH CHECK FAILED and no prior image recorded — cannot roll back automatically"
+  notify "🚨 **Deploy FAILED and could not roll back** — \`${latest_ref##*@}\` is unhealthy and no prior image was recorded. Manual intervention needed on the server."
   exit 1
 fi
 
-say "health check failed — rolling back to ${prior:7:12}"
-TC_IMAGE="$prior" IMAGE_TAG="$prior" compose up -d --quiet-pull 2>&1 | sed 's/^/  /' >&2
-notify "🚨 **Deploy FAILED, rolled back** — \`${latest:7:12}\` failed its health check; restored \`${prior:7:12}\`. Scheduled jobs continue on the prior image."
+# Refuse to "roll back" to something docker cannot address. Reporting a restore
+# that did not happen is the failure this whole block exists to prevent.
+if ! printf '%s' "$prior" | grep -qE '^[a-z0-9./-]+(:[0-9]+)?/[a-z0-9._/-]+(@sha256:[0-9a-f]{64}|:[A-Za-z0-9._-]+)$'; then
+  say "recorded rollback target is not a valid image reference: $prior"
+  notify "🚨 **Deploy FAILED and rollback is unusable** — \`${latest_ref##*@}\` is unhealthy, and the recorded rollback target (\`$prior\`) is not a valid image reference. The box is on the bad image. Manual intervention needed."
+  exit 1
+fi
+
+say "health check failed — rolling back to ${prior##*@}"
+if TC_IMAGE="$prior" compose up -d --quiet-pull 2>&1 | sed 's/^/  /' >&2; then
+  notify "🚨 **Deploy FAILED, rolled back** — \`${latest_ref##*@}\` failed its health check; restored \`${prior##*@}\`. Scheduled jobs continue on the prior image."
+else
+  notify "🚨 **Deploy FAILED and the rollback ALSO failed** — the box may be on a broken image. Manual intervention needed on the server now."
+fi
 exit 1

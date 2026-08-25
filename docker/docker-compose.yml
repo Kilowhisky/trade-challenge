@@ -23,7 +23,13 @@
 name: trade-challenge
 
 x-common: &common
-  image: ghcr.io/kilowhisky/trade-challenge:${IMAGE_TAG:-latest}
+  # A FULL reference, not a tag suffix. scripts/deploy.sh rolls back by pinning
+  # the previous image by DIGEST, and `...:${IMAGE_TAG}` cannot express that —
+  # it produced `...:sha256:0f8b…`, an invalid reference, so the rollback failed
+  # while Discord reported success. Digest-pinning is also immune to a tag
+  # being moved under it, which is exactly what you want when restoring a known
+  # good image.
+  image: ${TC_IMAGE:-ghcr.io/kilowhisky/trade-challenge:latest}
   build:
     context: ..
     dockerfile: docker/Dockerfile
