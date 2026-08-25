@@ -1,15 +1,19 @@
 #!/bin/bash
-# Assert what the read-only broker can actually do — against the built image.
+# Assert how the broker's write gate is configured — against the built image.
 #
 # This exists because the claim was WRONG the first time it was written. The
 # design note said "no Discord config means the order tools are not registered
 # at all", and building the image disproved it: allow_write=False withholds
 # exactly two tools, place_previewed_order and cancel_order. All seven
-# preview_*_order tools are registered either way.
+# preview_*_order tools are registered either way. "I read the code and it
+# looked right" is how the wrong claim got written into four documents, so this
+# pins it to a measurement that re-runs.
 #
-# The safety property still holds — no route from the scheduled container to a
-# sent order — but "I read the code and it looked right" is how the wrong claim
-# got written into four documents. This pins it to a measurement that re-runs.
+# Renamed from test-broker-readonly.sh on 2026-08-25, when the broker moved to
+# state 2 (Discord-gated writes) and a file called "readonly" would have been
+# asserting the opposite of its name. The image-mode measurements below are
+# unchanged — they compare both modes and are true regardless of which one the
+# compose file selects. What flipped is the compose assertion at the bottom.
 #
 # Skips cleanly when docker or the image is unavailable, so it can live in the
 # normal suite on a laptop.
@@ -22,9 +26,19 @@ ok()  { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
 bad() { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
 
 command -v docker >/dev/null 2>&1 || { echo "  skip — docker not installed"; exit 0; }
-docker image inspect "$IMAGE" >/dev/null 2>&1 || {
-  echo "  skip — image '$IMAGE' not built (docker build -f docker/Dockerfile -t $IMAGE .)"; exit 0; }
 
+# The image-backed measurements below need a built image; the compose assertion
+# at the bottom does not. It used to sit behind this same early exit, so on a
+# laptop or in review — where the compose file is actually EDITED — the check
+# guarding the most dangerous property in the repo silently did not run. That is
+# the identical mistake the compose section's own comment describes about
+# keying itself on docker/.env. So: skip the probe, keep going.
+have_image=1
+docker image inspect "$IMAGE" >/dev/null 2>&1 || {
+  echo "  skip — image '$IMAGE' not built (docker build -f docker/Dockerfile -t $IMAGE .); running compose checks only"
+  have_image=0; }
+
+if [ "$have_image" -eq 1 ]; then
 out="$(docker run --rm -v "$PWD/docker/probe:/probe:ro" --entrypoint sh "$IMAGE" -c \
         '/opt/uv-tools/schwab-mcp/bin/python /probe/tool-registry.py diff' 2>&1)" || {
   echo "  FAIL probe did not run:"; echo "$out" | sed 's/^/    /'; exit 1; }
@@ -58,14 +72,20 @@ echo "== counts are what the docs claim =="
 [ "$ro_count" = "23" ] && [ "$rw_count" = "25" ] \
   && ok "23 read-only / 25 write — matches README and CHANGELOG" \
   || bad "counts are $ro_count/$rw_count, docs say 23/25 — update them or explain the drift"
+fi   # have_image
 
-echo "== the broker service cannot flip allow_write via its own env =="
+echo "== the broker's write gate is enabled AND human =="
 # schwab-mcp reads SCHWAB_MCP_DISCORD_{TOKEN,CHANNEL_ID,APPROVERS} straight from
 # the environment, and ANY ONE of them sets discord_requested -> allow_write.
-# The broker's entrypoint still needs Discord to report "waiting for re-auth",
-# so it carries the same secrets under TC_DISCORD_* names. If someone ever
-# "tidies" those back to the canonical names, the broker silently gains
-# place_previewed_order. This is that tripwire.
+#
+# Until 2026-08-25 this test asserted those names were ABSENT. They are now
+# required, because a broker that cannot place also cannot CLOSE, and the
+# laptop no longer holds a token of its own to close with.
+#
+# The tripwire did not go away, it moved. What must never regress now is that
+# writes stay gated on a HUMAN: all three names present (token+channel without
+# APPROVERS would accept a ✅ from anyone in the channel), and
+# --jesus-take-the-wheel absent, which check-consistency.sh enforces repo-wide.
 # docker/.env is gitignored and exists only on a deployed server, so keying this
 # check on its presence meant the tripwire guarding the MOST dangerous property
 # skipped everywhere it was most likely to be broken — on a laptop, in CI, in
@@ -106,14 +126,20 @@ DUMMY
     exit $?
   fi
   broker_env="$(awk '/^  broker:$/{f=1;next} /^  [a-z-]+:$/{f=0} f' <<<"$cfg")"
-  if grep -q 'SCHWAB_MCP_DISCORD' <<<"$broker_env"; then
-    bad "broker service exposes SCHWAB_MCP_DISCORD_* — this ENABLES order execution"
-    grep -o 'SCHWAB_MCP_DISCORD[A-Z_]*' <<<"$broker_env" | sort -u | sed 's/^/       /'
+  missing=""
+  for v in SCHWAB_MCP_DISCORD_TOKEN SCHWAB_MCP_DISCORD_CHANNEL_ID SCHWAB_MCP_DISCORD_APPROVERS; do
+    grep -q "$v" <<<"$broker_env" || missing="$missing $v"
+  done
+  if [ -z "$missing" ]; then
+    ok "broker has all three SCHWAB_MCP_DISCORD_* vars — writes enabled, ✅/❌ gated on named approvers"
+  elif [ "$missing" = " SCHWAB_MCP_DISCORD_TOKEN SCHWAB_MCP_DISCORD_CHANNEL_ID SCHWAB_MCP_DISCORD_APPROVERS" ]; then
+    bad "broker has NO Discord config — allow_write=False, so no order can be placed OR CLOSED from anywhere"
   else
-    ok "broker service exposes no SCHWAB_MCP_DISCORD_* var"
+    # The dangerous middle: enough to enable writes, not enough to gate them.
+    bad "broker is missing$missing — writes are ENABLED but the approver list is incomplete"
   fi
   grep -q 'TC_DISCORD_TOKEN' <<<"$broker_env" \
-    && ok "broker still reaches Discord via the safe TC_DISCORD_* alias" \
+    && ok "broker reaches Discord for re-auth stalls via the explicit TC_DISCORD_* alias" \
     || bad "broker has no TC_DISCORD_TOKEN — it cannot report a re-auth stall"
 else
   echo "  skip — docker not installed"

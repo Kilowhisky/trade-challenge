@@ -78,6 +78,44 @@ else
   ok "no stray tool words after the flag"
 fi
 
+echo
+echo "== no scheduled job may be handed an order tool =="
+# LOAD-BEARING as of 2026-08-25. Until then the broker itself was the backstop:
+# it ran with allow_write=False, so place_previewed_order did not exist for any
+# scheduled run to call even if the allowlist had named it. The broker now runs
+# Discord-gated (state 2) so that positions can be CLOSED, which means this
+# allowlist is the only thing standing between an unattended 08:17 research run
+# and an order request landing in #llm-yolo at breakfast. It is one script edit
+# away from being wrong, so it gets a test.
+#
+# Checked for every job, not just preopen: they build their allowlists
+# separately and a new one could quietly differ.
+#
+# Each job needs a clock and a day INSIDE its own window, or it SKIPs, writes no
+# dispatch line, and the check passes on an empty string. The first draft of
+# this loop used one clock for all three, skipped two of them, and survived a
+# mutation that added place_previewed_order to the allowlist. A guard that
+# cannot fail is not a guard — these three pairs are load-bearing.
+order_leak=0
+checked=0
+for spec in "preopen $((8*60+30)) 2" "postclose $((16*60+30)) 2" "weekly-universe $((7*60+40)) 6"; do
+  set -- $spec; j="$1"; m="$2"; d="$3"
+  rm -rf status/cron
+  TC_DRY_RUN=1 TC_NOW_ET_MIN="$m" TC_DOW="$d" ./scripts/scheduled-run.sh "$j" >/dev/null 2>&1
+  l="$(grep -o 'DRY-RUN would exec: .*' status/cron/*"$j".log 2>/dev/null | head -1)"
+  if [ -z "$l" ]; then
+    bad "$j did not dispatch at $m ET dow $d — the allowlist was never checked"
+    order_leak=1; continue
+  fi
+  checked=$((checked+1))
+  if grep -qE 'place_previewed_order|cancel_order' <<<"$l"; then
+    bad "$j is allowed an order tool — an unattended run could request a live order"
+    order_leak=1
+  fi
+done
+[ "$order_leak" -eq 0 ] && [ "$checked" -eq 3 ] \
+  && ok "no job allowlists place_previewed_order or cancel_order (3 of 3 dispatched and inspected)"
+
 echo "== unknown job =="
 TC_DRY_RUN=1 ./scripts/scheduled-run.sh definitely-not-a-job >/dev/null 2>&1
 [ "$?" -eq 2 ] && ok "unknown job exits 2" || bad "unknown job should exit 2"

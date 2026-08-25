@@ -1,6 +1,6 @@
 """Print the schwab-mcp tool registry for a given allow_write setting.
 
-Used by scripts/test-broker-readonly.sh to assert, against the real built image,
+Used by scripts/test-broker-gating.sh to assert, against the real built image,
 exactly which tools the read-only broker exposes. Needs no credentials and makes
 no network call: register_tools only touches a client object, never uses it.
 """

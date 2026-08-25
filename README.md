@@ -101,18 +101,31 @@ would become a Docker release and the container would drift from the manual.
 | `scheduler` | supercronic firing `scripts/scheduled-run.sh`, which owns the lock, the ET window guard, the heartbeat and the Discord relay. |
 | `claude` | `docker compose run --rm -it claude` for interactive sessions. |
 
-**The broker cannot place or cancel an order, and it is worth being precise
-about what that means.** `schwab-mcp` enables writes only when given the Discord
-approval configuration; a third mode, `--jesus-take-the-wheel`, enables them
-behind a stub that approves everything. The scheduled broker is given neither.
+**The broker can place and cancel orders, and every one of them blocks on a
+✅/❌ in Discord `#llm-yolo`.** `schwab-mcp` enables writes only when given the
+Discord approval configuration; a third mode, `--jesus-take-the-wheel`, enables
+them behind a stub that approves everything. This broker is given the first and
+never the second — `check-consistency.sh` fails if the bypass flag appears
+anywhere in this repo.
 
-Measured rather than assumed: that setting adds exactly two tools —
-`place_previewed_order` and `cancel_order`. The seven `preview_*_order` tools
-are registered either way. A preview is a real Schwab API call but changes
-nothing, and it cannot become an order without `place_previewed_order`. So the
-scheduled container can look at what an order would cost; it has no route to
-sending one. `check-consistency.sh` fails if the bypass flag appears anywhere
-in this repo.
+Measured rather than assumed: the Discord configuration adds exactly two tools
+— `place_previewed_order` and `cancel_order`. The seven `preview_*_order` tools
+are registered either way; a preview is a real Schwab API call but changes
+nothing, and cannot become an order without `place_previewed_order`.
+
+It ran read-only (`allow_write=False`) through phases 1–3, when the Mac held
+its own Schwab token and placed every order itself. Schwab issues **one refresh
+token per app authorisation**, so on 2026-08-25 a server re-auth silently
+revoked the laptop's token and the account went a full session unreadable and
+unmonitored from the Mac. The fix is one broker, reached from both places — and
+a single broker that cannot place also cannot *close*, which is the worse
+failure. Hence state 2.
+
+The scheduled jobs still have no route to an order: `scheduled-run.sh` passes
+them read-only Schwab tools and the research agents are defined without order
+tools. That used to be belt *and* braces, with the broker as the outer guard.
+It is now the only guard, so `test-scheduled-run.sh` fails if an order tool
+ever appears in a job's allowlist.
 
 ### Schwab re-auth (~weekly)
 

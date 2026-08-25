@@ -3,22 +3,40 @@
 # Paths are relative to this file, so the repo root is `..`. Run everything from
 # the docker/ directory (or with `-f docker/docker-compose.yml`).
 #
-# READ THIS BEFORE ADDING ENV VARS TO `broker`:
+# READ THIS BEFORE CHANGING ENV VARS ON `broker`:
 # schwab-mcp sets allow_write from three cases (cli.py:300-341) —
 #   1. no Discord config, no flag  -> allow_write=False
 #   2. Discord token+channel+approver -> allow_write=True, ✅/❌ gated
 #   3. --jesus-take-the-wheel      -> allow_write=True, NoOpApprovalManager
-# The Discord configuration is what ENABLES writes. Phases 1-3 run in state 1.
 #
 # MEASURED, not assumed: allow_write=False registers 23 tools, allow_write=True
 # registers 25. The two it adds are exactly `place_previewed_order` and
 # `cancel_order`. The seven `preview_*_order` tools are present EITHER WAY — a
 # preview is a real Schwab API call but changes nothing, and cannot become an
-# order without place_previewed_order, which state 1 does not have.
-# So state 1 cannot place or cancel. It can still preview.
+# order without place_previewed_order.
+#
+# **This broker runs in state 2 as of 2026-08-25.** Phases 1-3 ran in state 1,
+# which was correct while the Mac held its own token and placed every order.
+# That stopped being true the moment Schwab's one-refresh-token-per-app rule
+# made the two installs mutually exclusive: with the laptop pointed at this
+# broker, state 1 meant NO order could be placed from anywhere, including a
+# close. A book that can be entered but not exited is not the safer state.
+#
+# What is NOT weakened: every write still blocks on Chris's ✅/❌ in Discord
+# `#llm-yolo` (state 2, not state 3), exactly as the manual's "Verified account
+# facts" describes. This needed no §9 amendment — the 2026-08-24 amendment to
+# §0 already authorises unattended operation *with the gate intact* ("Unattended
+# is not unapproved. Every order still passes the Discord approval gate").
+#
+# What now carries the weight the old state-1 broker used to: the scheduled
+# jobs' own tool allowlist. `scheduled-run.sh` passes read-only Schwab tools and
+# nothing else, and `test-scheduled-run.sh` fails if an order tool ever appears
+# there. A scheduled research run therefore still has no route to an order —
+# but that is now ONE guard, not two, and it is a script edit away rather than
+# a container rebuild away. Treat that allowlist as load-bearing.
 #
 # State 3 must never be used here — scripts/check-consistency.sh fails if the
-# flag appears anywhere in this repo.
+# flag appears anywhere in this repo. It is the one that removes the human.
 
 name: trade-challenge
 
@@ -75,14 +93,21 @@ services:
       <<: *common-env
       SCHWAB_CLIENT_ID: ${SCHWAB_CLIENT_ID:?set in docker/.env}
       SCHWAB_CLIENT_SECRET: ${SCHWAB_CLIENT_SECRET:?set in docker/.env}
-      # NO SCHWAB_MCP_DISCORD_* HERE. discord_requested is
-      # `any(token, channel, approvers)` — ANY ONE of those names flips
-      # allow_write to True and hands this container place_previewed_order.
-      # Phase 4, gated on a §9 amendment.
-      #
-      # The entrypoint still needs to reach Discord to say "waiting for
-      # re-auth", so it gets the SAME credentials under names schwab-mcp does
-      # not read. scripts/test-broker-readonly.sh asserts this cannot regress.
+      # These three are what schwab-mcp reads: discord_requested is
+      # `any(token, channel, approvers)`, so their presence sets
+      # allow_write=True and registers place_previewed_order + cancel_order
+      # BEHIND the ✅/❌ approval gate. All three are set deliberately —
+      # APPROVERS especially, because token+channel without an approver list
+      # would gate on a reaction from anyone who can see the channel.
+      # See the state-2 note in this file's header. scripts/test-broker-gating.sh
+      # pins both halves: the tools appear, and the gate is a human one.
+      SCHWAB_MCP_DISCORD_TOKEN: ${SCHWAB_MCP_DISCORD_TOKEN:?set in docker/.env}
+      SCHWAB_MCP_DISCORD_CHANNEL_ID: ${SCHWAB_MCP_DISCORD_CHANNEL_ID:?set in docker/.env}
+      SCHWAB_MCP_DISCORD_APPROVERS: ${SCHWAB_MCP_DISCORD_APPROVERS:?set in docker/.env}
+      # broker-entrypoint.sh reports a re-auth stall through discord-notify.sh,
+      # which prefers these names. Kept as the explicit alias rather than
+      # relying on its SCHWAB_MCP_* fallback, so the entrypoint's Discord access
+      # does not silently depend on the write gate staying enabled.
       TC_DISCORD_TOKEN: ${SCHWAB_MCP_DISCORD_TOKEN:?set in docker/.env}
       TC_DISCORD_CHANNEL_ID: ${SCHWAB_MCP_DISCORD_CHANNEL_ID:?set in docker/.env}
     volumes:
