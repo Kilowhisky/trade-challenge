@@ -86,11 +86,17 @@ services:
     # into swap-death and take the broker with it — losing the token holder and
     # every job at once. The broker is a light Python process; this is generous.
     mem_limit: 512m
-    # This box also serves pihole-FTL — DNS for the whole network. Under real
-    # memory pressure the kernel picks its own victim, and the largest RSS is
-    # not necessarily the one you can most afford to lose. A positive
-    # oom_score_adj makes our containers the preferred casualty, so a bad
-    # research run costs a research run and not the household's DNS.
+    # This box is SHARED, and not with trivia: pihole-FTL is DNS for the whole
+    # network, and Home Assistant (~470MB, the largest single process here) runs
+    # home automation. Measured baseline with both up: 762MB used of 3796MB, so
+    # our 512m + 2g ceiling fits inside the ~3.0GB available with roughly 500MB
+    # to spare, on top of 3.5GB of swap whose fast 1.5GB tier is zram.
+    #
+    # Under real pressure the kernel picks its own victim and the largest RSS is
+    # not the one you can least afford to lose — it would reach for Home
+    # Assistant first. A positive oom_score_adj makes our containers the
+    # preferred casualty instead, so a bad research run costs a research run and
+    # not the household's DNS or lights.
     oom_score_adj: 500
     healthcheck:
       test: ["CMD-SHELL", "timeout 2 bash -c 'exec 3<>/dev/tcp/127.0.0.1/8000'"]
