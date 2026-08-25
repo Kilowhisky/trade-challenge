@@ -178,6 +178,20 @@ else
   note "no unsupported flags in documented compose commands"
 fi
 
+# --- 8. the container crontab never schedules the deployer ----------------
+# deploy.sh needs the docker CLI and recreates the very containers the
+# scheduler runs in — from inside, it can only fail silently (no docker) or
+# kill itself mid-deploy before its health check and rollback. It runs from
+# the HOST crontab, installed by bootstrap-server.sh step 5c. This check keeps
+# a well-meaning "add it back to the schedule" edit from resurrecting either
+# failure mode.
+echo "== deploy.sh stays out of the container crontab =="
+if [ -f docker/crontab ] && grep -E 'deploy\.sh' docker/crontab | grep -vE '^\s*#' >/dev/null 2>&1; then
+  bad "docker/crontab schedules deploy.sh — it must run from the HOST crontab (no docker CLI in the container, and it would kill itself mid-deploy)"
+else
+  note "deploy.sh is not scheduled inside the container"
+fi
+
 echo
 if [ "$fails" -eq 0 ]; then echo "CONSISTENT — rules.yml, docs, and scripts agree."; exit 0; fi
 echo "$fails inconsistency(ies). rules.yml is the source of truth; fix the other side."; exit 1

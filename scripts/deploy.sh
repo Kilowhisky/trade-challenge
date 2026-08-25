@@ -33,6 +33,23 @@ say() { printf 'deploy: %s\n' "$*" >&2; }
 notify() { "$repo_root/scripts/discord-notify.sh" "$1" >/dev/null 2>&1 || true; }
 compose() { docker compose "$@"; }
 
+# HOST ONLY. Inside the scheduler container there is no docker CLI and no
+# socket, so the job can only fail — and worse, a deployer living inside the
+# thing it deploys kills itself the moment compose recreates its own
+# container, before the health check and rollback ever run. The host crontab
+# entry (installed by bootstrap-server.sh) is the one true schedule.
+if [ -f /.dockerenv ]; then
+  say "REFUSED — deploy.sh must run on the HOST, never inside a container"
+  exit 2
+fi
+
+# Under host cron there is no environment to inherit, so the Discord notifier
+# would silently post nothing. The compose .env carries the same names the
+# containers get; source it only for what is missing.
+if [ -z "${TC_DISCORD_TOKEN:-}${SCHWAB_MCP_DISCORD_TOKEN:-}" ] && [ -f "$repo_root/docker/.env" ]; then
+  set -a; . "$repo_root/docker/.env"; set +a
+fi
+
 image="${TC_IMAGE:-ghcr.io/kilowhisky/trade-challenge:latest}"
 digest_file="$repo_root/docker/.deployed-digest"
 
@@ -68,7 +85,15 @@ if [ -z "$latest_ref" ]; then
 fi
 
 if [ "$prior_ref" = "$latest_ref" ]; then
-  [ "$check_only" -eq 1 ] && say "up to date (${latest_ref##*@})"
+  [ "$check_only" -eq 1 ] && { say "up to date (${latest_ref##*@})"; exit 0; }
+  # Same image is not the same DEPLOYMENT: repo-update.sh delivers compose-file
+  # edits (a mount, an env var, a limit) with every job, and nothing applies
+  # them to running containers until something runs `up -d`. Without this line
+  # a compose change waits for the next image release to take effect — the
+  # store-mount fix of 2026-08-25 would have sat undeployed indefinitely.
+  # A no-op when nothing changed; we are already outside the session window.
+  compose up -d --quiet-pull 2>&1 | sed 's/^/  /' >&2 \
+    || notify "⚠️ nightly \`compose up -d\` failed while reconciling config drift — the containers may be running a stale compose config. Check the server."
   exit 0                       # quiet: the daily common case
 fi
 

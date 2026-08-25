@@ -153,9 +153,15 @@ scripts/deploy.sh                    # pull, health-check, roll back on failure
 `deploy.sh` **refuses to run inside 09:15–16:15 ET** without `--force`: a
 restart mid-session drops any pending Discord approval, whose state is
 in-memory and process-local, leaving an order neither placed nor cleanly
-denied. The server tracks a `deploy` branch rather than `main`, and
-`repo-update.sh` adopts a new commit only if the rule suite still passes on it —
-otherwise it rolls back and says so in Discord.
+denied. It runs from the **host's crontab** (installed by
+`bootstrap-server.sh`), never inside the scheduler container — the container
+has no docker CLI, and a deployer living inside the thing it deploys kills
+itself the moment compose recreates its own container. On nights when the
+image is unchanged it still runs `docker compose up -d`, so a compose-file
+edit delivered by `repo-update.sh` takes effect the same evening rather than
+waiting for the next image release. The server tracks a `deploy` branch
+rather than `main`, and `repo-update.sh` adopts a new commit only if the rule
+suite still passes on it — otherwise it rolls back and says so in Discord.
 
 ## Why git, and what changed
 

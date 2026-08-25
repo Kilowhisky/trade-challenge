@@ -23,7 +23,10 @@
 35 9  * * 1-5   /app/scripts/job-deadman.sh
 
 # --- deployment (Phase 1b) ------------------------------------------------
-# 18:30 ET: after postclose has finished, long before the next preopen. Never
-# inside 09:15-16:15 — a restart there drops any pending Discord approval,
-# whose state is in-memory and process-local (approvals/codemap.md).
-30 18 * * 1-5   /app/scripts/deploy.sh
+# deploy.sh is deliberately NOT here. It runs from the HOST's crontab
+# (bootstrap-server.sh installs it), for two reasons that are both structural:
+# this container has no docker CLI and no socket, so the job could only ever
+# exit 2 — a deploy schedule that silently never deploys; and a deployer that
+# lives inside the thing it deploys kills itself the moment compose recreates
+# its own container, dying before the health check and rollback it exists to
+# perform. check-consistency.sh check 8 enforces this stays true.

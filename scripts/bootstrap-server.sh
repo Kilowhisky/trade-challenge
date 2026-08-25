@@ -135,7 +135,27 @@ else
   printf '           docker compose up -d --force-recreate\n'
 fi
 
-step "5c. The store is reachable from INSIDE the scheduler"
+step "5c. Host crontab runs the nightly deploy"
+# deploy.sh runs on the HOST, never inside the scheduler: the container has no
+# docker CLI, and a deployer inside the thing it deploys kills itself when
+# compose recreates its own container — before the health check and rollback.
+# The firing time is computed from 18:30 ET at install time; if the host zone
+# ever drifts, deploy.sh's own internal ET window guard refuses the unsafe
+# times, so a wrong local time degrades to a skipped deploy, never a
+# mid-session restart.
+deploy_hm="$(date -d 'TZ="America/New_York" 18:30' +%H:%M 2>/dev/null || echo 18:30)"
+deploy_line="${deploy_hm#*:} ${deploy_hm%%:*} * * 1-5 $repo_root/scripts/deploy.sh >> $data_dir/status/cron/deploy-host.log 2>&1"
+if crontab -l 2>/dev/null | grep -qF "scripts/deploy.sh"; then
+  ok "host crontab already runs deploy.sh"
+elif [ "$check_only" -eq 1 ]; then
+  warn "host crontab does NOT run deploy.sh — nightly image/config deploys never happen (run bootstrap without --check to install)"
+else
+  { crontab -l 2>/dev/null; printf '# trade-challenge nightly deploy — 18:30 ET, installed by bootstrap-server.sh\n%s\n' "$deploy_line"; } | crontab - \
+    && ok "installed host cron: $deploy_line" \
+    || warn "could not install the host crontab entry — add it by hand: $deploy_line"
+fi
+
+step "5d. The store is reachable from INSIDE the scheduler"
 # The symlinks the container sees through /app are the HOST's symlinks, with
 # host-absolute targets. If the store is mounted anywhere but that same path,
 # every one of them dangles in the container and the first scheduled job dies
