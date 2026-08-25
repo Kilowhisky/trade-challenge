@@ -64,6 +64,13 @@ services:
       - "0.0.0.0"
       - --port
       - "8000"
+    # Loopback-only on the host, so the laptop can reach the ONE live broker
+    # over `ssh -L 8000:127.0.0.1:8000 brewmaster` without depending on the
+    # container's bridge IP (which changes on recreate). Schwab issues one
+    # refresh token per app: a second schwab-mcp on the laptop cannot hold a
+    # live token alongside this one (2026-08-25). Never bind 0.0.0.0 here.
+    ports:
+      - "127.0.0.1:8000:8000"
     environment:
       <<: *common-env
       SCHWAB_CLIENT_ID: ${SCHWAB_CLIENT_ID:?set in docker/.env}

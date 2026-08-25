@@ -26,6 +26,7 @@ ENV UV_INSTALL_DIR=/usr/local/bin \
 # the night before the first scheduled fire.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl git jq tzdata procps ripgrep openssh-client \
+      python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # --- claude, pinned -------------------------------------------------------

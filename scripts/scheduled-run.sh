@@ -34,6 +34,17 @@ today="$(et +%F)"
 dow="$(et +%u)"          # 1=Mon .. 7=Sun
 stamp="$(et '+%Y-%m-%d %H:%M:%S %Z')"
 
+# --- local secrets --------------------------------------------------------
+# deep-research.md §D says FMP_API_KEY is "sourced from .env.local". Nothing
+# did the sourcing, so the 2026-08-25 postclose ran with the key unreadable
+# and had to substitute a weaker web sweep. The file is a bind-mounted,
+# mode-600 KEY=value list; export it into the agent's environment if present.
+# It is never logged and never handed to the prompt.
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -r "$repo_root/.env.local" ]; then
+  set -a; . "$repo_root/.env.local"; set +a
+fi
+
 # --- test seam ------------------------------------------------------------
 # TC_DRY_RUN=1 replaces the claude dispatch with an echo, so the guards can be
 # exercised for real. The clock and day-of-week overrides are honoured ONLY
