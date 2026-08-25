@@ -24,7 +24,15 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 notify() { "$repo_root/scripts/discord-notify.sh" "$1" >/dev/null 2>&1 || true; }
 say() { printf 'token-watchdog: %s\n' "$*" >&2; }
 
-# Linux (container) first, then macOS, then an explicit override.
+# Where the token actually is depends on where this runs, and getting that
+# wrong is not a small bug: on the server the token lives in a DOCKER VOLUME,
+# not on the host filesystem. An earlier version checked only host paths, found
+# nothing, and would have fired "token missing" every single day — an alarm
+# that cries wolf daily is worse than no alarm, because it trains you to ignore
+# the one day it is right.
+#
+# Order: explicit override, then the in-container path (the crontab runs this
+# inside the scheduler), then macOS, then — from the host — read the volume.
 for candidate in \
   "${SCHWAB_TOKEN_PATH:-}" \
   "$HOME/.local/share/schwab-mcp/token.yaml" \
@@ -33,13 +41,26 @@ do
   [ -n "$candidate" ] && [ -f "$candidate" ] && { token_file="$candidate"; break; }
 done
 
-if [ -z "${token_file:-}" ]; then
-  say "no token file found"
-  notify "🚨 **Schwab token missing** — no token file on the server. Every scheduled job that touches the broker will fail until you re-auth. Runbook: README.md → Schwab re-auth."
-  exit 0
+created=""
+if [ -n "${token_file:-}" ]; then
+  created="$(grep -m1 '^creation_timestamp:' "$token_file" | tr -dc '0-9')"
+elif command -v docker >/dev/null 2>&1; then
+  # Host fallback: pull just the timestamp line out of the named volume. Only
+  # that line ever leaves the volume — a watchdog has no business handling the
+  # credential itself.
+  vol="${SCHWAB_TOKEN_VOLUME:-trade-challenge_schwab-token}"
+  if docker volume inspect "$vol" >/dev/null 2>&1; then
+    created="$(docker run --rm -v "$vol":/t:ro alpine \
+                 sh -c "grep -m1 '^creation_timestamp:' /t/token.yaml 2>/dev/null" 2>/dev/null | tr -dc '0-9')"
+    [ -n "$created" ] && token_file="docker volume $vol"
+  fi
 fi
 
-created="$(grep -m1 '^creation_timestamp:' "$token_file" | tr -dc '0-9')"
+if [ -z "${token_file:-}" ]; then
+  say "no token file found (checked host paths and the docker volume)"
+  notify "🚨 **Schwab token missing** — no token file found on the server, in either the host paths or the \`trade-challenge_schwab-token\` volume. Every scheduled job that touches the broker will fail until you re-auth. Runbook: README.md → Schwab re-auth."
+  exit 0
+fi
 if [ -z "$created" ]; then
   say "could not read creation_timestamp from $token_file"
   notify "⚠️ **Schwab token unreadable** — \`creation_timestamp\` missing from the token file. Cannot tell how old it is; re-auth if jobs start failing."

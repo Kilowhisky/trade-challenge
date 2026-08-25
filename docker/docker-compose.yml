@@ -120,6 +120,14 @@ services:
       - ..:/app
       - ${TC_DATA_DIR:-../../trade-challenge-store}:/data
       - claude-home:/home/trader/.claude
+      # READ-ONLY, and only so token-watchdog.sh can read creation_timestamp.
+      # The token lives in a docker VOLUME, not on the host filesystem, so a
+      # watchdog running on the host finds nothing and fires "token missing"
+      # every single day — an alarm that cries wolf daily is worse than none,
+      # because it trains you to ignore the one day it is right. Mounting it
+      # here lets the watchdog use the ordinary in-container path.
+      # :ro matters — the scheduler must never be able to write the token.
+      - schwab-token:/home/trader/.local/share/schwab-mcp:ro
     # supercronic itself is tiny, but it forks `claude` inside this container,
     # which is the memory-hungry part. 2g leaves ~1.2Gi for the host and broker.
     # An OOM here kills that one job with exit 137, which scheduled-run.sh
