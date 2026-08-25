@@ -99,6 +99,85 @@ for f in scripts/*.sh; do
 done
 [ "$hard" -eq 0 ] && note "no hard-coded rule percentages found"
 
+# --- 4. the broker may never be run ungated -------------------------------
+# schwab-mcp has three states (cli.py:300-341). Handing it the Discord config
+# registers the write tools behind the ✅/❌ gate; --jesus-take-the-wheel
+# registers them behind NoOpApprovalManager, which approves everything. On an
+# unattended server that flag is the difference between "Chris confirms every
+# order" and "no human is involved in any order". It is one copy-pasted line
+# away at all times, so it gets a permanent grep.
+echo "== broker is never run ungated =="
+if grep -rn -- '--jesus-take-the-wheel' docker/ scripts/ .claude/ 2>/dev/null \
+     | grep -v 'check-consistency.sh' | grep -vE '^\S+:[0-9]+:\s*#' >/dev/null 2>&1; then
+  bad "--jesus-take-the-wheel appears outside a comment — it bypasses the Discord approval gate entirely"
+  grep -rn -- '--jesus-take-the-wheel' docker/ scripts/ .claude/ 2>/dev/null \
+    | grep -v 'check-consistency.sh' | grep -vE '^\S+:[0-9]+:\s*#' | sed 's/^/      /'
+else
+  note "no ungated-broker flag anywhere in docker/, scripts/, .claude/"
+fi
+
+# --- 5. the schedule matches what the command files claim -----------------
+# The times live in two places by necessity: docker/crontab makes them happen,
+# and the command files document them. This is the same drift class as check 1 —
+# a schedule edit that never reaches the docs leaves every reader believing a
+# time that has not been true for weeks.
+echo "== schedule matches the command files =="
+if [ -f docker/crontab ]; then
+  sched=0
+  check_slot() { # job  expected-HH:MM  file  human-label
+    local job="$1" want="$2" file="$3" label="$4" line hh mm got
+    line="$(grep -E "scheduled-run\.sh[[:space:]]+$job\b" docker/crontab | grep -vE '^[[:space:]]*#' | head -1)"
+    if [ -z "$line" ]; then bad "docker/crontab has no entry for '$job'"; return; fi
+    mm="$(awk '{print $1}' <<<"$line")"; hh="$(awk '{print $2}' <<<"$line")"
+    got="$(printf '%02d:%02d' "$hh" "$mm")"
+    sched=$((sched+1))
+    # The crontab minute is deliberately nudged off the documented mark to dodge
+    # the :00/:15/:30 herd, so agreement is to the hour, not the minute.
+    if [ "${got%%:*}" != "${want%%:*}" ]; then
+      bad "docker/crontab runs '$job' at $got ET but $file documents $want ($label)"
+    fi
+  }
+  check_slot preopen   "08:15" ".claude/commands/deep-research.md" "§Dispatch / §P"
+  check_slot postclose "16:20" ".claude/commands/deep-research.md" "§Dispatch / §D"
+  [ "$sched" -gt 0 ] && note "$sched scheduled job(s) checked against their command files"
+else
+  note "docker/crontab absent — skipping (not deployed on this machine)"
+fi
+
+# --- 6. the sidecar paths stay out of the public repo ---------------------
+# research/, status/ and trade-log.csv are symlinks into the PRIVATE store repo.
+# They were ignored as `research/` and `status/` — trailing slash, which matches
+# a DIRECTORY ONLY. The moment they became symlinks they fell out of the ignore
+# rules and showed up as untracked, one `git add -A` from committing
+# machine-specific absolute paths into a public repository. Caught 2026-08-24.
+echo "== sidecar paths are ignored (as symlinks, not just as directories) =="
+sidecar_ok=1
+for path in research status trade-log.csv; do
+  if ! git check-ignore -q "$path" 2>/dev/null; then
+    bad "$path is NOT gitignored — it would be committed to the PUBLIC repo"
+    note "if it is a symlink, drop the trailing slash from its .gitignore entry"
+    sidecar_ok=0
+  fi
+done
+if git ls-files --error-unmatch research status trade-log.csv >/dev/null 2>&1; then
+  bad "a sidecar path is TRACKED in the public repo — it must never be"
+  sidecar_ok=0
+fi
+[ "$sidecar_ok" -eq 1 ] && note "research, status, trade-log.csv all ignored and untracked"
+
+# --- 7. documented commands must be commands that exist --------------------
+# `docker compose run` has no --network flag; that is `docker run`. The re-auth
+# runbook carried it in five places and failed the first time Chris ran it, at
+# the exact moment the account needed a token. Host networking is declared on
+# the schwab-auth service instead.
+echo "== documented docker commands are real =="
+if grep -rn "compose run[^|]*--network host" README.md scripts/ docker/ 2>/dev/null | grep -v check-consistency >/dev/null 2>&1; then
+  bad "a doc passes --network to 'docker compose run', which does not support it"
+  grep -rn "compose run[^|]*--network host" README.md scripts/ docker/ 2>/dev/null | grep -v check-consistency | sed 's/^/      /'
+else
+  note "no unsupported flags in documented compose commands"
+fi
+
 echo
 if [ "$fails" -eq 0 ]; then echo "CONSISTENT — rules.yml, docs, and scripts agree."; exit 0; fi
 echo "$fails inconsistency(ies). rules.yml is the source of truth; fix the other side."; exit 1

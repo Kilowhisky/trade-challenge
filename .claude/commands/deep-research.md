@@ -49,13 +49,24 @@ The parent does not execute §P/§D itself:
    inline §P/§D as a last resort. Two consecutive genuine failures: log an
    events corpus entry and go quiet for the session — a missed deep pass
    is never `ALERT.md` material and never interrupts the monitoring loop.
-5. Cron entries are session-scoped (harness CronCreate: in-memory, die with
-   the session, 7-day auto-expiry). At session open, if the two entries are
-   absent, re-create them: `15 5 * * 1-5` → `/deep-research preopen` and
-   `20 13 * * 1-5` → `/deep-research postclose` (PT local). Re-creation
-   prevents *tomorrow's* miss; it cannot produce *today's* pre-open brief,
-   because a session opening after 05:15 PT has already passed the fire
-   time. That gap is closed by the playbook §9 catch-up, not here.
+5. **The schedule lives on the server, not in the session.** Both runs are
+   fired by `docker/crontab` on the always-on box — `17 8 * * 1-5` preopen and
+   `22 16 * * 1-5` postclose, container TZ `America/New_York`, so those are ET
+   directly. Every run goes through `scripts/scheduled-run.sh`, which owns the
+   lock, the ET window guard, the heartbeat and the Discord relay.
+
+   There is nothing left to re-create at session open. This used to read
+   "cron entries are session-scoped (harness CronCreate: in-memory, die with
+   the session, 7-day auto-expiry)… at session open, if the two entries are
+   absent, re-create them." That mitigation could not work and the record shows
+   it: re-creation prevents *tomorrow's* miss, never today's, and the machine
+   was a sleeping laptop that could not fire at 05:15 PT on a closed lid at
+   all. Four consecutive briefs were lost 8/15–8/19 and more after.
+
+   The playbook §9 pre-open catch-up **stays**, and is still the guarantee —
+   it now covers a container that was down or a job that fired outside its
+   08:00–09:15 ET window, rather than a session that simply started late.
+   `scripts/job-deadman.sh` reports a miss to Discord the same morning.
 
 ## §A — Preconditions
 

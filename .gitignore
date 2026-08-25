@@ -7,6 +7,11 @@
 # Credentials — nothing here should ever be committed
 .env
 .env.*
+# ...but the template must ship: it carries key NAMES and no values, and
+# bootstrap-server.sh copies it to create docker/.env on a fresh box. Without
+# this negation the `.env.*` rule above silently swallows it and a clean clone
+# cannot bootstrap.
+!.env.example
 *.token
 *.pem
 .mcp.json
@@ -14,8 +19,14 @@
 # Mac garbage
 .DS_Store
 
-# Trade information
-research/
-status/
+# Trade information — lives in the PRIVATE sidecar repo (trade-challenge-store);
+# these paths are symlinks into it on both the laptop and the server.
+#
+# NO TRAILING SLASHES. `research/` matches a directory only, and a symlink is
+# not a directory to git — the moment these became symlinks they fell out of
+# the ignore rules and showed up as untracked, one `git add -A` away from
+# committing machine-specific absolute paths into a public repo.
+research
+status
 trade-log.csv
 

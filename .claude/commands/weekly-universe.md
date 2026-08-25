@@ -31,9 +31,13 @@ The parent does **not** execute §B–§D itself:
    `FAIL:`, decides whether Chris needs a heads-up — the agent itself never
    escalates (it has no means to).
 
-Cron registration mechanics for a weekly cadence are an open item in the
-design doc (§9.3) — until resolved, run this command manually at a weekend
-session open rather than assuming a standing schedule.
+**Scheduled: `40 7 * * 6` ET** (`docker/crontab`), via
+`scripts/scheduled-run.sh weekly-universe`, with an ET window guard of
+06:00–12:00 Saturday. This closes what was an open item — "cron registration
+mechanics for a weekly cadence are an open item in the design doc (§9.3) —
+until resolved, run this command manually at a weekend session open". The
+manual weekend run is no longer the cadence; it is the fallback if the
+`Assembled:` deadman in playbook §9 reports the sweep stale.
 
 Fallback chain on a `FAIL:` about missing tools, same as tick.md/research.md
 §Dispatch: first a `general-purpose` subagent prompted to obey

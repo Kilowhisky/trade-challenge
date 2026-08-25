@@ -348,11 +348,13 @@ differences investigated before any order) → loop → planned actions.
 - **Pre-open catch-up** *(strategy rule, added 2026-08-19)*: if today's
   `research/preopen/DATE.md` does not exist **and it is before 12:00 ET**,
   run `/deep-research preopen` here, once — after the §3.6 check, before the
-  monitoring loop starts. The crons are session-scoped, so a session that
-  opens after 05:15 PT structurally cannot produce its own pre-open brief;
-  that cost four consecutive briefs, 8/15 through 8/19, before it was read
-  as a pattern rather than four incidents. **The cron is the fast path;
-  this is the guarantee.** If the file already exists, no-op — never
+  monitoring loop starts. This began as cover for session-scoped crons that
+  died with the session — which cost four consecutive briefs, 8/15 through
+  8/19, before it was read as a pattern rather than four incidents. The
+  schedule now lives on the server and no longer dies, but the catch-up
+  **stays**: it covers a container that was down, a job that fired outside its
+  08:00-09:15 ET window, and a Schwab token that lapsed overnight.
+  **The scheduled job is the fast path; this is the guarantee.** If the file already exists, no-op — never
   double-write a brief the cron already produced. **After 12:00 ET, skip it
   and say so in the session-open summary:** by midday the live `/research`
   loop has been reading the tape on RTH data, and a "pre-open" brief written
@@ -364,19 +366,22 @@ differences investigated before any order) → loop → planned actions.
   `research/universe.md` — the line `/weekly-universe` writes into the body.
   If it is older than 8 days, the weekly sweep has not run: say so in the
   session-open summary as a status line (not `ALERT.md`) and **run
-  `/weekly-universe` manually** at the next weekend open. There is no weekly
-  cron — cron mechanics for a weekly cadence are an open item
-  (`.claude/commands/weekly-universe.md` §Dispatch), so there is nothing to
-  re-create; the manual run *is* the cadence until that is resolved. Read the
+  `/weekly-universe` manually** — the scheduled Saturday 07:40 ET job
+  (`docker/crontab`) is the cadence now, so a stale stamp means that job did
+  not fire and the manual run is the recovery, not the routine. Read the
   in-file stamp, **not the file mtime**: `research/universe.md` is
   git-tracked, and a checkout, rebase, or stash touches its mtime without
   regenerating a thing — an mtime deadman would report a fresh universe on a
   sweep that never ran. A stale working universe silently narrows discovery,
   which is exactly the failure the weekly tier was built to remove.
-- **Cron re-creation:** session open also re-creates the two
-  `/deep-research` cron entries if absent (`.claude/commands/deep-research.md`
-  §Dispatch) — the deadman above only detects a dead loop a day late;
-  re-creating the crons here prevents it from going dead in the first place.
+- **Scheduled jobs run on the server, not in the session.** There is nothing
+  to re-create at open. `docker/crontab` fires preopen, postclose and the
+  weekly sweep on the always-on box (`.claude/commands/deep-research.md`
+  §Dispatch), and `scripts/job-deadman.sh` reports a miss to Discord the same
+  morning. This bullet used to say "session open also re-creates the two
+  `/deep-research` cron entries if absent" — a mitigation for session-scoped
+  crons that could only ever prevent tomorrow's miss, on a laptop that was
+  asleep at the fire time anyway.
 
 **Weekly, first session of the week** *(strategy rule)*: compute the 60-day
 daily-return correlation of held names at the open, before the loop starts —

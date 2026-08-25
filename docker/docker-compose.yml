@@ -1,0 +1,193 @@
+# Trade-challenge server topology.
+#
+# Paths are relative to this file, so the repo root is `..`. Run everything from
+# the docker/ directory (or with `-f docker/docker-compose.yml`).
+#
+# READ THIS BEFORE ADDING ENV VARS TO `broker`:
+# schwab-mcp sets allow_write from three cases (cli.py:300-341) —
+#   1. no Discord config, no flag  -> allow_write=False
+#   2. Discord token+channel+approver -> allow_write=True, ✅/❌ gated
+#   3. --jesus-take-the-wheel      -> allow_write=True, NoOpApprovalManager
+# The Discord configuration is what ENABLES writes. Phases 1-3 run in state 1.
+#
+# MEASURED, not assumed: allow_write=False registers 23 tools, allow_write=True
+# registers 25. The two it adds are exactly `place_previewed_order` and
+# `cancel_order`. The seven `preview_*_order` tools are present EITHER WAY — a
+# preview is a real Schwab API call but changes nothing, and cannot become an
+# order without place_previewed_order, which state 1 does not have.
+# So state 1 cannot place or cancel. It can still preview.
+#
+# State 3 must never be used here — scripts/check-consistency.sh fails if the
+# flag appears anywhere in this repo.
+
+name: trade-challenge
+
+x-common: &common
+  # A FULL reference, not a tag suffix. scripts/deploy.sh rolls back by pinning
+  # the previous image by DIGEST, and `...:${IMAGE_TAG}` cannot express that —
+  # it produced `...:sha256:0f8b…`, an invalid reference, so the rollback failed
+  # while Discord reported success. Digest-pinning is also immune to a tag
+  # being moved under it, which is exactly what you want when restoring a known
+  # good image.
+  image: ${TC_IMAGE:-ghcr.io/kilowhisky/trade-challenge:latest}
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+  environment: &common-env
+    TZ: America/New_York
+    HOME: /home/trader
+  restart: unless-stopped
+
+services:
+
+  # --- the broker: one token holder, one process, one re-auth point --------
+  # Every scheduled run attaches over HTTP instead of spawning its own stdio
+  # subprocess. N stdio brokers would race on one token.yaml, and each could
+  # independently trigger a BLOCKING 5-minute login flow (auth.py easy_client ->
+  # client_from_login_flow, callback_timeout=300.0) inside a job that has 30
+  # seconds of patience.
+  broker:
+    <<: *common
+    container_name: tc-broker
+    # The entrypoint refuses to start schwab-mcp without a usable token. Measured
+    # behaviour without it: easy_client falls through to an interactive login
+    # flow that blocks 300s for a browser callback that cannot arrive, then
+    # dies — a five-minute-per-iteration crash-loop under `restart:
+    # unless-stopped`. The guard waits quietly instead and self-starts when a
+    # fresh token appears.
+    entrypoint: ["/app/docker/broker-entrypoint.sh"]
+    command:
+      - schwab-mcp
+      - server
+      - --http
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+    environment:
+      <<: *common-env
+      SCHWAB_CLIENT_ID: ${SCHWAB_CLIENT_ID:?set in docker/.env}
+      SCHWAB_CLIENT_SECRET: ${SCHWAB_CLIENT_SECRET:?set in docker/.env}
+      # NO SCHWAB_MCP_DISCORD_* HERE. discord_requested is
+      # `any(token, channel, approvers)` — ANY ONE of those names flips
+      # allow_write to True and hands this container place_previewed_order.
+      # Phase 4, gated on a §9 amendment.
+      #
+      # The entrypoint still needs to reach Discord to say "waiting for
+      # re-auth", so it gets the SAME credentials under names schwab-mcp does
+      # not read. scripts/test-broker-readonly.sh asserts this cannot regress.
+      TC_DISCORD_TOKEN: ${SCHWAB_MCP_DISCORD_TOKEN:?set in docker/.env}
+      TC_DISCORD_CHANNEL_ID: ${SCHWAB_MCP_DISCORD_CHANNEL_ID:?set in docker/.env}
+    volumes:
+      - ..:/app:ro
+      - schwab-token:/home/trader/.local/share/schwab-mcp
+    # The target is a Raspberry Pi 4 with 3.7Gi RAM and 511Mi swap. Without
+    # limits, one runaway headless claude run in the scheduler can push the box
+    # into swap-death and take the broker with it — losing the token holder and
+    # every job at once. The broker is a light Python process; this is generous.
+    mem_limit: 512m
+    # This box is SHARED, and not with trivia: pihole-FTL is DNS for the whole
+    # network, and Home Assistant (~470MB, the largest single process here) runs
+    # home automation. Measured baseline with both up: 762MB used of 3796MB, so
+    # our 512m + 2g ceiling fits inside the ~3.0GB available with roughly 500MB
+    # to spare, on top of 3.5GB of swap whose fast 1.5GB tier is zram.
+    #
+    # Under real pressure the kernel picks its own victim and the largest RSS is
+    # not the one you can least afford to lose — it would reach for Home
+    # Assistant first. A positive oom_score_adj makes our containers the
+    # preferred casualty instead, so a bad research run costs a research run and
+    # not the household's DNS or lights.
+    oom_score_adj: 500
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c 'exec 3<>/dev/tcp/127.0.0.1/8000'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # --- the scheduler: what actually fixes the reported bug -----------------
+  scheduler:
+    <<: *common
+    container_name: tc-scheduler
+    command: ["supercronic", "-passthrough-logs", "/app/docker/crontab"]
+    environment:
+      <<: *common-env
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?set in docker/.env}
+      SCHWAB_MCP_DISCORD_TOKEN: ${SCHWAB_MCP_DISCORD_TOKEN:?set in docker/.env}
+      SCHWAB_MCP_DISCORD_CHANNEL_ID: ${SCHWAB_MCP_DISCORD_CHANNEL_ID:?set in docker/.env}
+      TC_BROKER_URL: http://broker:8000/mcp
+    volumes:
+      - ..:/app
+      - ${TC_DATA_DIR:-../../trade-challenge-store}:/data
+      - claude-home:/home/trader/.claude
+      # READ-ONLY, and only so token-watchdog.sh can read creation_timestamp.
+      # The token lives in a docker VOLUME, not on the host filesystem, so a
+      # watchdog running on the host finds nothing and fires "token missing"
+      # every single day — an alarm that cries wolf daily is worse than none,
+      # because it trains you to ignore the one day it is right. Mounting it
+      # here lets the watchdog use the ordinary in-container path.
+      # :ro matters — the scheduler must never be able to write the token.
+      - schwab-token:/home/trader/.local/share/schwab-mcp:ro
+    # supercronic itself is tiny, but it forks `claude` inside this container,
+    # which is the memory-hungry part. 2g leaves ~1.2Gi for the host and broker.
+    # An OOM here kills that one job with exit 137, which scheduled-run.sh
+    # reports — far better than the kernel picking a victim at random.
+    mem_limit: 2g
+    # Higher than the broker's: if something has to die, kill the job, not the
+    # token holder that every other job depends on.
+    oom_score_adj: 800
+    depends_on:
+      broker:
+        condition: service_healthy
+
+  # --- interactive sessions: `docker compose run --rm -it claude` ----------
+  claude:
+    <<: *common
+    container_name: tc-claude
+    profiles: ["manual"]
+    restart: "no"
+    stdin_open: true
+    tty: true
+    mem_limit: 2g
+    oom_score_adj: 800
+    command: ["claude"]
+    environment:
+      <<: *common-env
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?set in docker/.env}
+      SCHWAB_MCP_DISCORD_TOKEN: ${SCHWAB_MCP_DISCORD_TOKEN:?set in docker/.env}
+      SCHWAB_MCP_DISCORD_CHANNEL_ID: ${SCHWAB_MCP_DISCORD_CHANNEL_ID:?set in docker/.env}
+      TC_BROKER_URL: http://broker:8000/mcp
+    volumes:
+      - ..:/app
+      - ${TC_DATA_DIR:-../../trade-challenge-store}:/data
+      - claude-home:/home/trader/.claude
+    depends_on:
+      broker:
+        condition: service_healthy
+
+  # --- Schwab OAuth re-auth, ~weekly ---------------------------------------
+  # network_mode: host is REQUIRED, not convenience. auth.py:106-112 hard-rejects
+  # any callback hostname but 127.0.0.1, so the callback server binds the
+  # container's loopback — which a published port cannot reach, because Docker's
+  # proxy targets the container IP, not its loopback. With host networking the
+  # container's 127.0.0.1:8182 IS the host's, so `ssh -L 8182:127.0.0.1:8182`
+  # from your laptop reaches it. Runbook in README.md.
+  schwab-auth:
+    <<: *common
+    container_name: tc-schwab-auth
+    profiles: ["manual"]
+    restart: "no"
+    network_mode: host
+    stdin_open: true
+    tty: true
+    command: ["schwab-mcp", "auth"]
+    environment:
+      <<: *common-env
+      SCHWAB_CLIENT_ID: ${SCHWAB_CLIENT_ID:?set in docker/.env}
+      SCHWAB_CLIENT_SECRET: ${SCHWAB_CLIENT_SECRET:?set in docker/.env}
+    volumes:
+      - schwab-token:/home/trader/.local/share/schwab-mcp
+
+volumes:
+  schwab-token:
+  claude-home:

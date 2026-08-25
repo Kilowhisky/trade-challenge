@@ -1,0 +1,177 @@
+# Build the toolchain image and publish it to GHCR.
+#
+# This builds the TOOLCHAIN ONLY. The repo is bind-mounted on the server, never
+# baked in, so a rule amendment or command-file fix does NOT need a rebuild and
+# does not trigger this workflow. That is why the paths filter is so narrow: if
+# every commit rebuilt the image, image deploys would stop being rare enough to
+# confine to a safe window.
+#
+# §7.4: this repository is public, so the image is public too. Nothing here may
+# introduce a secret — no build args carrying credentials, no COPY of .env, no
+# baked token. The Dockerfile installs pinned toolchain versions and nothing
+# else; keep it that way.
+#
+# ONE MANUAL STEP THIS FILE CANNOT DO FOR ITSELF: a GHCR package is created
+# PRIVATE, whatever the repository's visibility. scripts/deploy.sh runs `docker
+# pull` on the Pi with no credentials at all, so until the package is switched
+# to Public by hand (Packages -> trade-challenge -> Package settings -> Danger
+# Zone -> Change visibility) every deploy fails with `denied`. Making it public
+# is the option that leaves no long-lived credential on the Pi, and the
+# Dockerfile has no COPY and no secret-bearing build arg, so there is nothing in
+# the image to protect.
+
+name: image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docker/Dockerfile'
+      - '.github/workflows/image.yml'
+    tags: ['v*']
+  # Verified against the GitHub docs and the actions/runner tracker, because the
+  # shape of this block is easy to misread: `branches` and `tags` are OR'd (a
+  # ref is one or the other, never both), and `paths` is AND'ed with `branches`
+  # for branch pushes but is IGNORED entirely for tag pushes. So a v* tag
+  # rebuilds unconditionally — which is what we want from a release tag — while
+  # an ordinary commit to main only rebuilds when the toolchain definition
+  # itself moved.
+  #
+  # workflow_dispatch only appears once this file is on the DEFAULT branch.
+  # While it lives on a feature branch there is no manual button and no push
+  # trigger, so the workflow cannot run at all until it merges to main.
+  workflow_dispatch:
+
+# scripts/deploy.sh auto-pulls :latest at 18:30 ET. Two builds racing to own
+# that tag can leave the older image as :latest and ship it that evening, so
+# builds queue rather than overlap.
+concurrency:
+  group: image
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # The arm64 leg is QEMU-emulated, so it is slow by construction. This is not
+    # a performance target — it is a bound on a hung emulated build, which would
+    # otherwise sit on the default six-hour job limit.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # Every action here is on its node24 major. The node20 generation (the
+      # v3/v4/v5/v6 line these were pinned to) is removed from GitHub-hosted
+      # runners in the autumn of 2026 — after that, a workflow this rare would
+      # break silently and only be discovered on the evening someone needed a
+      # rebuild.
+      - uses: actions/checkout@v7
+
+      # QEMU BEFORE buildx, not after. setup-buildx-action bootstraps the
+      # builder and the builder records the platforms it can serve at that
+      # moment; registering binfmt afterwards is how a build ends up refusing
+      # linux/arm64 on a runner that can plainly emulate it.
+      - uses: docker/setup-qemu-action@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # scripts/deploy.sh and docker-compose.yml both resolve the image as
+          # :latest, so :latest is the only tag the server ever installs. The
+          # sha- tag exists to make every build addressable by commit for a
+          # manual `TC_IMAGE=...:sha-xxxxxxx` pin.
+          #
+          # The second `latest` line is load-bearing: is_default_branch is
+          # computed from refs/heads/<name> and returns false for ANY tag push
+          # (verified in metadata-action's meta.ts), so without it a v* release
+          # tag builds an image the server would never pull — the tag trigger
+          # above would be pure ceremony.
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern=v{{version}}
+
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          # The deployment target is a Raspberry Pi 4 (aarch64). A default
+          # ubuntu-latest build produces amd64 only, which simply will not run
+          # there — `exec format error` at deploy time, in the 18:30 window,
+          # with a rollback as the best case. arm64 is the one that matters;
+          # amd64 is kept so the image is testable on an x86 box.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Kept, but expect it to be cold most runs: the paths filter makes
+          # this workflow rare and GHA cache entries are evicted after a week
+          # of no reads. It saves nothing on the first build and is not the
+          # thing to reach for if the emulated arm64 leg becomes too slow — a
+          # native ubuntu-24.04-arm runner is.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A pinned toolchain that silently stops being pinned is worse than an
+      # unpinned one, because nobody re-checks it. Fail the build if the image
+      # does not carry the versions the Dockerfile claims.
+      #
+      # Addressed by DIGEST rather than by a reconstructed tag, for two reasons
+      # that both ended in a hard failure. github.repository is
+      # `Kilowhisky/trade-challenge` — mixed case; metadata-action lowercases it
+      # for the push but a hand-built string keeps the capital K, and docker
+      # rejects that outright ("repository name must be lowercase") for run,
+      # pull and imagetools alike. And `git rev-parse --short` only coincides
+      # with metadata-action's fixed 7-character sha tag while this repo stays
+      # small — git widens the abbreviation as the object count grows. The
+      # digest is what was actually pushed, exactly, and cannot drift.
+      #
+      # buildx pushed straight to the registry and never loaded the image into
+      # the local daemon, so each `docker run` below pulls it back down. That is
+      # deliberate: it tests the artifact the Pi will receive, not a local
+      # build cache.
+      - name: verify pins on both architectures
+        run: |
+          repo=$(echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+          img="${repo}@${{ steps.build.outputs.digest }}"
+          echo "verifying $img"
+
+          want_claude=$(grep -oE 'CLAUDE_VERSION=[0-9.]+' docker/Dockerfile | cut -d= -f2)
+
+          # Both arches, not just amd64. arm64 is the leg that actually ships to
+          # the Pi and the only one QEMU can get wrong; checking amd64 alone
+          # verifies the architecture nothing in production runs.
+          for plat in linux/amd64 linux/arm64; do
+            echo "--- $plat ---"
+            claude_v=$(docker run --rm --platform "$plat" --entrypoint claude "$img" --version \
+                       | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+            [ "$claude_v" = "$want_claude" ] || { echo "$plat: claude $claude_v != pinned $want_claude"; exit 1; }
+            docker run --rm --platform "$plat" --entrypoint schwab-mcp "$img" --help >/dev/null
+            docker run --rm --platform "$plat" -v "$PWD:/app:ro" --entrypoint supercronic "$img" -test /app/docker/crontab
+          done
+
+          # The deploy target is arm64. Asserting the manifest carries it here is
+          # the difference between finding out in CI and finding out on the Pi
+          # at 18:30 with an exec format error. (The listing also carries
+          # unknown/unknown rows — those are the provenance attestations
+          # build-push-action attaches by default, not a broken platform.)
+          echo "--- manifest platforms ---"
+          docker buildx imagetools inspect "$img" --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}}{{"\n"}}{{end}}' | sort -u | tee /tmp/plats
+          grep -qx 'linux/arm64' /tmp/plats || { echo "FAIL: no linux/arm64 in the manifest — this image cannot run on the Pi"; exit 1; }
+          grep -qx 'linux/amd64' /tmp/plats || { echo "FAIL: no linux/amd64 in the manifest"; exit 1; }
+          echo "pins verified on amd64 + arm64: claude $claude_v"

@@ -1,0 +1,29 @@
+# Scheduled jobs — supercronic, container TZ=America/New_York, so every time
+# below is ET and matches the times the command files state directly.
+#
+# The minutes are deliberately off :00/:15/:30. Every scheduler on the planet
+# fires on those marks; :17 and :22 sidestep the herd at both the Schwab and
+# Anthropic APIs for no cost.
+#
+# Labor Day 2026-09-07 is NOT special-cased. /deep-research §A and
+# get_market_hours no-op it, at the cost of one wasted run. That is deliberate:
+# a date hard-coded into a schedule file is a date that silently stops matching
+# its rule — the exact defect commit 8f2171c removed from the dispatch prompt.
+#
+# Every job goes through scheduled-run.sh, which owns locking, the ET window
+# guard, logging and the heartbeat. Nothing calls `claude` directly.
+
+# --- research ------------------------------------------------------------
+17 8  * * 1-5   /app/scripts/scheduled-run.sh preopen
+22 16 * * 1-5   /app/scripts/scheduled-run.sh postclose
+40 7  * * 6     /app/scripts/scheduled-run.sh weekly-universe
+
+# --- watchdogs (Phase 3) --------------------------------------------------
+5  7  * * *     /app/scripts/token-watchdog.sh
+35 9  * * 1-5   /app/scripts/job-deadman.sh
+
+# --- deployment (Phase 1b) ------------------------------------------------
+# 18:30 ET: after postclose has finished, long before the next preopen. Never
+# inside 09:15-16:15 — a restart there drops any pending Discord approval,
+# whose state is in-memory and process-local (approvals/codemap.md).
+30 18 * * 1-5   /app/scripts/deploy.sh
