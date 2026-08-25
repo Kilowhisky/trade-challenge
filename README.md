@@ -46,15 +46,24 @@ realizable prices. Nothing is liquidated for scoring.
 | `docs/archive/` | Completed and superseded working documents, kept unedited as provenance: the day-one screen, the close review, the executed deep-research plan, an API spike, and a broker-tooling patch note. |
 | `scripts/` | Pre-order compliance gate and its regression suite, the rule-consistency checker, the weekly universe fetch/filter pair, and the append-only writers used by the research and monitoring loops. |
 | `.claude/` | Session commands and the read-only agents that run the research, monitoring, and deep-research loops. Those agents have no order tools by construction — they cannot place, cancel, or modify anything at the broker. |
+| `docker/` | **The server.** Pinned toolchain image, Compose topology, and the ET schedule that fires the research jobs. See *Running on a server* below. |
 | `ALERT.md` | Created only when something needs the account owner. An unacknowledged alert forces closing-only posture at the next session open. |
 
-**Not in this repo** — untracked, local to the operating machine:
+**Not in this repo** — these paths are **symlinks into a separate private
+repository**, `Kilowhisky/trade-challenge-store`:
 
 | Path | What it holds |
 |---|---|
 | `trade-log.csv` | Every order, appended before it is placed. |
-| `status/` | Daily close-of-session status notes, tick ledgers, and event data. |
-| `research/` | The tiered candidate list, screens, and standing research output. |
+| `status/` | Daily close-of-session status notes, tick ledgers, event data, scheduled-job logs. |
+| `research/` | The tiered candidate list, screens, briefs, and standing research output. |
+
+They were gitignored here and purged from this history on 2026-08-17 ahead of
+publication. The private sidecar keeps them out of public view while restoring
+the external witness §7.1 notes was lost, and carries scheduled-job output off
+the server. The symlinks mean every path the manual, playbook, command files
+and scripts already name keeps working unchanged; `scripts/sidecar-sync.sh`
+pushes after each scheduled job.
 
 The rest of `docs/` is working material: design specs for the research and
 monitoring loops, a close review, an API spike, and a broker-tooling patch note.
@@ -72,6 +81,79 @@ Rules in the playbook that are stricter than the manual are marked
    assumed state.
 4. Trade within the rules; every order gets logged before it is placed.
 5. At session close: write a status note. The log and the note stay local.
+
+## Running on a server
+
+The scheduled jobs used to be harness `CronCreate` entries. Those are in-memory
+and die with the session, and the machine was a laptop that slept — so the
+05:15 PT pre-open job could not fire on a closed lid at all. They now run on an
+always-on Ubuntu box under Docker Compose.
+
+**Two layers, deliberately separate.** The image holds only the toolchain
+(`claude`, `schwab-mcp`, supercronic — every version pinned). The repo is
+**bind-mounted, never baked in**, so a rule amendment or command-file fix takes
+effect without a rebuild. If the repo were in the image, every §9 amendment
+would become a Docker release and the container would drift from the manual.
+
+| Service | What it does |
+|---|---|
+| `broker` | One long-lived `schwab-mcp server --http`. One token holder, one re-auth point — instead of a stdio subprocess per run, all racing on `token.yaml`. |
+| `scheduler` | supercronic firing `scripts/scheduled-run.sh`, which owns the lock, the ET window guard, the heartbeat and the Discord relay. |
+| `claude` | `docker compose run --rm -it claude` for interactive sessions. |
+
+**The broker cannot place or cancel an order, and it is worth being precise
+about what that means.** `schwab-mcp` enables writes only when given the Discord
+approval configuration; a third mode, `--jesus-take-the-wheel`, enables them
+behind a stub that approves everything. The scheduled broker is given neither.
+
+Measured rather than assumed: that setting adds exactly two tools —
+`place_previewed_order` and `cancel_order`. The seven `preview_*_order` tools
+are registered either way. A preview is a real Schwab API call but changes
+nothing, and it cannot become an order without `place_previewed_order`. So the
+scheduled container can look at what an order would cost; it has no route to
+sending one. `check-consistency.sh` fails if the bypass flag appears anywhere
+in this repo.
+
+### Schwab re-auth (~weekly)
+
+The token dies at 7 days, and `schwab-mcp` forces a new login flow at 5.
+`scripts/token-watchdog.sh` warns in Discord a day ahead so this is scheduled
+rather than discovered.
+
+```bash
+ssh -L 8182:127.0.0.1:8182 <server>          # from your laptop
+cd trade-challenge/docker
+docker compose run --rm --network host schwab-auth
+# paste the printed authorization URL into your laptop browser,
+# accept the self-signed certificate warning
+```
+
+**No restart needed.** The broker checks the token before handing control to
+`schwab-mcp` and waits quietly when it is missing or stale, polling every five
+minutes; it starts itself once a good token appears. That guard exists because
+the alternative was measured: with no token, `schwab-mcp` falls through to an
+interactive login flow that blocks for 300s waiting on a browser callback that
+cannot arrive in a container, then dies — a five-minute-per-iteration crash-loop
+under `restart: unless-stopped`. It also means an expired token produces one
+Discord message, not one per restart forever.
+
+`--network host` is required, not convenience: the callback server only accepts
+`127.0.0.1`, and a published Docker port targets the container IP rather than
+its loopback, so the SSH forward would never reach it.
+
+### Deploying
+
+```bash
+scripts/bootstrap-server.sh          # fresh box, or --check to verify one
+scripts/deploy.sh                    # pull, health-check, roll back on failure
+```
+
+`deploy.sh` **refuses to run inside 09:15–16:15 ET** without `--force`: a
+restart mid-session drops any pending Discord approval, whose state is
+in-memory and process-local, leaving an order neither placed nor cleanly
+denied. The server tracks a `deploy` branch rather than `main`, and
+`repo-update.sh` adopts a new commit only if the rule suite still passes on it —
+otherwise it rolls back and says so in Discord.
 
 ## Why git, and what changed
 

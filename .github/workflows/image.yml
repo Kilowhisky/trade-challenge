@@ -1,0 +1,98 @@
+# Build the toolchain image and publish it to GHCR.
+#
+# This builds the TOOLCHAIN ONLY. The repo is bind-mounted on the server, never
+# baked in, so a rule amendment or command-file fix does NOT need a rebuild and
+# does not trigger this workflow. That is why the paths filter is so narrow: if
+# every commit rebuilt the image, image deploys would stop being rare enough to
+# confine to a safe window.
+#
+# §7.4: this repository is public, so the image is public too. Nothing here may
+# introduce a secret — no build args carrying credentials, no COPY of .env, no
+# baked token. The Dockerfile installs pinned toolchain versions and nothing
+# else; keep it that way.
+
+name: image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docker/Dockerfile'
+      - '.github/workflows/image.yml'
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # sha- tags are what scripts/deploy.sh pins to for rollback, so every
+          # build must be addressable by commit, not just by :latest.
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern=v{{version}}
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          # The deployment target is a Raspberry Pi 4 (aarch64). A default
+          # ubuntu-latest build produces amd64 only, which simply will not run
+          # there — `exec format error` at deploy time, in the 18:30 window,
+          # with a rollback as the best case. arm64 is the one that matters;
+          # amd64 is kept so the image is testable on an x86 box.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A pinned toolchain that silently stops being pinned is worse than an
+      # unpinned one, because nobody re-checks it. Fail the build if the image
+      # does not carry the versions the Dockerfile claims.
+      - name: verify pins and both architectures
+        run: |
+          img="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-$(git rev-parse --short HEAD)"
+          echo "verifying $img"
+
+          # A pinned toolchain that silently stops being pinned is worse than an
+          # unpinned one, because nobody re-checks it.
+          claude_v=$(docker run --rm --platform linux/amd64 --entrypoint claude "$img" --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          want_claude=$(grep -oE 'CLAUDE_VERSION=[0-9.]+' docker/Dockerfile | cut -d= -f2)
+          [ "$claude_v" = "$want_claude" ] || { echo "claude $claude_v != pinned $want_claude"; exit 1; }
+          docker run --rm --platform linux/amd64 --entrypoint schwab-mcp "$img" --help >/dev/null
+          docker run --rm --platform linux/amd64 -v "$PWD:/app" --entrypoint supercronic "$img" -test /app/docker/crontab
+
+          # The deploy target is arm64. Asserting the manifest carries it here is
+          # the difference between finding out in CI and finding out on the Pi
+          # at 18:30 with an exec format error.
+          echo "--- manifest platforms ---"
+          docker buildx imagetools inspect "$img" --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}}{{"\n"}}{{end}}' | sort -u | tee /tmp/plats
+          grep -qx 'linux/arm64' /tmp/plats || { echo "FAIL: no linux/arm64 in the manifest — this image cannot run on the Pi"; exit 1; }
+          grep -qx 'linux/amd64' /tmp/plats || { echo "FAIL: no linux/amd64 in the manifest"; exit 1; }
+          echo "pins verified: claude $claude_v; manifest carries amd64 + arm64"
