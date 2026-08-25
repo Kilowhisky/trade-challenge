@@ -103,11 +103,12 @@ else
   warn "no Schwab token yet. From your LAPTOP:"
   printf '        ssh -L 8182:127.0.0.1:8182 %s\n' "$(hostname)"
   printf '      then on the server, in that same ssh session:\n'
-  printf '        cd %s && docker compose run --rm --network host schwab-auth\n' "$repo_root/docker"
+  printf '        cd %s && docker compose run --rm schwab-auth\n' "$repo_root/docker"
   printf '      Paste the printed authorization URL into your laptop browser and\n'
-  printf '      accept the self-signed certificate warning. --network host is what\n'
-  printf '      makes the SSH forward reach the callback server (auth.py:106-112\n'
-  printf '      rejects any callback host but 127.0.0.1).\n'
+  printf '      accept the self-signed certificate warning. The service declares\n'
+  printf '      network_mode: host (compose run has no --network flag), which is\n'
+  printf '      what lets the SSH forward reach the callback server — auth.py:106-112\n'
+  printf '      rejects any callback host but 127.0.0.1.\n'
   [ "$check_only" -eq 1 ] || exit 1
 fi
 

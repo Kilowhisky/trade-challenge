@@ -165,6 +165,19 @@ if git ls-files --error-unmatch research status trade-log.csv >/dev/null 2>&1; t
 fi
 [ "$sidecar_ok" -eq 1 ] && note "research, status, trade-log.csv all ignored and untracked"
 
+# --- 7. documented commands must be commands that exist --------------------
+# `docker compose run` has no --network flag; that is `docker run`. The re-auth
+# runbook carried it in five places and failed the first time Chris ran it, at
+# the exact moment the account needed a token. Host networking is declared on
+# the schwab-auth service instead.
+echo "== documented docker commands are real =="
+if grep -rn "compose run[^|]*--network host" README.md scripts/ docker/ 2>/dev/null | grep -v check-consistency >/dev/null 2>&1; then
+  bad "a doc passes --network to 'docker compose run', which does not support it"
+  grep -rn "compose run[^|]*--network host" README.md scripts/ docker/ 2>/dev/null | grep -v check-consistency | sed 's/^/      /'
+else
+  note "no unsupported flags in documented compose commands"
+fi
+
 echo
 if [ "$fails" -eq 0 ]; then echo "CONSISTENT — rules.yml, docs, and scripts agree."; exit 0; fi
 echo "$fails inconsistency(ies). rules.yml is the source of truth; fix the other side."; exit 1

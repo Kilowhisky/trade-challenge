@@ -53,7 +53,7 @@ until token_ok; do
 The broker is idle, not crash-looping; it will start by itself within ${poll}s of a good token appearing. Scheduled jobs that need the broker will fail until then.
 \`\`\`
 ssh -L 8182:127.0.0.1:8182 <server>
-cd trade-challenge/docker && docker compose run --rm --network host schwab-auth
+cd trade-challenge/docker && docker compose run --rm schwab-auth
 \`\`\`"
   sleep "$poll"
 done

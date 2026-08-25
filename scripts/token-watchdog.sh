@@ -54,8 +54,8 @@ left=$(( 5 - age_days ))
 say "token age ${age_days}d (${age_hours}h), ${left}d until the 5-day forced re-auth"
 
 if [ "$age_days" -ge 5 ]; then
-  notify "🚨 **Schwab token expired** — ${age_days}d old, past the 5-day forced re-auth. Scheduled jobs are failing or hanging NOW. Re-auth: \`ssh -L 8182:127.0.0.1:8182 <server>\` then \`docker compose run --rm --network host schwab-auth\`."
+  notify "🚨 **Schwab token expired** — ${age_days}d old, past the 5-day forced re-auth. Scheduled jobs are failing or hanging NOW. Re-auth: \`ssh -L 8182:127.0.0.1:8182 <server>\` then \`docker compose run --rm schwab-auth\`."
 elif [ "$age_days" -ge 4 ]; then
-  notify "⏳ **Schwab token expires tomorrow** — ${age_days}d old; forced re-auth at 5d. Re-auth: \`ssh -L 8182:127.0.0.1:8182 <server>\` then \`docker compose run --rm --network host schwab-auth\`."
+  notify "⏳ **Schwab token expires tomorrow** — ${age_days}d old; forced re-auth at 5d. Re-auth: \`ssh -L 8182:127.0.0.1:8182 <server>\` then \`docker compose run --rm schwab-auth\`."
 fi
 exit 0

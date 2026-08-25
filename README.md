@@ -123,7 +123,7 @@ rather than discovered.
 ```bash
 ssh -L 8182:127.0.0.1:8182 <server>          # from your laptop
 cd trade-challenge/docker
-docker compose run --rm --network host schwab-auth
+docker compose run --rm schwab-auth
 # paste the printed authorization URL into your laptop browser,
 # accept the self-signed certificate warning
 ```
@@ -137,9 +137,11 @@ cannot arrive in a container, then dies — a five-minute-per-iteration crash-lo
 under `restart: unless-stopped`. It also means an expired token produces one
 Discord message, not one per restart forever.
 
-`--network host` is required, not convenience: the callback server only accepts
-`127.0.0.1`, and a published Docker port targets the container IP rather than
-its loopback, so the SSH forward would never reach it.
+Host networking is required, not convenience, and is declared on the
+`schwab-auth` service itself (`network_mode: host`) rather than passed on the
+command line — `docker compose run` has no `--network` flag. The callback
+server only accepts `127.0.0.1`, and a published Docker port targets the
+container IP rather than its loopback, so an SSH forward would never reach it.
 
 ### Deploying
 
