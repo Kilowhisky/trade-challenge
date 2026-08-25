@@ -20,8 +20,12 @@ ENV UV_INSTALL_DIR=/usr/local/bin \
     DISABLE_AUTOUPDATER=1 \
     TZ=America/New_York
 
+# openssh-client is not optional: the sidecar push runs inside the scheduler
+# container and the store's remote is an ssh alias with a deploy key. git
+# without ssh made every in-container push fail silently — found 2026-08-25,
+# the night before the first scheduled fire.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl git jq tzdata procps ripgrep \
+      ca-certificates curl git jq tzdata procps ripgrep openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # --- claude, pinned -------------------------------------------------------
