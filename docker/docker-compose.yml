@@ -118,7 +118,20 @@ services:
       TC_BROKER_URL: http://broker:8000/mcp
     volumes:
       - ..:/app
-      - ${TC_DATA_DIR:-../../trade-challenge-store}:/data
+      # The store is mounted at the SAME absolute path it has on the host, not
+      # at a container-private path like /data. The repo's research/, status/
+      # and trade-log.csv entries are symlinks whose targets are host-absolute
+      # (bootstrap-server.sh writes them), and the container sees those
+      # symlinks through the /app bind mount — so a store mounted anywhere
+      # else leaves every one of them dangling inside the container, and the
+      # first scheduled job dies at its first write. Found 2026-08-25, the
+      # night before the first scheduled fire.
+      - ${TC_DATA_DIR:-../../trade-challenge-store}:${TC_DATA_DIR:-/data}
+      # The sidecar push runs INSIDE this container (scheduled-run.sh calls
+      # sidecar-sync.sh), and the store's remote is the github-tcstore ssh
+      # alias — defined in the host's ~/.ssh/config with a repo-scoped deploy
+      # key. Read-only: the scheduler needs to USE the key, never to mint one.
+      - ${TC_SSH_DIR:-~/.ssh}:/home/trader/.ssh:ro
       - claude-home:/home/trader/.claude
       # READ-ONLY, and only so token-watchdog.sh can read creation_timestamp.
       # The token lives in a docker VOLUME, not on the host filesystem, so a
@@ -159,7 +172,10 @@ services:
       TC_BROKER_URL: http://broker:8000/mcp
     volumes:
       - ..:/app
-      - ${TC_DATA_DIR:-../../trade-challenge-store}:/data
+      # Same-path store mount + deploy key as the scheduler — see the comment
+      # there. An interactive session writes status/ notes and pushes them too.
+      - ${TC_DATA_DIR:-../../trade-challenge-store}:${TC_DATA_DIR:-/data}
+      - ${TC_SSH_DIR:-~/.ssh}:/home/trader/.ssh:ro
       - claude-home:/home/trader/.claude
     depends_on:
       broker:

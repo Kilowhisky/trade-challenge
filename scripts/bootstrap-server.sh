@@ -135,6 +135,29 @@ else
   printf '           docker compose up -d --force-recreate\n'
 fi
 
+step "5c. The store is reachable from INSIDE the scheduler"
+# The symlinks the container sees through /app are the HOST's symlinks, with
+# host-absolute targets. If the store is mounted anywhere but that same path,
+# every one of them dangles in the container and the first scheduled job dies
+# at its first write — while every host-side check stays green. Found
+# 2026-08-25, the night before the first scheduled fire; the mount and this
+# check landed together. The push check matters for the same reason: the
+# sidecar push runs in the container, so it needs the deploy key mounted there.
+if docker inspect tc-scheduler >/dev/null 2>&1; then
+  if docker exec tc-scheduler sh -c 'd="$(cd /app/status 2>/dev/null && pwd)" && touch "$d/.rw-probe" && rm "$d/.rw-probe"' 2>/dev/null; then
+    ok "store symlinks resolve and are writable in-container"
+  else
+    warn "status/ does NOT resolve inside tc-scheduler — the store mount path must equal TC_DATA_DIR (recreate: docker compose up -d --force-recreate scheduler)"
+  fi
+  if docker exec tc-scheduler sh -c 'cd /app/status && cd "$(pwd -P)/.." && GIT_SSH_COMMAND="ssh -o BatchMode=yes" git push --dry-run' >/dev/null 2>&1; then
+    ok "sidecar push auth works in-container"
+  else
+    warn "sidecar push FAILS inside tc-scheduler — is ~/.ssh (deploy key + config) mounted at /home/trader/.ssh?"
+  fi
+else
+  warn "tc-scheduler not running — skipping in-container store checks"
+fi
+
 step "6. Start"
 if [ "$check_only" -eq 1 ]; then
   docker compose ps --format '  {{.Name}}  {{.State}}  {{.Status}}'
