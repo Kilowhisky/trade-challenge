@@ -33,6 +33,31 @@ say() { printf '  %s\n' "$*"; }
 echo "== before =="
 free -h | sed 's/^/  /'
 
+echo "== cgroup memory controller =="
+# Raspberry Pi OS ships with the memory cgroup controller OFF. Docker then
+# prints "Your kernel does not support memory limit capabilities or the cgroup
+# is not mounted. Limitation discarded." — once, at container create, into a log
+# nobody reads — and every mem_limit in docker-compose.yml silently does
+# nothing. Tuning swap while the ceilings are inert is the worst of both: it
+# looks configured and protects nothing.
+if grep -qw memory /sys/fs/cgroup/cgroup.controllers 2>/dev/null; then
+  say "memory controller enabled"
+else
+  cmdline=/boot/firmware/cmdline.txt
+  [ -f "$cmdline" ] || cmdline=/boot/cmdline.txt
+  if [ -f "$cmdline" ] && ! grep -q 'cgroup_enable=memory' "$cmdline"; then
+    cp "$cmdline" "${cmdline}.bak.$(date +%s)"
+    sed -i '1s/$/ cgroup_enable=memory cgroup_memory=1/' "$cmdline"
+    say "added cgroup_enable=memory cgroup_memory=1 to $cmdline (backup kept)"
+  fi
+  say "REBOOT REQUIRED before any mem_limit takes effect."
+  say "AND AFTER THE REBOOT: docker compose up -d --force-recreate"
+  say "  A limit binds at container CREATE, not at restart. restart:unless-stopped"
+  say "  brings the OLD container back with its old, empty HostConfig — verified"
+  say "  the hard way: post-reboot the broker still showed HostConfig.Memory=0"
+  say "  while a freshly created scheduler correctly showed 2048MB."
+fi
+
 echo "== zram (tier 1: compressed, in RAM, no flash wear) =="
 if ! dpkg -s zram-tools >/dev/null 2>&1; then
   apt-get update -qq && apt-get install -y -qq zram-tools

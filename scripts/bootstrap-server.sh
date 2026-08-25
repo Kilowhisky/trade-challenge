@@ -112,6 +112,29 @@ else
   [ "$check_only" -eq 1 ] || exit 1
 fi
 
+step "5b. Memory limits are actually enforced"
+# Declaring mem_limit is not the same as having one. Two independent ways this
+# silently becomes a no-op: the Pi's memory cgroup controller is off by default,
+# and a limit binds at container CREATE so a restarted container keeps its old
+# config. Both were hit on this box.
+if grep -qw memory /sys/fs/cgroup/cgroup.controllers 2>/dev/null; then
+  ok "kernel memory controller enabled"
+  for c in tc-broker tc-scheduler; do
+    if docker inspect "$c" >/dev/null 2>&1; then
+      lim="$(docker inspect --format '{{.HostConfig.Memory}}' "$c" 2>/dev/null || echo 0)"
+      if [ "${lim:-0}" -gt 0 ]; then
+        ok "$c limit $((lim/1024/1024))MB enforced"
+      else
+        warn "$c has NO memory limit — recreate it: docker compose up -d --force-recreate $c"
+      fi
+    fi
+  done
+else
+  warn "kernel memory controller DISABLED — every mem_limit is silently discarded."
+  printf '      Run: sudo scripts/setup-host-memory.sh, reboot, then\n'
+  printf '           docker compose up -d --force-recreate\n'
+fi
+
 step "6. Start"
 if [ "$check_only" -eq 1 ]; then
   docker compose ps --format '  {{.Name}}  {{.State}}  {{.Status}}'
