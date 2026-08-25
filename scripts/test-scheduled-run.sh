@@ -52,6 +52,32 @@ expect weekly-universe $((7*60+40)) 2 SKIP "must never run on a session day"
 expect weekly-universe $((5*60+59)) 6 SKIP "before the window"
 expect weekly-universe $((12*60+1)) 6 SKIP "after the window"
 
+echo "== the prompt survives argument parsing =="
+# --allowedTools is variadic ("comma or space-separated"). Passed as separate
+# words, it swallows the prompt that follows as one more tool name and claude
+# exits with "Input must be provided either through stdin or as a prompt
+# argument" — which would have failed EVERY scheduled job on its first real run,
+# and which no amount of guard-testing would have caught.
+rm -rf status/cron
+TC_DRY_RUN=1 TC_NOW_ET_MIN=$((8*60+30)) TC_DOW=2 ./scripts/scheduled-run.sh preopen >/dev/null 2>&1
+line="$(grep -o 'DRY-RUN would exec: .*' status/cron/*preopen.log 2>/dev/null | head -1)"
+if grep -qE 'allowedTools [^ ]+,[^ ]+' <<<"$line"; then
+  ok "--allowedTools is a single comma-separated argument"
+else
+  bad "--allowedTools is space-separated — it will eat the prompt"
+fi
+if grep -qE '<stdin-prompt:[1-9][0-9]* bytes>' <<<"$line"; then
+  ok "a non-empty prompt is passed on stdin, not as a trailing arg"
+else
+  bad "no prompt reached the invocation"
+fi
+# No bare tool name may sit between the flag and the prompt.
+if grep -qE 'allowedTools [^ ]+ (Read|Glob|Grep|mcp__)' <<<"$line"; then
+  bad "a tool name appears as a separate argv word after --allowedTools"
+else
+  ok "no stray tool words after the flag"
+fi
+
 echo "== unknown job =="
 TC_DRY_RUN=1 ./scripts/scheduled-run.sh definitely-not-a-job >/dev/null 2>&1
 [ "$?" -eq 2 ] && ok "unknown job exits 2" || bad "unknown job should exit 2"

@@ -82,6 +82,14 @@ RUN set -eu; \
       useradd -m -u "${UID}" -g "${GID}" -s /bin/bash trader; \
     fi; \
     mkdir -p /home/trader/.local/share/schwab-mcp /home/trader/.claude; \
+    # Pre-trust the bind-mount path. Without this, claude ignores every
+    # permissions entry in .claude/settings.json ("this workspace has not been
+    # trusted") — including the DENY list. It has to be baked into the image,
+    # not written at runtime: /home/trader/.claude.json is a SIBLING of the
+    # claude-home volume mounted at /home/trader/.claude, so a runtime write
+    # lands in the container's ephemeral layer and is gone next run. Verified
+    # the hard way on the Pi.
+    printf '{"projects":{"/app":{"hasTrustDialogAccepted":true}}}\n' > /home/trader/.claude.json; \
     chown -R "${UID}:${GID}" /home/trader; \
     # prove it: a broken user must not survive the layer
     getent passwd trader

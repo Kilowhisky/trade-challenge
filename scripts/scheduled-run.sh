@@ -188,8 +188,17 @@ if [ -f "$mcp_config" ] && [ -n "${TC_BROKER_URL:-}" ]; then
   # so a stray user-scope config on the host cannot smuggle in a second broker.
   claude_args+=(--mcp-config "$mcp_config" --strict-mcp-config)
 fi
-# shellcheck disable=SC2206
-claude_args+=(--allowedTools $allowed)
+# --allowedTools is VARIADIC. Commander keeps consuming following non-flag
+# words, so ANY positional prompt after it is swallowed as one more tool name —
+# and commas do not save you, because "a,b" is just its first value and the
+# prompt becomes its second. Measured on the Pi: claude exits with "Input must
+# be provided either through stdin or as a prompt argument". This would have
+# failed every scheduled job on its first real run.
+#
+# The prompt therefore goes on STDIN (see the dispatch below), which no argv
+# ordering can break. Comma-joining here is still right: it keeps the tool list
+# to a single argv word so nothing else can drift into it.
+claude_args+=(--allowedTools "$(printf '%s' "$allowed" | tr -s ' ' ',')")
 
 # Bound the run. A hung job must not still be holding its lock when tomorrow's
 # fires. `timeout` is GNU-only; the container has it, a dev Mac may not.
@@ -201,10 +210,11 @@ else say "WARN no timeout(1) available; running unbounded"; fi
 say "RUN agent=$agent"
 out_file="$log_dir/.${job}.out.$$"
 if [ "${TC_DRY_RUN:-0}" = "1" ]; then
-  printf 'DRY-RUN would exec: claude %s <prompt:%d bytes>\n' "${claude_args[*]}" "${#prompt}" >"$out_file"
+  printf 'DRY-RUN would exec: claude %s <stdin-prompt:%d bytes>\n' "${claude_args[*]}" "${#prompt}" >"$out_file"
   rc=0
 else
-  "${runner[@]}" claude "${claude_args[@]}" "$prompt" >"$out_file" 2>>"$log_file"
+  # Prompt on stdin, never as a trailing argument — see the --allowedTools note.
+  printf '%s' "$prompt" | "${runner[@]}" claude "${claude_args[@]}" >"$out_file" 2>>"$log_file"
   rc=$?
 fi
 cat "$out_file" >> "$log_file"
