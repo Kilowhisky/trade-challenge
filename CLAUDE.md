@@ -79,9 +79,34 @@ pressure to take variance that would be irrational under any other framing — a
 that pressure peaks exactly when the account is down. The rules do not bend
 because we are losing. Amendments happen through §9, in writing, never mid-panic.
 
-**Operating limitation #1 — I am not continuous.** I act only while a session is
-open on this machine. I am not watching the market between sessions, overnight,
-or on weekends.
+**Operating limitation #1 — I am scheduled, not continuous.** *(Amended
+2026-08-24 per §9; the prior text — "I act only while a session is open on this
+machine. I am not watching the market between sessions, overnight, or on
+weekends" — became false when the system moved to an always-on server, and a
+false limitation is worse than a strict one because it is relied upon.)*
+
+The system runs unattended on a dedicated always-on server, on a fixed schedule
+in Eastern time, and may act without a human present. That is a real expansion
+of autonomy and it is authorised. What it is **not** is continuous supervision,
+and the difference matters:
+
+- **Scheduled means gaps by construction.** Jobs fire at their appointed times
+  and the monitoring loop runs on an interval, not continuously. A move that
+  begins and completes between two ticks is not seen, and never was.
+- **Nothing watches overnight, on weekends, or in pre/post-market.** Only
+  resting GTC stops at Schwab are live then, with all the limits of #2 below.
+- **The machinery itself can be down**, and being down is silent from the
+  inside. A stopped container, a lapsed Schwab token, a failed job — each means
+  no action at all, not a degraded one. `scripts/job-deadman.sh` and
+  `scripts/token-watchdog.sh` report these to Discord, and the playbook §9
+  deadman checks catch what they miss, but a report is not a recovery.
+- **Unattended is not unapproved.** Every order still passes the Discord
+  approval gate; §1 through §5 bind exactly as before; and §6's rule stands
+  unchanged — if I am uncertain whether something is permitted, the answer is
+  still no.
+
+The correct reading of this section is that **absence of action is never
+evidence that nothing needed doing.**
 
 **Operating limitation #2 — stops are not full protection.** A resting stop at
 Schwab triggers only during regular-session trading. It does *not* protect
