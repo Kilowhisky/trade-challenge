@@ -53,6 +53,50 @@ expect weekly-universe $((5*60+59)) 6 SKIP "before the window"
 expect weekly-universe $((12*60+1)) 6 SKIP "after the window"
 
 echo
+echo "== tick (09:30-16:00 ET, weekdays) =="
+# The monitoring loop became a scheduled service on 2026-08-26. Before that it
+# existed only inside a live session, so on every unattended day the resting
+# stops were the ONLY thing watching the book — and nothing said so out loud.
+expect tick $((9*60+2))  3 SKIP "09:02 cron firing, before the open"
+expect tick $((9*60+29)) 3 SKIP "one minute before the bell"
+expect tick $((9*60+30)) 3 RUN  "at the opening bell"
+expect tick $((12*60+2)) 3 RUN  "mid-session"
+expect tick $((15*60+47)) 3 RUN "last sweep of the day"
+expect tick $((16*60))   3 RUN  "exactly at the close"
+expect tick $((16*60+2)) 3 SKIP "after the close — postclose owns the rest"
+expect tick $((12*60))   6 SKIP "Saturday"
+expect tick $((12*60))   7 SKIP "Sunday"
+
+echo
+echo "== a tick must be bounded well inside its own cadence =="
+# The lock makes an overlapping tick a no-op, so ONE hung sweep silently costs
+# a full cadence of monitoring rather than piling up. At the hour every research
+# job may legitimately take, that is four missed sweeps.
+rm -rf status/cron
+TC_DRY_RUN=1 TC_NOW_ET_MIN=$((12*60)) TC_DOW=3 ./scripts/scheduled-run.sh tick >/dev/null 2>&1
+tick_to="$(grep -oE 'timeout -k 60 [0-9]+' status/cron/*tick.log 2>/dev/null | grep -oE '[0-9]+$' | tail -1)"
+if [ -z "$tick_to" ]; then
+  # Dry run does not print the runner; fall back to the source declaration.
+  tick_to="$(sed -n '/^  tick)/,/;;/p' scripts/scheduled-run.sh | sed -n 's/.*job_timeout=\([0-9]*\).*/\1/p')"
+fi
+[ -n "$tick_to" ] && [ "$tick_to" -lt 900 ] \
+  && ok "tick timeout ${tick_to}s is inside the 15-minute cadence" \
+  || bad "tick timeout is '${tick_to:-unset}' — a hung sweep can outlive its own cadence"
+rm -rf status/cron
+
+echo
+echo "== a tripped watch must reach a human =="
+# The sweep has no order tools, so it can only observe. If that observation
+# stops at a log file on a Pi, the job manufactures the belief that the book is
+# being watched while telling nobody what it saw.
+grep -q "grep -E '\^(TRIP|FAIL):'" scripts/scheduled-run.sh \
+  && ok "TRIP:/FAIL: output is relayed" \
+  || bad "nothing relays a tripped watch — detection that reaches no one"
+grep -A6 "trip=\"\$(grep -E" scripts/scheduled-run.sh | grep -q 'notify' \
+  && ok "the relay goes out as a notification" \
+  || bad "the trip is captured but never notified"
+
+echo
 echo "== --force: a human-ordered catch-up, and nothing wider =="
 # Added 2026-08-25, when the weekend sweep had to be re-run on a Tuesday night
 # because research/universe.md was a week stale and the hand-rolled invocation
@@ -156,7 +200,9 @@ echo "== no scheduled job may be handed an order tool =="
 # cannot fail is not a guard — these three pairs are load-bearing.
 order_leak=0
 checked=0
-for spec in "preopen $((8*60+30)) 2" "postclose $((16*60+30)) 2" "weekly-universe $((7*60+40)) 6"; do
+# tick matters most here: it is the only job that runs while the market is open,
+# and the one whose §E escalation would place orders if a live session ran it.
+for spec in "preopen $((8*60+30)) 2" "postclose $((16*60+30)) 2" "weekly-universe $((7*60+40)) 6" "tick $((12*60)) 3"; do
   set -- $spec; j="$1"; m="$2"; d="$3"
   rm -rf status/cron
   TC_DRY_RUN=1 TC_NOW_ET_MIN="$m" TC_DOW="$d" ./scripts/scheduled-run.sh "$j" >/dev/null 2>&1
@@ -171,8 +217,8 @@ for spec in "preopen $((8*60+30)) 2" "postclose $((16*60+30)) 2" "weekly-univers
     order_leak=1
   fi
 done
-[ "$order_leak" -eq 0 ] && [ "$checked" -eq 3 ] \
-  && ok "no job allowlists place_previewed_order or cancel_order (3 of 3 dispatched and inspected)"
+[ "$order_leak" -eq 0 ] && [ "$checked" -eq 4 ] \
+  && ok "no job allowlists place_previewed_order or cancel_order (4 of 4 dispatched and inspected)"
 
 echo "== unknown job =="
 TC_DRY_RUN=1 ./scripts/scheduled-run.sh definitely-not-a-job >/dev/null 2>&1

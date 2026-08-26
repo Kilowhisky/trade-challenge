@@ -139,6 +139,25 @@ if [ -f docker/crontab ]; then
   }
   check_slot preopen   "08:15" ".claude/commands/deep-research.md" "§Dispatch / §P"
   check_slot postclose "16:20" ".claude/commands/deep-research.md" "§Dispatch / §D"
+
+  # tick is a RECURRING slot, so the hour-match above does not apply: what must
+  # agree with tick.md §F is the CADENCE. The baseline there is 15 minutes with
+  # every stop confirmed; if §F's baseline moves and the crontab does not, the
+  # monitoring loop quietly runs at a frequency no document claims.
+  tickline="$(grep -E 'scheduled-run\.sh[[:space:]]+tick\b' docker/crontab | grep -vE '^[[:space:]]*#' | head -1)"
+  if [ -z "$tickline" ]; then
+    bad "docker/crontab has no entry for 'tick' — the book is unwatched between 09:30 and 16:00"
+  else
+    cron_every="$(awk '{print $1}' <<<"$tickline" | grep -oE '/[0-9]+$' | tr -d '/')"
+    want_every="$(grep -oE '\*\*15 min\*\* baseline' .claude/commands/tick.md >/dev/null 2>&1 && echo 15)"
+    if [ -z "$cron_every" ]; then
+      bad "the 'tick' crontab entry has no */N step — cannot verify it against tick.md §F"
+    elif [ -n "$want_every" ] && [ "$cron_every" != "$want_every" ]; then
+      bad "docker/crontab ticks every ${cron_every}m but tick.md §F documents a ${want_every}m baseline"
+    else
+      sched=$((sched+1))
+    fi
+  fi
   [ "$sched" -gt 0 ] && note "$sched scheduled job(s) checked against their command files"
 else
   note "docker/crontab absent — skipping (not deployed on this machine)"

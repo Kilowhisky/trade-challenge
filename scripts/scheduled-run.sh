@@ -168,6 +168,40 @@ output as usual; the wrapper relays them to Discord for Chris to act on at the
 next session open. Do not attempt to notify anyone yourself."
     ;;
 
+  tick)
+    agent="tick-watch"
+    window_open=$((9*60+30)); window_close=$((16*60))
+    days="1 2 3 4 5"
+    job_timeout=600
+    # tick.md §F's baseline is 15 min with every stop confirmed. The crontab
+    # fires that; this job is one sweep, not a loop.
+    #
+    # NO ORDER TOOLS, and that is the whole design. §E escalation — the part
+    # that would actually place or amend an order — cannot run unattended, so
+    # this job DETECTS and REPORTS and nothing else. That is not the full loop
+    # a live session runs, and it must never be described as one. It is the
+    # difference between "nobody is watching the book between 09:30 and 16:00"
+    # and "something is watching and will ping Chris". Before 2026-08-26 the
+    # answer was the former, on every unattended day.
+    allowed="Read Glob Grep ToolSearch mcp__schwab__get_datetime mcp__schwab__get_market_hours mcp__schwab__get_accounts mcp__schwab__get_account mcp__schwab__get_orders mcp__schwab__get_quotes Bash(scripts/tick-append.sh:*)"
+    prompt="Run /tick for ${today}.
+
+You are the SCHEDULED, UNATTENDED tick, dispatched by the server scheduler on
+the §F cadence. Execute .claude/commands/tick.md §B-§D exactly as written and
+append the ledger row via scripts/tick-append.sh.
+
+Resolve the date and time from get_datetime, never the machine clock. Fetch
+get_market_hours yourself — there is no cached session state here, because each
+scheduled tick is a fresh process rather than an iteration of a live loop.
+
+**No session is watching and you have no order tools.** §E escalation is
+therefore NOT yours to run: you cannot place, amend or cancel anything, and you
+must not try. On a trip, output the canonical one-line summary followed by a
+line beginning 'TRIP:' naming the tripped watch numbers and what they mean; the
+wrapper relays that to Chris in Discord. Same for 'FAIL:' if the sweep could not
+complete. Output the canonical line and nothing else when the tick is clean."
+    ;;
+
   weekly-universe)
     agent="weekly-universe"
     window_open=$((6*60));  window_close=$((12*60))
@@ -252,9 +286,14 @@ claude_args+=(--allowedTools "$(printf '%s' "$allowed" | tr -s ' ' ',')")
 
 # Bound the run. A hung job must not still be holding its lock when tomorrow's
 # fires. `timeout` is GNU-only; the container has it, a dev Mac may not.
+# job_timeout is set per-job above where a job needs a tighter bound than the
+# hour a research run may legitimately take. A tick on a 15-minute cadence must
+# not still be running when the next one fires: the lock would make that next
+# tick a no-op, so one hung sweep would silently cost an hour of monitoring.
+job_timeout="${job_timeout:-3600}"
 runner=()
-if command -v timeout >/dev/null 2>&1; then runner=(timeout -k 60 3600)
-elif command -v gtimeout >/dev/null 2>&1; then runner=(gtimeout -k 60 3600)
+if command -v timeout >/dev/null 2>&1; then runner=(timeout -k 60 "$job_timeout")
+elif command -v gtimeout >/dev/null 2>&1; then runner=(gtimeout -k 60 "$job_timeout")
 else say "WARN no timeout(1) available; running unbounded"; fi
 
 say "RUN agent=$agent"
@@ -274,9 +313,9 @@ output="$(cat "$out_file")"; rm -f "$out_file"
 # often the OOM killer than our own -k escalation. Reporting both as "timed out"
 # would send someone hunting a slow API when the real fix is a memory limit.
 if [ "$rc" -eq 124 ]; then
-  say "FAIL timed out after 3600s"
-  beat failed "timeout"
-  notify "⚠️ scheduled job \`$job\` timed out after 60m on $today. Log: status/cron/${today}-${job}.log"
+  say "FAIL timed out after ${job_timeout}s"
+  beat failed "timeout after ${job_timeout}s"
+  notify "⚠️ scheduled job \`$job\` timed out after ${job_timeout}s on $today. Log: status/cron/${today}-${job}.log"
   exit 1
 fi
 if [ "$rc" -eq 137 ]; then
@@ -310,9 +349,31 @@ $hot
 \`\`\`"
 fi
 
+# --- relay a tripped watch ------------------------------------------------
+# THIS IS THE WHOLE POINT OF THE SCHEDULED TICK. The sweep has no order tools,
+# so it cannot run tick.md §E — it can only see that something tripped. If that
+# observation stops at a log file on a Pi, the job has detected a problem and
+# told nobody, which is worse than not running it: it manufactures the belief
+# that the book is being watched.
+#
+# Deliberately unconditional and loud. A clean tick relays nothing at all —
+# 26 "all clear" messages a day would train Chris to ignore the channel, and
+# the one that mattered would scroll past with the rest.
+trip="$(grep -E '^(TRIP|FAIL):' <<<"$output" || true)"
+if [ -n "$trip" ]; then
+  notify "🚨 **TICK TRIP — $today $(et '+%H:%M') ET** — a watch tripped on the unattended sweep. **Nothing has acted on this**: the scheduled tick has no order tools and §E belongs to a live session. Open one.
+\`\`\`
+$(head -1 <<<"$output")
+$trip
+\`\`\`"
+fi
+
 # Line 1 is the command file's return-line contract; it is the one line worth
-# reading without opening the log.
-head -1 <<<"$output" | grep -qE '^(DEEP|UNIVERSE|FAIL)' && notify "✅ $(head -1 <<<"$output")"
+# reading without opening the log. Ticks are excluded on purpose: at 26 a day a
+# routine relay is noise, and a tick that matters goes out as a TRIP above.
+if [ "$job" != "tick" ]; then
+  head -1 <<<"$output" | grep -qE '^(DEEP|UNIVERSE|FAIL)' && notify "✅ $(head -1 <<<"$output")"
+fi
 
 # --- push what we wrote to the private sidecar ---------------------------
 # Non-fatal by design: the research already succeeded and is on disk. A failed
