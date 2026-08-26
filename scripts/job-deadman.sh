@@ -33,15 +33,23 @@ fi
 # Latest verdict for a job on a given date. Plain grep on the JSON line rather
 # than a jq dependency — this must still work if jq is somehow missing, because
 # a watchdog that fails silently is worse than no watchdog.
+# A dry run is a rehearsal, not evidence that the job fired. It writes to the
+# same heartbeat, and on 2026-08-26 two dry runs executed on the server at 01:10
+# ET landed as that day's preopen and postclose with verdict "ok" — which would
+# have told this watchdog the morning's jobs were fine while nothing had run.
+# The entries are tagged; ignore them here so a rehearsal can never stand in for
+# a real fire.
 verdict_for() { # job date
   grep "\"job\":\"$1\"" "$heartbeat" 2>/dev/null \
     | grep "\"started\":\"$2" \
+    | grep -v '"dry_run":true' \
     | tail -1 \
     | sed -n 's/.*"verdict":"\([a-z]*\)".*/\1/p'
 }
-detail_for() {
+detail_for() {   # same dry-run exclusion as verdict_for, or the two disagree
   grep "\"job\":\"$1\"" "$heartbeat" 2>/dev/null \
-    | grep "\"started\":\"$2" | tail -1 \
+    | grep "\"started\":\"$2" \
+    | grep -v '"dry_run":true' | tail -1 \
     | sed -n 's/.*"detail":"\([^"]*\)".*/\1/p'
 }
 

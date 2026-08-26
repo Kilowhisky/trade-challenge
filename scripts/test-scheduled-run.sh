@@ -86,6 +86,30 @@ grep -q '"forced"' status/cron/heartbeat.jsonl 2>/dev/null \
 [ "$?" -eq 2 ] && ok "an unknown flag exits 2 rather than being ignored" \
               || bad "an unknown flag was accepted"
 
+echo
+echo "== a dry run must never look like a real fire =="
+# Dry runs write to the SAME heartbeat job-deadman.sh reads. On 2026-08-26 two
+# rehearsals run on the server at 01:10 ET landed as that day's preopen and
+# postclose with verdict "ok" — which would have told the 09:35 deadman the
+# morning was fine while nothing had actually run. Tagged here, filtered there.
+rm -rf status/cron
+TC_DRY_RUN=1 TC_NOW_ET_MIN=$((8*60+30)) TC_DOW=2 ./scripts/scheduled-run.sh preopen >/dev/null 2>&1
+grep -q '"dry_run":true' status/cron/heartbeat.jsonl 2>/dev/null \
+  && ok "a dry run is tagged dry_run in the heartbeat" \
+  || bad "a dry run is indistinguishable from a real fire in the heartbeat"
+# And the deadman must actually act on the tag.
+if grep -q 'dry_run' scripts/job-deadman.sh; then
+  hb=status/cron/heartbeat.jsonl
+  if [ "$(grep "\"job\":\"preopen\"" "$hb" | grep -v '"dry_run":true' | wc -l | tr -d ' ')" = "0" ]; then
+    ok "job-deadman's filter leaves no verdict behind for a dry-run-only day"
+  else
+    bad "a dry-run entry survives the deadman's filter"
+  fi
+else
+  bad "job-deadman.sh does not filter dry_run — a rehearsal can blind it"
+fi
+rm -rf status/cron
+
 echo "== the prompt survives argument parsing =="
 # --allowedTools is variadic ("comma or space-separated"). Passed as separate
 # words, it swallows the prompt that follows as one more tool name and claude

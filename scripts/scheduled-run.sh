@@ -93,11 +93,15 @@ beat() {
   if command -v jq >/dev/null 2>&1; then
     jq -nc --arg j "$job" --arg t "$stamp" --arg e "$(et '+%Y-%m-%d %H:%M:%S %Z')" \
            --arg v "$verdict" --arg d "$detail" --argjson f "$forced" \
-      '{job:$j,started:$t,ended:$e,verdict:$v,detail:$d} + (if $f == 1 then {forced:true} else {} end)' >> "$heartbeat"
+           --argjson dr "${TC_DRY_RUN:-0}" \
+      '{job:$j,started:$t,ended:$e,verdict:$v,detail:$d}
+       + (if $f == 1 then {forced:true} else {} end)
+       + (if $dr == 1 then {dry_run:true} else {} end)' >> "$heartbeat"
   else
-    printf '{"job":"%s","started":"%s","verdict":"%s","detail":"%s"%s}\n' \
+    printf '{"job":"%s","started":"%s","verdict":"%s","detail":"%s"%s%s}\n' \
       "$job" "$stamp" "$verdict" "$detail" \
-      "$([ "$forced" -eq 1 ] && printf ',"forced":true')" >> "$heartbeat"
+      "$([ "$forced" -eq 1 ] && printf ',"forced":true')" \
+      "$([ "${TC_DRY_RUN:-0}" = "1" ] && printf ',"dry_run":true')" >> "$heartbeat"
   fi
 }
 
