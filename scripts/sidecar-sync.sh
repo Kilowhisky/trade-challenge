@@ -50,7 +50,29 @@ git -c user.name="trade-challenge server" \
 
 # --rebase, not merge: the Mac may have pulled and pushed its own session notes
 # between our jobs, and a merge commit in an audit trail is noise.
-git pull --rebase --quiet 2>/dev/null || say "WARN pull --rebase failed; pushing anyway may be rejected"
+#
+# A FAILED rebase must not be left in place. On 2026-08-25 a laptop `git add -A`
+# committed the deletion of five status/cron/ files that only the server writes
+# (they were absent from the Mac's working tree), the next sync hit modify/delete
+# on three of them, and this line's `|| say WARN` walked on — leaving the store
+# mid-rebase on a detached HEAD. Every subsequent job would have committed INTO
+# that state and been unable to push: the audit trail stops silently, which is
+# the one failure mode a sidecar exists to prevent.
+#
+# So: abort, restore a clean branch, and say so loudly. Losing one sync is
+# survivable and self-heals on the next run; a wedged repo is not.
+if ! git pull --rebase --quiet 2>/dev/null; then
+  if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+    git rebase --abort 2>/dev/null \
+      && say "pull --rebase CONFLICTED; aborted and left the branch clean" \
+      || say "pull --rebase CONFLICTED and the abort FAILED — the store needs a human"
+    "$repo_root/scripts/discord-notify.sh" \
+      "🚨 **Sidecar store conflict** — \`$subject\` is committed on the server but could not be rebased onto origin. The rebase was aborted so jobs keep working, but **the store is diverged and nothing is pushing.** Reconcile it by hand." \
+      >/dev/null 2>&1 || true
+    exit 1
+  fi
+  say "WARN pull --rebase failed (no rebase in progress); pushing anyway may be rejected"
+fi
 
 if git push --quiet 2>/dev/null; then
   say "pushed: $subject"

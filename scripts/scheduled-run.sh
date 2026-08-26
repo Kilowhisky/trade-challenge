@@ -168,7 +168,13 @@ next session open. Do not attempt to notify anyone yourself."
     agent="weekly-universe"
     window_open=$((6*60));  window_close=$((12*60))
     days="6 7"
-    allowed="Read Glob Grep ToolSearch mcp__schwab__get_datetime mcp__schwab__get_market_hours mcp__schwab__get_quotes Bash(scripts/universe-fetch.sh:*) Bash(scripts/universe-filter.sh:*) Bash(scripts/research-replace.sh:*)"
+    # check-consistency.sh is §A.1 of weekly-universe.md — a PRECONDITION the
+    # agent must run, not an optional extra. It was missing here, so the agent
+    # correctly refused to sweep ("precondition unverified ≠ passed") and the
+    # job could never have completed. Found 2026-08-25 by the first forced run;
+    # the Saturday cron would have hit it on 8/29. It is read-only: it verifies
+    # that rules.yml, the docs and the scripts still agree, and writes nothing.
+    allowed="Read Glob Grep ToolSearch mcp__schwab__get_datetime mcp__schwab__get_market_hours mcp__schwab__get_quotes Bash(scripts/check-consistency.sh:*) Bash(scripts/universe-fetch.sh:*) Bash(scripts/universe-filter.sh:*) Bash(scripts/research-replace.sh:*)"
     prompt="Run /weekly-universe for ${today}.
 
 You are the scheduled weekend whole-market sweep, dispatched by the server
