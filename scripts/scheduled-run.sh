@@ -212,6 +212,12 @@ You have roughly 25 minutes of wall clock. Each write blocks up to 600s on
 Chris's Discord reaction. Budget for entry + stop being two of those. If you
 cannot complete an entry AND its stop, do not start the entry.
 
+Invoke every repo script as a BARE RELATIVE PATH — 'scripts/name.sh ...'.
+'./scripts/', 'bash scripts/' and '/app/scripts/' are all refused by the
+permission gate, with no approver behind it. Measured in this container on
+2026-08-26, after the first live run refused its entire pass because every
+script call was blocked.
+
 Resolve date and time from get_datetime, never the machine clock. Doing
 nothing is a legitimate and common outcome — report 'EXEC none' and stop."
     ;;

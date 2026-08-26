@@ -143,6 +143,28 @@ If you cannot satisfy all of that within your budget, **do not place the
 entry at all.** An entry you cannot supervise to a stop is the exact position
 §3.4 exists to prevent, and it is worse than no entry.
 
+## §4a — How to invoke repo scripts. This is not a style note.
+
+Call every script as a **bare relative path from the repo root**:
+
+```
+scripts/check-consistency.sh
+scripts/pre-order-check.sh --instrument equity ...
+scripts/trade-log-append.sh 2026-08-26 12:34 ...
+```
+
+`./scripts/x.sh`, `bash scripts/x.sh` and `/app/scripts/x.sh` are all **refused
+by the permission gate** — measured in the container on 2026-08-26, not
+assumed. There is no approver on the other side of that prompt, so a refusal
+is silent and total.
+
+This matters more than it looks. On the first live run of this agent every
+script call was blocked, and because §3 makes `trade-log-append.sh` and
+`pre-order-check.sh` mandatory steps, the correct response was to refuse the
+whole pass. That is the right failure — but if the pending action had been a
+**missing stop**, refusing would have left a naked position, and §4.3's remedy
+(close it) needs the log script too. Use the form that works.
+
 ## §5 — Output contract
 
 One line first, then detail only if something happened:
