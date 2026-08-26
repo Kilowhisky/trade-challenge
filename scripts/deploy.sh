@@ -126,10 +126,23 @@ for _ in $(seq 1 30); do
 done
 
 if [ "$healthy" -eq 1 ]; then
-  smoke="$(compose run --rm -T claude claude -p --output-format text \
+  # The prompt goes on STDIN, never as a trailing argument. `--allowedTools` is
+  # variadic, so a prompt sitting after it is parsed as one more tool name and
+  # claude exits with "Input must be provided either through stdin or as a
+  # prompt argument when using --print" — output this function then discards,
+  # scoring it as an unhealthy deploy.
+  #
+  # This is the SAME defect scheduled-run.sh was fixed for, in a second call
+  # site nobody re-read. It meant the smoke test could never pass, so every
+  # deploy that actually reached a new image failed its health check and rolled
+  # back — a pipeline structurally incapable of shipping, which looked like
+  # "the new image is bad" rather than "the test is broken". Found 2026-08-25
+  # when the first real image change hit it. -T is required for stdin to reach
+  # the container.
+  smoke_prompt='Call get_datetime and reply with exactly the ET date and time it returns, nothing else.'
+  smoke="$(printf '%s' "$smoke_prompt" | compose run --rm -T claude claude -p --output-format text \
             --mcp-config /app/docker/mcp-config.json --strict-mcp-config \
-            --allowedTools mcp__schwab__get_datetime \
-            "Call get_datetime and reply with exactly the ET date and time it returns, nothing else." 2>&1)" || smoke=""
+            --allowedTools mcp__schwab__get_datetime 2>&1)" || smoke=""
   grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2}' <<<"$smoke" || healthy=0
 fi
 

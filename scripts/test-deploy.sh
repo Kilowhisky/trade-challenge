@@ -48,6 +48,7 @@ SCHWAB_CLIENT_ID=x
 SCHWAB_CLIENT_SECRET=x
 SCHWAB_MCP_DISCORD_TOKEN=x
 SCHWAB_MCP_DISCORD_CHANNEL_ID=1
+SCHWAB_MCP_DISCORD_APPROVERS=1
 TC_DATA_DIR=/tmp
 TC_IMAGE=ghcr.io/kilowhisky/trade-challenge@sha256:$D
 DUMMY
@@ -58,6 +59,35 @@ DUMMY
     || bad "compose rendered '$rendered'"
 else
   echo "  skip — docker not installed"
+fi
+
+echo
+echo "== the smoke test can actually receive its prompt =="
+# `--allowedTools` is variadic. A prompt sitting after it on the command line is
+# parsed as one more tool name, and claude exits with "Input must be provided
+# either through stdin or as a prompt argument when using --print". deploy.sh
+# discards that output and scores it as an unhealthy deploy, so the health check
+# fails, the rollback fires, and the pipeline can never ship a new image — while
+# every symptom points at the image rather than at the test.
+#
+# scheduled-run.sh was fixed for exactly this and has had a guard ever since;
+# deploy.sh had the identical bug at a second call site and no guard, and it
+# went unnoticed until 2026-08-25, the first deploy that reached a new image.
+# Static check: dynamic ones need docker, a token and a live broker.
+smoke_block="$(sed -n '/^  smoke=/,/2>&1)"/p' scripts/deploy.sh)"
+if [ -z "$smoke_block" ]; then
+  bad "could not find the smoke invocation in deploy.sh — this guard is now blind"
+else
+  grep -q 'printf .* | compose run' <<<"$smoke_block" \
+    && ok "the smoke prompt is piped on stdin" \
+    || bad "the smoke prompt is not piped on stdin"
+  # Any bare quoted sentence left on the command line is the bug returning.
+  if grep -qE -- "--allowedTools [^ ]+ +[\"']" <<<"$smoke_block" \
+     || grep -qE "^\s+[\"'][A-Z][^\"']{20,}[\"']" <<<"$smoke_block"; then
+    bad "a prompt string sits on the smoke command line — --allowedTools will eat it"
+  else
+    ok "no prompt string on the smoke command line"
+  fi
 fi
 
 echo
