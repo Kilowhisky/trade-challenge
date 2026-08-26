@@ -30,3 +30,7 @@ research
 status
 trade-log.csv
 
+
+# Rollback target written by scripts/deploy.sh on the server. Machine state,
+# not source: it names the image digest THAT box is running.
+docker/.deployed-digest
