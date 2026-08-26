@@ -52,6 +52,40 @@ expect weekly-universe $((7*60+40)) 2 SKIP "must never run on a session day"
 expect weekly-universe $((5*60+59)) 6 SKIP "before the window"
 expect weekly-universe $((12*60+1)) 6 SKIP "after the window"
 
+echo
+echo "== --force: a human-ordered catch-up, and nothing wider =="
+# Added 2026-08-25, when the weekend sweep had to be re-run on a Tuesday night
+# because research/universe.md was a week stale and the hand-rolled invocation
+# that tried it died on shell quoting. --force must bypass the calendar and
+# NOTHING else, and must be impossible to confuse with a normal fire.
+forced_run() { # job min dow -> RUN or SKIP, with --force
+  TC_DRY_RUN=1 TC_NOW_ET_MIN="$2" TC_DOW="$3" \
+    ./scripts/scheduled-run.sh "$1" --force 2>&1 | grep -oE 'RUN|SKIP' | head -1
+}
+[ "$(forced_run weekly-universe $((23*60+20)) 2)" = "RUN" ] \
+  && ok "--force runs outside both the day and the window" \
+  || bad "--force did not run on a Tuesday night"
+[ "$(run weekly-universe $((23*60+20)) 2)" = "SKIP" ] \
+  && ok "the same call without --force still skips" \
+  || bad "the guard is gone even unforced — --force leaked into the default path"
+
+# The audit trail must distinguish the two. A forced run that looks normal in
+# the heartbeat is how a bypass becomes invisible.
+rm -rf status/cron
+TC_DRY_RUN=1 TC_NOW_ET_MIN=$((23*60+20)) TC_DOW=2 ./scripts/scheduled-run.sh weekly-universe --force >/dev/null 2>&1
+grep -q '"forced":true' status/cron/heartbeat.jsonl 2>/dev/null \
+  && ok "the heartbeat records the run as forced" \
+  || bad "a forced run is indistinguishable from a scheduled one in the heartbeat"
+rm -rf status/cron
+TC_DRY_RUN=1 TC_NOW_ET_MIN=$((7*60+40)) TC_DOW=6 ./scripts/scheduled-run.sh weekly-universe >/dev/null 2>&1
+grep -q '"forced"' status/cron/heartbeat.jsonl 2>/dev/null \
+  && bad "a NORMAL run is marked forced" \
+  || ok "a normal run carries no forced marker"
+
+./scripts/scheduled-run.sh weekly-universe --bogus >/dev/null 2>&1
+[ "$?" -eq 2 ] && ok "an unknown flag exits 2 rather than being ignored" \
+              || bad "an unknown flag was accepted"
+
 echo "== the prompt survives argument parsing =="
 # --allowedTools is variadic ("comma or space-separated"). Passed as separate
 # words, it swallows the prompt that follows as one more tool name and claude

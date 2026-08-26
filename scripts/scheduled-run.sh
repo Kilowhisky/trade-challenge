@@ -18,7 +18,30 @@ cd "$repo_root" || exit 2
 . "$repo_root/scripts/lib-lock.sh"
 
 job="${1:-}"
-[ -n "$job" ] || { echo "scheduled-run: usage: scheduled-run.sh JOB" >&2; exit 2; }
+[ -n "$job" ] || { echo "scheduled-run: usage: scheduled-run.sh JOB [--force]" >&2; exit 2; }
+shift
+
+# --force runs a job outside its day/window, for a HUMAN-ordered catch-up: a
+# missed weekend sweep, a job the container was down for. Same precedent as
+# deploy.sh --force, and for the same reason — the guard exists to stop the
+# SCHEDULER firing at the wrong time, not to stop Chris asking for a run.
+#
+# It is deliberately not the TC_DOW/TC_NOW_ET_MIN seam below, which stays
+# dry-run-only: those SIMULATE a different clock, so a live one would make every
+# log line and every date-derived decision inside the run a lie. --force changes
+# no clock. The run still resolves its own date from get_datetime, still takes
+# the lock, still logs, still heartbeats — and the heartbeat records `forced`,
+# so a forced run can never be mistaken for a normal fire in the audit trail.
+#
+# What it does NOT bypass: each command file's own preconditions. weekly-universe
+# §A.2 still requires get_market_hours to show the market closed.
+forced=0
+for a in "$@"; do
+  case "$a" in
+    --force) forced=1 ;;
+    *) echo "scheduled-run: unknown arg '$a'" >&2; exit 2 ;;
+  esac
+done
 
 # --- ET clock -------------------------------------------------------------
 # Explicit TZ rather than the machine zone: this script is written on a PT
@@ -69,11 +92,12 @@ beat() {
   local verdict="$1" detail="${2:-}"
   if command -v jq >/dev/null 2>&1; then
     jq -nc --arg j "$job" --arg t "$stamp" --arg e "$(et '+%Y-%m-%d %H:%M:%S %Z')" \
-           --arg v "$verdict" --arg d "$detail" \
-      '{job:$j,started:$t,ended:$e,verdict:$v,detail:$d}' >> "$heartbeat"
+           --arg v "$verdict" --arg d "$detail" --argjson f "$forced" \
+      '{job:$j,started:$t,ended:$e,verdict:$v,detail:$d} + (if $f == 1 then {forced:true} else {} end)' >> "$heartbeat"
   else
-    printf '{"job":"%s","started":"%s","verdict":"%s","detail":"%s"}\n' \
-      "$job" "$stamp" "$verdict" "$detail" >> "$heartbeat"
+    printf '{"job":"%s","started":"%s","verdict":"%s","detail":"%s"%s}\n' \
+      "$job" "$stamp" "$verdict" "$detail" \
+      "$([ "$forced" -eq 1 ] && printf ',"forced":true')" >> "$heartbeat"
   fi
 }
 
@@ -162,13 +186,18 @@ esac
 # --- guards ---------------------------------------------------------------
 printf '\n===== %s  job=%s =====\n' "$stamp" "$job" >> "$log_file"
 
-if ! grep -qw "$dow" <<<"$days"; then
+if [ "$forced" -eq 1 ]; then
+  say "FORCED — human-ordered catch-up; day/window guards bypassed (dow=$dow, $(et '+%H:%M') ET)"
+fi
+
+if [ "$forced" -eq 0 ] && ! grep -qw "$dow" <<<"$days"; then
   say "SKIP wrong day of week (dow=$dow, wanted: $days)"
   beat skipped "wrong day of week"
   exit 0
 fi
 
-if [ "$now_et_min" -lt "$window_open" ] || [ "$now_et_min" -gt "$window_close" ]; then
+if [ "$forced" -eq 0 ] \
+   && { [ "$now_et_min" -lt "$window_open" ] || [ "$now_et_min" -gt "$window_close" ]; }; then
   say "SKIP outside ET window ($(printf '%02d:%02d' $((window_open/60)) $((window_open%60)))-$(printf '%02d:%02d' $((window_close/60)) $((window_close%60))) ET)"
   beat skipped "outside ET window"
   # A missed preopen is not silent: the playbook §9 catch-up is the guarantee,
