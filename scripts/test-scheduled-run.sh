@@ -220,6 +220,34 @@ done
 [ "$order_leak" -eq 0 ] && [ "$checked" -eq 4 ] \
   && ok "no job allowlists place_previewed_order or cancel_order (4 of 4 dispatched and inspected)"
 
+echo
+echo "== execute is the ONE job that carries order tools =="
+# Inverted on 2026-08-26, when Chris ruled that placing orders is the server's
+# job and not an interactive session's. The guard above is what keeps that
+# capability in exactly one place; this is what keeps it from being quietly
+# removed from the one job that needs it, which would leave a system that
+# looks like it trades and cannot.
+rm -rf status/cron
+TC_DRY_RUN=1 TC_NOW_ET_MIN=$((12*60)) TC_DOW=3 ./scripts/scheduled-run.sh execute >/dev/null 2>&1
+exec_line="$(grep -o 'DRY-RUN would exec: .*' status/cron/*execute.log 2>/dev/null | head -1)"
+if [ -z "$exec_line" ]; then
+  bad "execute did not dispatch at 12:00 ET on a weekday — the executor is unreachable"
+else
+  grep -q 'place_previewed_order' <<<"$exec_line" \
+    && ok "execute can place orders" \
+    || bad "execute has NO place_previewed_order — nothing in the system can trade"
+  grep -q 'cancel_order' <<<"$exec_line" \
+    && ok "execute can cancel orders (§4.7 orphan cleanup, §7.6 exit ordering)" \
+    || bad "execute cannot cancel — an orphaned stop could not be cleaned up"
+fi
+# The executor must still be bounded so a hung approval cannot hold the lock
+# for the rest of the session.
+exec_to="$(sed -n '/^  execute)/,/;;/p' scripts/scheduled-run.sh | sed -n 's/.*job_timeout=\([0-9]*\).*/\1/p')"
+[ -n "$exec_to" ] && [ "$exec_to" -le 1800 ] && [ "$exec_to" -ge 1200 ] \
+  && ok "execute timeout ${exec_to}s covers two 600s Discord approvals and still ends" \
+  || bad "execute timeout is '${exec_to:-unset}' — too short for entry+stop, or unbounded"
+rm -rf status/cron
+
 echo "== unknown job =="
 TC_DRY_RUN=1 ./scripts/scheduled-run.sh definitely-not-a-job >/dev/null 2>&1
 [ "$?" -eq 2 ] && ok "unknown job exits 2" || bad "unknown job should exit 2"

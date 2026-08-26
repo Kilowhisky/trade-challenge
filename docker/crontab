@@ -30,6 +30,20 @@
 # relayed to Discord for a human to act on — it is not the live §E loop.
 2-59/15 9-15 * * 1-5   /app/scripts/scheduled-run.sh tick
 
+# --- execution (playbook §7) ---------------------------------------------
+# The ONLY job with order tools. Offset five minutes behind the tick so it acts
+# on a book state that was just swept rather than one it re-derives.
+#
+# Its 1800s budget deliberately exceeds this 15-minute cadence: an entry needs
+# two Discord approvals (the entry, then its mandatory §3.4 stop) at up to 600s
+# each, plus the fill poll between them. Overlapping firings find the lock held
+# and exit — while an order is in flight a second executor is the last thing
+# anyone wants, and that is the concurrency control, not an accident of timing.
+#
+# Every order still blocks on Chris's ✅/❌ in #llm-yolo. Nothing here is
+# unapproved; it is unattended, which CLAUDE.md §0 distinguishes explicitly.
+7-59/15 9-15 * * 1-5   /app/scripts/scheduled-run.sh execute
+
 # --- watchdogs (Phase 3) --------------------------------------------------
 5  7  * * *     /app/scripts/token-watchdog.sh
 35 9  * * 1-5   /app/scripts/job-deadman.sh

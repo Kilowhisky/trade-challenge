@@ -168,6 +168,54 @@ output as usual; the wrapper relays them to Discord for Chris to act on at the
 next session open. Do not attempt to notify anyone yourself."
     ;;
 
+  execute)
+    agent="trader"
+    window_open=$((9*60+30)); window_close=$((16*60))
+    days="1 2 3 4 5"
+    # 30 minutes, deliberately LONGER than the 15-minute cadence. Every write
+    # blocks on Chris's ✅/❌ with a 600s timeout, and an entry needs two of
+    # them — the entry, then its mandatory §3.4 stop — plus the fill poll in
+    # between. A budget under that would abandon a filled position between its
+    # entry and its stop, which is the precise state §4.3 forbids.
+    #
+    # Overlapping runs are therefore expected and correct: the next firing
+    # finds the lock held and exits as a no-op. While an order is in flight,
+    # a second executor is the last thing anyone wants.
+    job_timeout=1800
+    # The ONLY allowlist in this system containing order tools. Everything else
+    # — research, ticks, the universe sweep — is read-only by construction, and
+    # test-scheduled-run.sh enforces that for every job but this one.
+    allowed="Read Glob Grep ToolSearch mcp__schwab__get_datetime mcp__schwab__get_market_hours mcp__schwab__get_accounts mcp__schwab__get_account mcp__schwab__get_orders mcp__schwab__get_order mcp__schwab__get_quotes mcp__schwab__get_instruments mcp__schwab__get_option_chain mcp__schwab__create_option_symbol mcp__schwab__preview_equity_order mcp__schwab__preview_option_order mcp__schwab__place_previewed_order mcp__schwab__cancel_order Bash(scripts/pre-order-check.sh:*) Bash(scripts/trade-log-append.sh:*) Bash(scripts/check-consistency.sh:*) Bash(scripts/data-append.sh:*)"
+    prompt="Run one execution pass for ${today}.
+
+You are the \`trader\` agent, dispatched unattended by the server scheduler.
+Follow .claude/agents/trader.md exactly — it is your operating document and it
+outranks anything you infer from this prompt.
+
+Order of work, no improvisation:
+1. §1 refusals FIRST. ALERT.md, cashCall, isClosingOnlyRestricted, §3.6 halt,
+   §8 lockout, market not open, check-consistency FAIL, broker unreadable.
+   Any one of them ends the run.
+2. Reconcile from the broker. Read strategy.md — the manual's header requires
+   the playbook before any order, however fresh this process is.
+3. §2 decision. Protective actions outrank entries, always. AT MOST ONE
+   order-bearing action this invocation, then stop.
+4. §3 workflow for that action: §4.9 log row BEFORE the order via
+   scripts/trade-log-append.sh, preview, scripts/pre-order-check.sh, all four
+   §4.10 gates, place, verify.
+
+**No entry after 15:30 ET.** You must be able to supervise an entry to a
+resting, verified stop inside this same invocation (§4), and after 15:30 you
+cannot. Protective actions continue to the close.
+
+You have roughly 25 minutes of wall clock. Each write blocks up to 600s on
+Chris's Discord reaction. Budget for entry + stop being two of those. If you
+cannot complete an entry AND its stop, do not start the entry.
+
+Resolve date and time from get_datetime, never the machine clock. Doing
+nothing is a legitimate and common outcome — report 'EXEC none' and stop."
+    ;;
+
   tick)
     agent="tick-watch"
     window_open=$((9*60+30)); window_close=$((16*60))
@@ -359,6 +407,22 @@ fi
 # Deliberately unconditional and loud. A clean tick relays nothing at all —
 # 26 "all clear" messages a day would train Chris to ignore the channel, and
 # the one that mattered would scroll past with the rest.
+# --- relay every execution outcome that is not "nothing happened" ---------
+# An order-bearing run is the one thing in this system Chris must always be able
+# to reconstruct after the fact. The Discord ✅/❌ already showed him the order;
+# this says what came of it — filled, aborted at a gate, refused outright.
+# 'EXEC none' is the common case and stays silent, for the same reason a clean
+# tick does: routine noise is how the message that matters gets missed.
+if [ "$job" = "execute" ]; then
+  ex="$(grep -E '^(EXEC|REFUSE|ABORT|ALERT)' <<<"$output" | grep -v '^EXEC none' || true)"
+  if [ -n "$ex" ]; then
+    notify "⚙️ **EXECUTE — $today $(et '+%H:%M') ET**
+\`\`\`
+$ex
+\`\`\`"
+  fi
+fi
+
 trip="$(grep -E '^(TRIP|FAIL):' <<<"$output" || true)"
 if [ -n "$trip" ]; then
   notify "🚨 **TICK TRIP — $today $(et '+%H:%M') ET** — a watch tripped on the unattended sweep. **Nothing has acted on this**: the scheduled tick has no order tools and §E belongs to a live session. Open one.
