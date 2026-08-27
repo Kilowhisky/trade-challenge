@@ -173,7 +173,15 @@ wrong way.
 cached** (like B1's market hours). Its source is the **"State recorded —
 current"** block of the most recent `status/YYYY-MM-DD.md` — that exact
 heading; status files can contain superseded state blocks with near-identical
-headings, and the first "High-water mark" grep hit may be stale. The tick
+headings, and the first "High-water mark" grep hit may be stale.
+
+**Resolve it with `scripts/latest-status.sh --hwm`, not by Globbing.**
+`status/` is gitignored under §7.1 and the Glob tool returns no matches under
+an ignored path — measured in the container 2026-08-26: 11 files present, `Glob
+status/*.md` reported **0**. An agent that searches for the file concludes it
+does not exist and falls back to something weaker, which for this particular
+number means a wrong §3.6 halt threshold. The script reads only the "current"
+block, so it also sidesteps the superseded-block trap above. The tick
 ledger's `hwm` column is **derived output, never a source** — a ledger row
 echoes what B5 computed, so reading it back would self-certify any error,
 and the day's last row predates the session-close ratchet anyway.

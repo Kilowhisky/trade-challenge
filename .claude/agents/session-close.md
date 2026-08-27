@@ -40,10 +40,30 @@ without them:
 
 ## §2 — Resolve the prior high-water mark
 
-From the **most recent** `status/*.md` before today, the `### State recorded —
-current` block, the `High-water mark:` line. That exact heading — a status file
-may carry superseded blocks with near-identical headings, and the first grep hit
-can be the stale one.
+**Do not Glob for it.** `status/` is gitignored under §7.1 (local-only, purged
+before the repo went public) and the Glob tool returns nothing under an ignored
+path — measured in the container 2026-08-26: 11 status files present, `Glob
+status/*.md` reported **0**. Read on an explicit path still works, which is why
+this is so easy to miss: an agent that searches concludes no status file exists
+and quietly falls back to something else. The first run of this agent did
+exactly that, reporting "no status file existed before this one" with
+`status/2026-08-25.md` sitting right there.
+
+So resolve it deterministically:
+
+```
+scripts/latest-status.sh --before <today>          # the prior file's path
+scripts/latest-status.sh --before <today> --hwm    # the prior mark
+```
+
+`--before` excludes today's own file, which matters: comparing today against
+itself would make the ratchet a no-op forever. The `--hwm` form reads only the
+`### State recorded — current` block — a status file may carry superseded
+blocks with near-identical headings, and the first grep hit in the file can be
+the stale one.
+
+Read the file itself as well; the figure alone is not enough context to write a
+close note that follows on from the last one.
 
 Never take the HWM from a tick ledger's `hwm` column. That column is derived
 output: a row echoes what the tick computed, so reading it back would

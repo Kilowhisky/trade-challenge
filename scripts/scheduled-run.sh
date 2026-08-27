@@ -137,7 +137,7 @@ write_scripts="Bash(scripts/research-replace.sh:*) Bash(scripts/research-append.
 # screen and report the skip in a line nobody was required to read. That is the
 # third time an allowlist has silently dropped a step, so the omission is now a
 # test failure rather than a log entry (test-scheduled-run.sh).
-compute_scripts="Bash(scripts/universe-filter.sh:*)"
+compute_scripts="Bash(scripts/universe-filter.sh:*) Bash(scripts/latest-status.sh:*)"
 
 case "$job" in
   preopen)
@@ -154,9 +154,12 @@ written.
 Resolve your own context from the canonical sources — do NOT assume any value
 was passed to you:
 - Date and ET time: mcp__schwab__get_datetime, never the machine clock.
-- Held symbols and sectors: the latest status/*.md file.
-- Competition capital: the 'State recorded — current' block of the latest
-  status/*.md (echo the figure and its date).
+- Held symbols and sectors: the latest status/*.md file. Do NOT Glob for it —
+  status/ is gitignored and Glob returns nothing under an ignored path (11
+  files present, Glob reported 0, measured 2026-08-26). Resolve the path with
+  scripts/latest-status.sh and Read that path.
+- Competition capital: the 'State recorded — current' block of that same file
+  (echo the figure and its date).
 - Active calendar guards: read them from strategy.md §4 and §10 at run time.
   Never from a date written into a command file or into this prompt.
 
@@ -179,9 +182,12 @@ written, and you own the POST window.
 Resolve your own context from the canonical sources — do NOT assume any value
 was passed to you:
 - Date and ET time: mcp__schwab__get_datetime, never the machine clock.
-- Held symbols and sectors: the latest status/*.md file.
-- Competition capital: the 'State recorded — current' block of the latest
-  status/*.md (echo the figure and its date).
+- Held symbols and sectors: the latest status/*.md file. Do NOT Glob for it —
+  status/ is gitignored and Glob returns nothing under an ignored path (11
+  files present, Glob reported 0, measured 2026-08-26). Resolve the path with
+  scripts/latest-status.sh and Read that path.
+- Competition capital: the 'State recorded — current' block of that same file
+  (echo the figure and its date).
 - Active calendar guards: read them from strategy.md §4 and §10 at run time.
 
 You have no session to ping into and no §E authority — §E belongs to the
@@ -259,7 +265,7 @@ nothing is a legitimate and common outcome — report 'EXEC none' and stop."
     # difference between "nobody is watching the book between 09:30 and 16:00"
     # and "something is watching and will ping Chris". Before 2026-08-26 the
     # answer was the former, on every unattended day.
-    allowed="Read Glob Grep ToolSearch mcp__schwab__get_datetime mcp__schwab__get_market_hours mcp__schwab__get_accounts mcp__schwab__get_account mcp__schwab__get_orders mcp__schwab__get_quotes Bash(scripts/tick-append.sh:*)"
+    allowed="Read Glob Grep ToolSearch mcp__schwab__get_datetime mcp__schwab__get_market_hours mcp__schwab__get_accounts mcp__schwab__get_account mcp__schwab__get_orders mcp__schwab__get_quotes Bash(scripts/tick-append.sh:*) Bash(scripts/latest-status.sh:*)"
     prompt="Run /tick for ${today}.
 
 You are the SCHEDULED, UNATTENDED tick, dispatched by the server scheduler on
@@ -301,7 +307,7 @@ complete. Output the canonical line and nothing else when the tick is clean."
     # closing-only, no buys — when a prior day's ledger shows a comp_capital
     # above that mark. With nothing writing the file, every profitable day left
     # that evidence behind: the system self-halted on a win, and only on a win.
-    allowed="Read Glob Grep ToolSearch mcp__schwab__get_datetime mcp__schwab__get_market_hours mcp__schwab__get_accounts mcp__schwab__get_account mcp__schwab__get_orders mcp__schwab__get_quotes Bash(scripts/status-write.sh:*)"
+    allowed="Read Glob Grep ToolSearch mcp__schwab__get_datetime mcp__schwab__get_market_hours mcp__schwab__get_accounts mcp__schwab__get_account mcp__schwab__get_orders mcp__schwab__get_quotes Bash(scripts/status-write.sh:*) Bash(scripts/latest-status.sh:*)"
     prompt="Write the §7.2 session-close status file for ${today}.
 
 You are the SCHEDULED, UNATTENDED session close, dispatched by the server

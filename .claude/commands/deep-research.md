@@ -24,7 +24,11 @@ The parent does not execute §P/§D itself:
    background** with cached context: date + ET time, held symbols +
    sectors, comp capital SOURCE = the "State recorded — current" block of
    the latest `status/*.md` (echo the figure and its date — the exact
-   resolution rule tick.md §B5 uses for HWM), active calendar guards
+   resolution rule tick.md §B5 uses for HWM). **Resolve that path with
+   `scripts/latest-status.sh`, never by Globbing:** `status/` is gitignored
+   under §7.1 and Glob returns no matches under an ignored path — 11 files
+   present, `Glob status/*.md` reported 0, measured in the container
+   2026-08-26. Then active calendar guards
    (**read them from playbook §4 and §10 at dispatch time — never from a
    date hard-coded here**), mode (`$ARGUMENTS`: preopen | postclose).
 
