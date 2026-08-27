@@ -30,6 +30,21 @@
 # relayed to Discord for a human to act on — it is not the live §E loop.
 2-59/15 9-15 * * 1-5   /app/scripts/scheduled-run.sh tick
 
+# --- session close (§7.2) -------------------------------------------------
+# 16:04 ET, four minutes after the bell so the marks are closing marks, and
+# eighteen before the postclose deep run that reads the file it writes.
+#
+# This job's ABSENCE was a live defect until 2026-08-26. tick.md §B5 resolves
+# the high-water mark from the most recent status/ file; with nothing writing
+# one, the mark froze and the orphan-ledger recovery rule stood ready to write
+# ALERT.md — closing-only, no buys — on the morning after any day the account
+# made a new high. It self-halted on wins and only on wins. 2026-08-26 cleared
+# the threshold by $7.36.
+#
+# Ordering against postclose is a real constraint, not a preference: the job's
+# 720s timeout ends the worst case at 16:16, six minutes clear of 16:22.
+4  16 * * 1-5   /app/scripts/scheduled-run.sh sessionclose
+
 # --- execution (playbook §7) ---------------------------------------------
 # The ONLY job with order tools. Offset five minutes behind the tick so it acts
 # on a book state that was just swept rather than one it re-derives.

@@ -11,6 +11,16 @@
 set -uo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)" || exit 2
 
+# Every dispatch in this suite writes its logs into a scratch tree, never the
+# repo's own status/. On the laptop status/ is a SYMLINK into the private store
+# repo, and the `rm -rf "$SCRATCH_CRON"` these tests do between dispatches was
+# deleting server-written cron logs out of a live working tree — the "files keep
+# vanishing from the store" behaviour that got blamed on iCloud for two days.
+# scheduled-run.sh honours TC_STATUS_DIR only under TC_DRY_RUN=1.
+export TC_STATUS_DIR="$(mktemp -d)"
+trap 'rm -rf "$TC_STATUS_DIR"' EXIT
+SCRATCH_CRON="$TC_STATUS_DIR/cron"
+
 pass=0; fail=0
 ok()  { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
 bad() { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
@@ -45,6 +55,20 @@ expect postclose $((18*60))    3 RUN  "exactly at the window close"
 expect postclose $((18*60+1))  3 SKIP "one minute after"
 expect postclose $((16*60+22)) 7 SKIP "Sunday"
 
+echo "== sessionclose window (16:00-16:15 ET, Mon-Fri) =="
+# The upper bound is load-bearing in a way the other windows' are not: the
+# 16:22 postclose deep run reads "the latest status/*.md" for held symbols and
+# competition capital. A close write that lands after it has already run leaves
+# that run reading YESTERDAY, which is the staleness this job exists to end.
+expect sessionclose $((15*60+59)) 2 SKIP "one minute before the bell — marks are not closing marks yet"
+expect sessionclose $((16*60))    2 RUN  "exactly at the bell"
+expect sessionclose $((16*60+5))  2 RUN  "at the scheduled fire time"
+expect sessionclose $((16*60+15)) 2 RUN  "exactly at the window close"
+expect sessionclose $((16*60+16)) 2 SKIP "one minute after — postclose would read a stale status file"
+expect sessionclose $((16*60+22)) 2 SKIP "cannot still be running when postclose fires"
+expect sessionclose $((16*60+5))  6 SKIP "Saturday"
+expect sessionclose $((16*60+5))  7 SKIP "Sunday"
+
 echo "== weekly-universe (06:00-12:00 ET, weekend only) =="
 expect weekly-universe $((7*60+40)) 6 RUN  "Saturday at the fire time"
 expect weekly-universe $((7*60+40)) 7 RUN  "Sunday still allowed"
@@ -72,9 +96,9 @@ echo "== a tick must be bounded well inside its own cadence =="
 # The lock makes an overlapping tick a no-op, so ONE hung sweep silently costs
 # a full cadence of monitoring rather than piling up. At the hour every research
 # job may legitimately take, that is four missed sweeps.
-rm -rf status/cron
+rm -rf "$SCRATCH_CRON"
 TC_DRY_RUN=1 TC_NOW_ET_MIN=$((12*60)) TC_DOW=3 ./scripts/scheduled-run.sh tick >/dev/null 2>&1
-tick_to="$(grep -oE 'timeout -k 60 [0-9]+' status/cron/*tick.log 2>/dev/null | grep -oE '[0-9]+$' | tail -1)"
+tick_to="$(grep -oE 'timeout -k 60 [0-9]+' "$SCRATCH_CRON"/*tick.log 2>/dev/null | grep -oE '[0-9]+$' | tail -1)"
 if [ -z "$tick_to" ]; then
   # Dry run does not print the runner; fall back to the source declaration.
   tick_to="$(sed -n '/^  tick)/,/;;/p' scripts/scheduled-run.sh | sed -n 's/.*job_timeout=\([0-9]*\).*/\1/p')"
@@ -82,7 +106,7 @@ fi
 [ -n "$tick_to" ] && [ "$tick_to" -lt 900 ] \
   && ok "tick timeout ${tick_to}s is inside the 15-minute cadence" \
   || bad "tick timeout is '${tick_to:-unset}' — a hung sweep can outlive its own cadence"
-rm -rf status/cron
+rm -rf "$SCRATCH_CRON"
 
 echo
 echo "== a tripped watch must reach a human =="
@@ -115,14 +139,14 @@ forced_run() { # job min dow -> RUN or SKIP, with --force
 
 # The audit trail must distinguish the two. A forced run that looks normal in
 # the heartbeat is how a bypass becomes invisible.
-rm -rf status/cron
+rm -rf "$SCRATCH_CRON"
 TC_DRY_RUN=1 TC_NOW_ET_MIN=$((23*60+20)) TC_DOW=2 ./scripts/scheduled-run.sh weekly-universe --force >/dev/null 2>&1
-grep -q '"forced":true' status/cron/heartbeat.jsonl 2>/dev/null \
+grep -q '"forced":true' "$SCRATCH_CRON"/heartbeat.jsonl 2>/dev/null \
   && ok "the heartbeat records the run as forced" \
   || bad "a forced run is indistinguishable from a scheduled one in the heartbeat"
-rm -rf status/cron
+rm -rf "$SCRATCH_CRON"
 TC_DRY_RUN=1 TC_NOW_ET_MIN=$((7*60+40)) TC_DOW=6 ./scripts/scheduled-run.sh weekly-universe >/dev/null 2>&1
-grep -q '"forced"' status/cron/heartbeat.jsonl 2>/dev/null \
+grep -q '"forced"' "$SCRATCH_CRON"/heartbeat.jsonl 2>/dev/null \
   && bad "a NORMAL run is marked forced" \
   || ok "a normal run carries no forced marker"
 
@@ -136,14 +160,14 @@ echo "== a dry run must never look like a real fire =="
 # rehearsals run on the server at 01:10 ET landed as that day's preopen and
 # postclose with verdict "ok" — which would have told the 09:35 deadman the
 # morning was fine while nothing had actually run. Tagged here, filtered there.
-rm -rf status/cron
+rm -rf "$SCRATCH_CRON"
 TC_DRY_RUN=1 TC_NOW_ET_MIN=$((8*60+30)) TC_DOW=2 ./scripts/scheduled-run.sh preopen >/dev/null 2>&1
-grep -q '"dry_run":true' status/cron/heartbeat.jsonl 2>/dev/null \
+grep -q '"dry_run":true' "$SCRATCH_CRON"/heartbeat.jsonl 2>/dev/null \
   && ok "a dry run is tagged dry_run in the heartbeat" \
   || bad "a dry run is indistinguishable from a real fire in the heartbeat"
 # And the deadman must actually act on the tag.
 if grep -q 'dry_run' scripts/job-deadman.sh; then
-  hb=status/cron/heartbeat.jsonl
+  hb="$SCRATCH_CRON/heartbeat.jsonl"
   if [ "$(grep "\"job\":\"preopen\"" "$hb" | grep -v '"dry_run":true' | wc -l | tr -d ' ')" = "0" ]; then
     ok "job-deadman's filter leaves no verdict behind for a dry-run-only day"
   else
@@ -152,7 +176,7 @@ if grep -q 'dry_run' scripts/job-deadman.sh; then
 else
   bad "job-deadman.sh does not filter dry_run — a rehearsal can blind it"
 fi
-rm -rf status/cron
+rm -rf "$SCRATCH_CRON"
 
 echo "== the prompt survives argument parsing =="
 # --allowedTools is variadic ("comma or space-separated"). Passed as separate
@@ -160,9 +184,9 @@ echo "== the prompt survives argument parsing =="
 # exits with "Input must be provided either through stdin or as a prompt
 # argument" — which would have failed EVERY scheduled job on its first real run,
 # and which no amount of guard-testing would have caught.
-rm -rf status/cron
+rm -rf "$SCRATCH_CRON"
 TC_DRY_RUN=1 TC_NOW_ET_MIN=$((8*60+30)) TC_DOW=2 ./scripts/scheduled-run.sh preopen >/dev/null 2>&1
-line="$(grep -o 'DRY-RUN would exec: .*' status/cron/*preopen.log 2>/dev/null | head -1)"
+line="$(grep -o 'DRY-RUN would exec: .*' "$SCRATCH_CRON"/*preopen.log 2>/dev/null | head -1)"
 if grep -qE 'allowedTools [^ ]+,[^ ]+' <<<"$line"; then
   ok "--allowedTools is a single comma-separated argument"
 else
@@ -202,11 +226,12 @@ order_leak=0
 checked=0
 # tick matters most here: it is the only job that runs while the market is open,
 # and the one whose §E escalation would place orders if a live session ran it.
-for spec in "preopen $((8*60+30)) 2" "postclose $((16*60+30)) 2" "weekly-universe $((7*60+40)) 6" "tick $((12*60)) 3"; do
+for spec in "preopen $((8*60+30)) 2" "postclose $((16*60+30)) 2" "weekly-universe $((7*60+40)) 6" \
+            "tick $((12*60)) 3" "sessionclose $((16*60+5)) 2"; do
   set -- $spec; j="$1"; m="$2"; d="$3"
-  rm -rf status/cron
+  rm -rf "$SCRATCH_CRON"
   TC_DRY_RUN=1 TC_NOW_ET_MIN="$m" TC_DOW="$d" ./scripts/scheduled-run.sh "$j" >/dev/null 2>&1
-  l="$(grep -o 'DRY-RUN would exec: .*' status/cron/*"$j".log 2>/dev/null | head -1)"
+  l="$(grep -o 'DRY-RUN would exec: .*' "$SCRATCH_CRON"/*"$j".log 2>/dev/null | head -1)"
   if [ -z "$l" ]; then
     bad "$j did not dispatch at $m ET dow $d — the allowlist was never checked"
     order_leak=1; continue
@@ -217,8 +242,8 @@ for spec in "preopen $((8*60+30)) 2" "postclose $((16*60+30)) 2" "weekly-univers
     order_leak=1
   fi
 done
-[ "$order_leak" -eq 0 ] && [ "$checked" -eq 4 ] \
-  && ok "no job allowlists place_previewed_order or cancel_order (4 of 4 dispatched and inspected)"
+[ "$order_leak" -eq 0 ] && [ "$checked" -eq 5 ] \
+  && ok "no job allowlists place_previewed_order or cancel_order (5 of 5 dispatched and inspected)"
 
 echo
 echo "== execute is the ONE job that carries order tools =="
@@ -227,9 +252,9 @@ echo "== execute is the ONE job that carries order tools =="
 # capability in exactly one place; this is what keeps it from being quietly
 # removed from the one job that needs it, which would leave a system that
 # looks like it trades and cannot.
-rm -rf status/cron
+rm -rf "$SCRATCH_CRON"
 TC_DRY_RUN=1 TC_NOW_ET_MIN=$((12*60)) TC_DOW=3 ./scripts/scheduled-run.sh execute >/dev/null 2>&1
-exec_line="$(grep -o 'DRY-RUN would exec: .*' status/cron/*execute.log 2>/dev/null | head -1)"
+exec_line="$(grep -o 'DRY-RUN would exec: .*' "$SCRATCH_CRON"/*execute.log 2>/dev/null | head -1)"
 if [ -z "$exec_line" ]; then
   bad "execute did not dispatch at 12:00 ET on a weekday — the executor is unreachable"
 else
@@ -246,7 +271,7 @@ exec_to="$(sed -n '/^  execute)/,/;;/p' scripts/scheduled-run.sh | sed -n 's/.*j
 [ -n "$exec_to" ] && [ "$exec_to" -le 1800 ] && [ "$exec_to" -ge 1200 ] \
   && ok "execute timeout ${exec_to}s covers two 600s Discord approvals and still ends" \
   || bad "execute timeout is '${exec_to:-unset}' — too short for entry+stop, or unbounded"
-rm -rf status/cron
+rm -rf "$SCRATCH_CRON"
 
 echo "== unknown job =="
 TC_DRY_RUN=1 ./scripts/scheduled-run.sh definitely-not-a-job >/dev/null 2>&1
@@ -255,7 +280,15 @@ TC_DRY_RUN=1 ./scripts/scheduled-run.sh definitely-not-a-job >/dev/null 2>&1
 echo "== the clock override is dry-run only =="
 # The whole point of the guard is that production cannot bypass it. If an
 # operator sets TC_NOW_ET_MIN without TC_DRY_RUN, it must be ignored.
-out="$(TC_NOW_ET_MIN=$((8*60+17)) TC_DOW=2 ./scripts/scheduled-run.sh preopen 2>&1)"
+# This is the ONE check that must run without TC_DRY_RUN — that is the whole
+# claim. Which also means TC_STATUS_DIR is (correctly) ignored for it, so it
+# would write into the real status/, i.e. into the store symlink. Run it from a
+# throwaway copy of scripts/ instead: scheduled-run.sh resolves its repo root
+# from its own location, so a copy writes its logs beside the copy.
+sandbox="$(mktemp -d)"
+mkdir -p "$sandbox/scripts"
+cp scripts/*.sh "$sandbox/scripts/"
+out="$(cd "$sandbox" && TC_NOW_ET_MIN=$((8*60+17)) TC_DOW=2 ./scripts/scheduled-run.sh preopen 2>&1)"
 real_min=$(( 10#$(TZ=America/New_York date +%H) * 60 + 10#$(TZ=America/New_York date +%M) ))
 real_dow=$(TZ=America/New_York date +%u)
 if [ "$real_dow" -le 5 ] && [ "$real_min" -ge $((8*60)) ] && [ "$real_min" -le $((9*60+15)) ]; then
@@ -265,7 +298,95 @@ else
                           || bad "TC_NOW_ET_MIN took effect WITHOUT TC_DRY_RUN — the guard is bypassable"
 fi
 
-rm -rf status/cron
+echo
+echo "== every script a job's command file invokes is in that job's allowlist =="
+# The defect this catches has now shipped three times, each time the same shape:
+# the job runs, the agent tries a script, the permission gate refuses it
+# SILENTLY (there is no approver on an unattended box), and the agent reports a
+# skipped step in a log line nobody is required to read. The job's verdict stays
+# "ok". Nothing is broken enough to page anyone, and the step simply stops
+# happening.
+#
+#   2026-08-25  weekly-universe   check-consistency.sh   aborted at §A.1
+#   2026-08-26  postclose         universe-filter.sh     skipped universe screen
+#   2026-08-26  trader (live)     all of them            bare-path form, §4a
+#
+# So the allowlist is checked against the command file rather than against a
+# hand-written list that drifts the same way the allowlist did.
+#
+# Three exclusions, each for a different reason:
+#   - scheduled-run.sh / job-deadman.sh: an agent must never invoke the
+#     scheduler that dispatched it nor the watchdog that audits it. They appear
+#     in the contract files as prose, and allowlisting either would be the bug.
+#   - lib-*.sh: sourced into another script's shell (`. scripts/lib-rules.sh`),
+#     never run as a command, so a Bash() rule for one would grant nothing.
+#   - any path with no file behind it: contract files quote non-existent paths
+#     as examples — trader.md §4a names `scripts/x.sh` precisely to show which
+#     invocation forms the gate refuses.
+# No associative array: this must run under the bash 3.2 that ships on macOS,
+# the same reason the rest of this suite avoids bash 4 constructs.
+contract_for() {
+  case "$1" in
+    preopen|postclose)  echo .claude/commands/deep-research.md ;;
+    weekly-universe)    echo .claude/commands/weekly-universe.md ;;
+    tick)               echo .claude/commands/tick.md ;;
+    sessionclose)       echo .claude/agents/session-close.md ;;
+    execute)            echo .claude/agents/trader.md ;;
+    *)                  echo "" ;;
+  esac
+}
+never_allowlist='scheduled-run.sh|job-deadman.sh'
+missing=0
+inspected=0
+for spec in "preopen $((8*60+30)) 2" "postclose $((16*60+30)) 2" \
+            "weekly-universe $((7*60+40)) 6" "tick $((12*60)) 3" "execute $((12*60)) 3" \
+            "sessionclose $((16*60+5)) 2"; do
+  set -- $spec; j="$1"; m="$2"; d="$3"
+  # execute dispatches an agent, not a command file; its contract is the
+  # agent definition instead.
+  cmd="$(contract_for "$j")"
+  if [ -z "$cmd" ] || [ ! -f "$cmd" ]; then
+    bad "$j: no contract file at '${cmd:-<unmapped>}'"; missing=1; continue
+  fi
+
+  rm -rf "$SCRATCH_CRON"
+  TC_DRY_RUN=1 TC_NOW_ET_MIN="$m" TC_DOW="$d" ./scripts/scheduled-run.sh "$j" >/dev/null 2>&1
+  line="$(grep -o 'DRY-RUN would exec: .*' "$SCRATCH_CRON"/*"$j".log 2>/dev/null | head -1)"
+  if [ -z "$line" ]; then
+    bad "$j did not dispatch at $m ET dow $d — its allowlist was never checked"
+    missing=1; continue
+  fi
+  inspected=$((inspected+1))
+
+  for want in $(grep -oE 'scripts/[a-z-]+\.sh' "$cmd" | sort -u); do
+    grep -qE "$never_allowlist" <<<"$want" && continue
+    case "$(basename "$want")" in lib-*.sh) continue ;; esac
+    [ -f "$want" ] || continue
+    if ! grep -qF "Bash($want:*)" <<<"$line"; then
+      bad "$j: $(basename "$cmd") invokes $want but the allowlist omits it — the step will silently skip"
+      missing=1
+    fi
+  done
+done
+[ "$missing" -eq 0 ] && [ "$inspected" -eq 6 ] \
+  && ok "all 6 job allowlists cover every script their contract file invokes"
+
+rm -rf "$SCRATCH_CRON" "$sandbox"
+
+# The suite must leave the repo's own status/ alone. On the laptop that path is
+# a symlink into the private store, and a test that quietly edits real data is
+# a worse bug than the one it was checking for. This is the assertion that
+# would have caught it on day one.
+if [ -d status/cron ] && command -v git >/dev/null 2>&1; then
+  dirty="$(git -C status status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "${dirty:-0}" -eq 0 ]; then
+    ok "the suite left the real status/ tree untouched"
+  else
+    bad "the suite modified $dirty file(s) under the real status/ — it is writing outside its scratch dir"
+    git -C status status --porcelain 2>/dev/null | sed 's/^/       /'
+  fi
+fi
+
 echo
 echo "-------------------------------------------"
 echo "$pass passed, $fail failed"

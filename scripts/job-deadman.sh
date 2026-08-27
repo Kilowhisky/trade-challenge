@@ -76,6 +76,21 @@ if [ "$dow" -le 5 ]; then
   back=1; [ "$dow" -eq 1 ] && back=3        # Monday looks back to Friday
   prev="$(et -v-${back}d +%F 2>/dev/null || et -d "-${back} days" +%F)"
   check postclose "$prev" "postclose $prev"
+
+  # Yesterday's §7.2 close write. This one is checked not because the report
+  # matters to a reader but because tick.md §B5 reads the file it produces: a
+  # missing close write leaves the high-water mark frozen at whatever the last
+  # written file said, and leaves the orphan-ledger rule ready to write
+  # ALERT.md — closing-only, no buys — the morning after any profitable day.
+  # A silent miss here is a trading halt one day later, so it is worth a page.
+  check sessionclose "$prev" "sessionclose $prev"
+
+  # The file itself, not just the heartbeat: status-write.sh can refuse a
+  # malformed write while the job still reports ok, and the heartbeat cannot
+  # tell those apart.
+  if [ ! -f "$repo_root/status/$prev.md" ]; then
+    problems+=("**status/$prev.md missing** — the close write did not land. tick.md §B5 will resolve the HWM from an older file, and the orphan-ledger rule may write \`ALERT.md\` and stop all buying.")
+  fi
 fi
 
 if [ "${#problems[@]}" -eq 0 ]; then

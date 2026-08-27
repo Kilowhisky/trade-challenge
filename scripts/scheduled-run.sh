@@ -78,7 +78,21 @@ if [ "${TC_DRY_RUN:-0}" = "1" ]; then
   [ -n "${TC_DOW:-}" ] && dow="$TC_DOW"
 fi
 
-log_dir="$repo_root/status/cron"
+# TC_STATUS_DIR is a TEST SEAM, honoured only under TC_DRY_RUN=1 — production
+# cannot be redirected, the same rule TC_NOW_ET_MIN follows.
+#
+# It exists because on the laptop `status/` is a SYMLINK into the private store
+# repo, so the suite's `rm -rf status/cron` between dispatches was deleting
+# server-written cron logs out of a real working tree. That is the "files keep
+# vanishing from the store" behaviour that went unexplained for two days and got
+# blamed on iCloud sync; it was this. A test that damages real data to check a
+# guard is a worse defect than the guard being unchecked.
+if [ "${TC_DRY_RUN:-0}" = "1" ] && [ -n "${TC_STATUS_DIR:-}" ]; then
+  printf 'scheduled-run: TEST SEAM active — logs to %s, not the real status/\n' "$TC_STATUS_DIR" >&2
+  log_dir="$TC_STATUS_DIR/cron"
+else
+  log_dir="$repo_root/status/cron"
+fi
 mkdir -p "$log_dir"
 log_file="$log_dir/${today}-${job}.log"
 heartbeat="$log_dir/heartbeat.jsonl"
@@ -116,13 +130,21 @@ notify() { "$repo_root/scripts/discord-notify.sh" "$1" || say "WARN discord-noti
 common_tools="Read Glob Grep ToolSearch WebSearch WebFetch"
 schwab_read="mcp__schwab__get_datetime mcp__schwab__get_market_hours mcp__schwab__get_quotes mcp__schwab__get_instruments mcp__schwab__get_option_chain mcp__schwab__get_option_expiration_chain mcp__schwab__get_advanced_price_history mcp__schwab__get_advanced_option_chain"
 write_scripts="Bash(scripts/research-replace.sh:*) Bash(scripts/research-append.sh:*) Bash(scripts/research-write.sh:*) Bash(scripts/oi-append.sh:*) Bash(scripts/data-append.sh:*)"
+# universe-filter.sh computes; it writes nothing. It is separated from
+# write_scripts so the name keeps meaning what it says, and it is here at all
+# because deep-research.md §A screens research/universe.md through it. Omitting
+# it did not fail the 2026-08-26 postclose run — it made it SKIP the universe
+# screen and report the skip in a line nobody was required to read. That is the
+# third time an allowlist has silently dropped a step, so the omission is now a
+# test failure rather than a log entry (test-scheduled-run.sh).
+compute_scripts="Bash(scripts/universe-filter.sh:*)"
 
 case "$job" in
   preopen)
     agent="deep-research"
     window_open=$((8*60));  window_close=$((9*60+15))
     days="1 2 3 4 5"
-    allowed="$common_tools $schwab_read $write_scripts"
+    allowed="$common_tools $schwab_read $write_scripts $compute_scripts"
     prompt="Run /deep-research preopen for ${today}.
 
 You are the scheduled 08:15 ET pre-open run, dispatched by the server
@@ -147,7 +169,7 @@ If §A.6 finds research/preopen/${today}.md already exists, no-op and say so."
     agent="deep-research"
     window_open=$((16*60+15)); window_close=$((18*60))
     days="1 2 3 4 5"
-    allowed="$common_tools $schwab_read $write_scripts"
+    allowed="$common_tools $schwab_read $write_scripts $compute_scripts"
     prompt="Run /deep-research postclose for ${today}.
 
 You are the scheduled 16:20 ET post-close run, dispatched by the server
@@ -256,6 +278,53 @@ wrapper relays that to Chris in Discord. Same for 'FAIL:' if the sweep could not
 complete. Output the canonical line and nothing else when the tick is clean."
     ;;
 
+  sessionclose)
+    agent="session-close"
+    # 16:00-16:15 ET. Opens AT the bell so the marks are closing marks, and
+    # closes before the 16:22 postclose deep run, which reads "the latest
+    # status/*.md" for held symbols and competition capital — it must find
+    # today's file, not yesterday's.
+    window_open=$((16*60)); window_close=$((16*60+15))
+    days="1 2 3 4 5"
+    # 720s, deliberately shorter than the tick's budget is generous. Fired at
+    # 16:04, the worst case ends 16:16 — six minutes clear of the 16:22
+    # postclose. The window guard only tests the START of a run, so the timeout
+    # is the only thing bounding the END, and an overrun here means postclose
+    # reads this file while it is being written.
+    job_timeout=720
+    # NO ORDER TOOLS. This job records state; it never changes it. Its only
+    # write path is status-write.sh, which validates the shape the rest of the
+    # system greps for.
+    #
+    # This is the job whose ABSENCE was the bug. tick.md §B5 resolves the HWM
+    # from the latest status file, and its orphan-ledger rule writes ALERT.md —
+    # closing-only, no buys — when a prior day's ledger shows a comp_capital
+    # above that mark. With nothing writing the file, every profitable day left
+    # that evidence behind: the system self-halted on a win, and only on a win.
+    allowed="Read Glob Grep ToolSearch mcp__schwab__get_datetime mcp__schwab__get_market_hours mcp__schwab__get_accounts mcp__schwab__get_account mcp__schwab__get_orders mcp__schwab__get_quotes Bash(scripts/status-write.sh:*)"
+    prompt="Write the §7.2 session-close status file for ${today}.
+
+You are the SCHEDULED, UNATTENDED session close, dispatched by the server
+scheduler just after the bell. Follow .claude/agents/session-close.md exactly.
+
+Resolve the date and ET time from get_datetime, never the machine clock, and
+read the account live per §4.5 — never from a cached figure and never from a
+number written into this prompt.
+
+Perform the §3 high-water-mark ratchet against the prior mark you resolve
+yourself from the most recent status/*.md 'State recorded — current' block.
+Ratchet on the CLOSING competition capital, never on an intraday print, and
+never lower the mark.
+
+Write exactly one file, via scripts/status-write.sh ${today}. If it already
+exists, do NOT pass --replace unless you are deliberately correcting it, and
+say so if you do.
+
+Output the §5 contract line. If the file could not be written, output
+CLOSE-FAIL with the reason — an unwritten close file is what halts trading
+tomorrow, so it must not fail silently."
+    ;;
+
   weekly-universe)
     agent="weekly-universe"
     window_open=$((6*60));  window_close=$((12*60))
@@ -266,7 +335,7 @@ complete. Output the canonical line and nothing else when the tick is clean."
     # job could never have completed. Found 2026-08-25 by the first forced run;
     # the Saturday cron would have hit it on 8/29. It is read-only: it verifies
     # that rules.yml, the docs and the scripts still agree, and writes nothing.
-    allowed="Read Glob Grep ToolSearch mcp__schwab__get_datetime mcp__schwab__get_market_hours mcp__schwab__get_quotes Bash(scripts/check-consistency.sh:*) Bash(scripts/universe-fetch.sh:*) Bash(scripts/universe-filter.sh:*) Bash(scripts/research-replace.sh:*)"
+    allowed="Read Glob Grep ToolSearch mcp__schwab__get_datetime mcp__schwab__get_market_hours mcp__schwab__get_quotes Bash(scripts/check-consistency.sh:*) Bash(scripts/universe-fetch.sh:*) Bash(scripts/universe-filter.sh:*) Bash(scripts/research-replace.sh:*) Bash(scripts/data-append.sh:*)"
     prompt="Run /weekly-universe for ${today}.
 
 You are the scheduled weekend whole-market sweep, dispatched by the server
