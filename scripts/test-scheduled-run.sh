@@ -371,6 +371,86 @@ done
 [ "$missing" -eq 0 ] && [ "$inspected" -eq 6 ] \
   && ok "all 6 job allowlists cover every script their contract file invokes"
 
+# == verdict classification (content-level failure) ========================
+# rc=0 means "claude ran", NOT "the job did its work". Every dispatch prompt
+# in this file defines a `FAIL:` first line as the contract for "I could not
+# complete", and on 2026-08-27 two ticks reported exactly that — no account
+# hash, no broker read, no ledger row — and were recorded as verdict "ok".
+# job-deadman.sh then read those entries and reported "all expected jobs
+# accounted for" while the book had gone unwatched for half an hour.
+#
+# The heartbeat is the ONLY record the deadman reads. If a content failure
+# cannot be distinguished from a clean run there, the watchdog is decorative.
+echo
+echo "== verdict reflects the agent's own FAIL contract =="
+
+verdict_of() { # fake-output -> prints the recorded verdict
+  rm -rf "$SCRATCH_CRON"
+  TC_DRY_RUN=1 TC_NOW_ET_MIN=600 TC_DOW=3 TC_FAKE_OUTPUT="$1" \
+    ./scripts/scheduled-run.sh tick >/dev/null 2>&1
+  sed -n 's/.*"verdict":"\([a-z]*\)".*/\1/p' "$SCRATCH_CRON/heartbeat.jsonl" 2>/dev/null | tail -1
+}
+
+got="$(verdict_of 'FAIL: dispatch prompt supplied no account hash')"
+[ "$got" = "failed" ] \
+  && ok "a FAIL: sweep is recorded as failed, so the deadman can see it" \
+  || bad "a FAIL: sweep recorded as '${got:-<none>}' — job-deadman.sh will call it ok"
+
+got="$(verdict_of '10:02 ET | RTH | comp $2868.52 (-1.09%) | HWM $2900.00 | OK')"
+[ "$got" = "ok" ] \
+  && ok "a clean tick is still recorded as ok" \
+  || bad "a clean tick recorded as '${got:-<none>}' — want ok"
+
+# A trip is a SUCCESSFUL sweep that found something. Marking it failed would
+# make the deadman nag about the one job that did exactly its job.
+got="$(verdict_of '10:02 ET | RTH | comp $2868.52 | TRIP:7
+TRIP: watch 7 — stop missing on CSX')"
+[ "$got" = "ok" ] \
+  && ok "a tripped watch stays ok — the sweep completed, §E relays the trip" \
+  || bad "a trip recorded as '${got:-<none>}' — a working sweep must not read as a failure"
+
+rm -rf "$SCRATCH_CRON"
+
+# == the unattended tick can resolve its own account hash ==================
+# tick.md §B2 calls get_account(account_hash) and §Dispatch describes a parent
+# handing that hash down. The scheduled tick HAS no parent. Until 2026-08-27
+# the agent contract also said "Use ONLY get_datetime, get_market_hours,
+# get_account, get_orders, get_quotes" — get_accounts was granted in the
+# frontmatter and forbidden by the procedure, so the agent was obeying orders
+# when it returned "FAIL: no account hash" and left the book unwatched.
+#
+# The hash cannot come from the repo: §7.4 redacts it because this repo is
+# public. get_accounts is therefore the ONLY resolution path, and all three
+# layers have to keep saying so.
+echo
+echo "== unattended tick resolves its own account hash =="
+
+tick_block="$(sed -n '/^  tick)/,/;;/p' scripts/scheduled-run.sh)"
+
+grep -q 'mcp__schwab__get_accounts' <<<"$tick_block" \
+  && ok "the tick allowlist grants get_accounts" \
+  || bad "the tick allowlist has no get_accounts — the hash is unresolvable"
+
+grep -q 'get_accounts' <<<"$(sed -n '/prompt="Run \/tick/,/^    ;;/p' scripts/scheduled-run.sh)" \
+  && ok "the tick dispatch prompt tells the agent to resolve the hash" \
+  || bad "the tick prompt supplies no hash and never mentions get_accounts"
+
+# The BODY, not the frontmatter. `tools:` has always granted get_accounts —
+# grepping the whole file passes no matter what the procedure says, which is
+# precisely the state that produced the blind ticks. Strip the frontmatter.
+tw_body="$(awk '/^---$/{n++; next} n>=2' .claude/agents/tick-watch.md)"
+grep -q 'get_accounts' <<<"$tw_body" \
+  && ok "the tick-watch procedure permits get_accounts" \
+  || bad "tick-watch.md grants get_accounts but its procedure forbids calling it"
+
+# The B2 SECTION, not the whole file. §B's call-ceiling paragraph also names
+# get_accounts, so a file-wide grep stays green even with B2's resolution rule
+# deleted — and B2 is the section the agent actually executes.
+b2="$(awk '/^### B2\./{f=1; next} /^### /{f=0} f' .claude/commands/tick.md)"
+grep -q 'get_accounts' <<<"$b2" \
+  && ok "tick.md B2 documents how account_hash is resolved" \
+  || bad "tick.md B2 uses account_hash without saying where it comes from"
+
 rm -rf "$SCRATCH_CRON" "$sandbox"
 
 # The suite must leave the repo's own status/ alone. On the laptop that path is

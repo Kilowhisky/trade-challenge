@@ -276,6 +276,13 @@ Resolve the date and time from get_datetime, never the machine clock. Fetch
 get_market_hours yourself — there is no cached session state here, because each
 scheduled tick is a fresh process rather than an iteration of a live loop.
 
+**Resolve the account hash yourself with get_accounts.** This prompt does not
+carry one and no file in the repo does either — CLAUDE.md redacts it under §7.4
+because the repo is public. get_accounts takes no hash and returns the one
+account in the token's scope with its accountHash; that is the value B2/B3 need.
+Not finding a hash lying around is never a reason to return FAIL — that is the
+2026-08-27 defect, where two sweeps gave up here and left the book unwatched.
+
 **No session is watching and you have no order tools.** §E escalation is
 therefore NOT yours to run: you cannot place, amend or cancel anything, and you
 must not try. On a trip, output the canonical one-line summary followed by a
@@ -428,7 +435,15 @@ else say "WARN no timeout(1) available; running unbounded"; fi
 say "RUN agent=$agent"
 out_file="$log_dir/.${job}.out.$$"
 if [ "${TC_DRY_RUN:-0}" = "1" ]; then
-  printf 'DRY-RUN would exec: claude %s <stdin-prompt:%d bytes>\n' "${claude_args[*]}" "${#prompt}" >"$out_file"
+  # TC_FAKE_OUTPUT stands in for the agent's stdout so the regression suite can
+  # exercise the verdict classification below without a claude or a broker.
+  # Honoured ONLY under dry run, exactly like TC_STATUS_DIR: a seam that works
+  # in production is a way to forge a heartbeat.
+  if [ -n "${TC_FAKE_OUTPUT:-}" ]; then
+    printf '%s\n' "$TC_FAKE_OUTPUT" >"$out_file"
+  else
+    printf 'DRY-RUN would exec: claude %s <stdin-prompt:%d bytes>\n' "${claude_args[*]}" "${#prompt}" >"$out_file"
+  fi
   rc=0
 else
   # Prompt on stdin, never as a trailing argument — see the --allowedTools note.
@@ -460,8 +475,27 @@ if [ "$rc" -ne 0 ]; then
   exit 1
 fi
 
-say "OK"
-beat ok "$(head -c 200 <<<"$output" | tr '\n' ' ')"
+# rc=0 means the agent PROCESS exited cleanly. It does not mean the job did its
+# work. Every dispatch prompt above defines a line beginning `FAIL:` as the
+# agent's own "I could not complete" contract, and the heartbeat is the only
+# record job-deadman.sh reads. Recording a FAIL as `ok` is how the watchdog
+# reports "all expected jobs accounted for" over a book nobody watched: on
+# 2026-08-27 two ticks returned FAIL (no account hash, no broker read, no ledger
+# row) and both landed as `ok`, so the 09:35 deadman passed them clean.
+#
+# Classification only — the run continues through the relays below, because a
+# FAIL is precisely the thing that must still reach Chris in Discord. The
+# non-zero exit is deferred to the end of the script for the same reason.
+detail="$(head -c 200 <<<"$output" | tr '\n' ' ')"
+job_failed=0
+if grep -qE '^FAIL\b' <<<"$output"; then
+  job_failed=1
+  say "FAIL agent reported it could not complete"
+  beat failed "$detail"
+else
+  say "OK"
+  beat ok "$detail"
+fi
 
 # --- relay HOT-FRESH ------------------------------------------------------
 # research.md §E is explicit that a suppressed ping is not lost: the candidate is
@@ -517,7 +551,12 @@ fi
 # reading without opening the log. Ticks are excluded on purpose: at 26 a day a
 # routine relay is noise, and a tick that matters goes out as a TRIP above.
 if [ "$job" != "tick" ]; then
-  head -1 <<<"$output" | grep -qE '^(DEEP|UNIVERSE|FAIL)' && notify "✅ $(head -1 <<<"$output")"
+  first="$(head -1 <<<"$output")"
+  if grep -qE '^FAIL\b' <<<"$first"; then
+    notify "🚨 $first"
+  elif grep -qE '^(DEEP|UNIVERSE)' <<<"$first"; then
+    notify "✅ $first"
+  fi
 fi
 
 # --- push what we wrote to the private sidecar ---------------------------
@@ -535,4 +574,7 @@ else
     || say "WARN sidecar sync failed; output is on the server but not yet pushed"
 fi
 
-exit 0
+# Non-zero when the agent said it could not complete. Deferred to here so the
+# Discord relay and the sidecar push above still run on a failed job — the exit
+# code is for supercronic's log, the relay is for the human.
+exit "$job_failed"

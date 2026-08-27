@@ -29,6 +29,10 @@ does **not** execute §B–§D itself. Instead:
    today's `regularMarket` window, `recorded_hwm`, and the prior tick's
    position symbols + resting-stop map. Dispatch in the foreground — the
    next loop decision depends on the result.
+   These are an optimisation, not a precondition. The scheduled tick runs
+   this file with **no parent at all**, so the agent resolves every one of
+   them itself: the hash per B2, the window per B1, `recorded_hwm` per B5.
+   A missing input is something to look up, never a reason to return `FAIL`.
 3. The subagent runs §B–§D, appends the ledger row, and returns the
    canonical line (+ `TRIP:`/`FAIL:` if anything needs the parent). Parent
    outputs the line to Chris **verbatim** and, on a trip, runs §E itself —
@@ -80,7 +84,10 @@ the tick runs.
 
 Run these in order. The call ceiling: **five MCP calls on the first tick of a
 session, four after** (B1's market-hours window is cached), minus one
-whenever B4 is skipped (`PRE` tick or flat book — B1/B4 own those rules).
+whenever B4 is skipped (`PRE` tick or flat book — B1/B4 own those rules),
+**plus one for the B2 `get_accounts` hash resolution whenever no hash was
+supplied.** The scheduled tick is a fresh process every time, so it caches
+nothing and resolves the hash itself: six is its normal count, not an overrun.
 This is a ceiling, not a quota; never add a call to reach it. A watch that
 needs more data escalates under §E instead.
 
@@ -103,6 +110,20 @@ Gate on the clock.
 ### B2. Account read
 
 `get_account(account_hash, include_positions=True)`.
+
+**Resolving `account_hash` — never abort the sweep for want of it.** If the
+dispatch prompt supplied a hash, use it. Otherwise call **`get_accounts()`**:
+it takes no hash, and returns every account in the token's scope with its
+`accountHash`. Exactly one account is in scope (the manual's closing note keeps
+it that way on every re-auth), so that is the hash. Do **not** look for it in
+`CLAUDE.md` — §7.4 redacts it to `HASH_REDACTED` because the repo is public, so
+the manual records the identifier's *absence*, not its value; likewise no
+`.env` or script carries it, by the same rule.
+
+This is not a fallback, it is the normal path for the scheduled tick, which has
+no parent session holding cached inputs and nobody to re-dispatch it. On
+2026-08-27 two unattended sweeps returned `FAIL: no account hash` and left the
+book unwatched for half an hour each, having never called `get_accounts`.
 
 Read from **`currentBalances`**, never `initialBalances`:
 
