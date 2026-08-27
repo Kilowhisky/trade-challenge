@@ -363,6 +363,39 @@ sweeping. Resolve the date from get_datetime, never the machine clock."
     echo "scheduled-run: unknown job '$job'" >&2; exit 2 ;;
 esac
 
+# --- shared: how to invoke repo scripts -----------------------------------
+# Appended to EVERY dispatch whose allowlist grants Bash(scripts/...), instead of
+# being written into each prompt by hand.
+#
+# `Bash(scripts/x.sh:*)` matches ONLY the bare relative form. `./scripts/x.sh`,
+# `bash scripts/x.sh` and `/app/scripts/x.sh` are all refused, and in an
+# unattended run there is no approver behind that prompt — the refusal is silent
+# and total. Measured in this container 2026-08-26, not assumed.
+#
+# This is the SECOND time the same wall was hit. On 2026-08-26 the executor
+# refused a whole pass because every script call was blocked; the rule was added
+# to that one prompt and to trader.md, and nowhere else. On 2026-08-27 the 12:02
+# tick hit it again — it had read the broker cleanly, evaluated all eight watches
+# and then could not write the ledger row, so the sweep is missing from the
+# ledger despite having actually run. Five of the six jobs were exposed.
+#
+# Hence: central, conditioned on the allowlist, and covered by a test that walks
+# every job. A rule that has to be remembered per job is a rule that will be
+# missing from the next job someone adds.
+if [[ "$allowed" == *"Bash(scripts/"* ]]; then
+  prompt="$prompt
+
+**Invoke every repo script as a BARE RELATIVE PATH from the repo root —
+\`scripts/name.sh ...\`.** \`./scripts/x.sh\`, \`bash scripts/x.sh\` and
+\`/app/scripts/x.sh\` are all refused by the permission gate, and NOTHING is
+watching to approve them: a refusal here is silent, total and permanent.
+
+If a script call comes back 'requires approval', that is the invocation FORM,
+not a missing permission. Retry it once as a bare relative path before you
+report FAIL — a sweep that read the broker cleanly and then could not write its
+row is a sweep that has to be re-run for no reason."
+fi
+
 # --- guards ---------------------------------------------------------------
 printf '\n===== %s  job=%s =====\n' "$stamp" "$job" >> "$log_file"
 
@@ -439,6 +472,8 @@ if [ "${TC_DRY_RUN:-0}" = "1" ]; then
   # exercise the verdict classification below without a claude or a broker.
   # Honoured ONLY under dry run, exactly like TC_STATUS_DIR: a seam that works
   # in production is a way to forge a heartbeat.
+  # The composed prompt, for the regression suite to inspect. Dry run only.
+  printf '%s' "$prompt" > "$log_dir/.${job}.prompt"
   if [ -n "${TC_FAKE_OUTPUT:-}" ]; then
     printf '%s\n' "$TC_FAKE_OUTPUT" >"$out_file"
   else

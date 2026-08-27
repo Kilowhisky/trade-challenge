@@ -451,6 +451,44 @@ grep -q 'get_accounts' <<<"$b2" \
   && ok "tick.md B2 documents how account_hash is resolved" \
   || bad "tick.md B2 uses account_hash without saying where it comes from"
 
+# == every script-granted job tells the agent the invocation form ==========
+# Bash(scripts/x.sh:*) matches ONLY the bare relative form; ./scripts/x.sh,
+# bash scripts/x.sh and /app/scripts/x.sh are refused, with no approver behind
+# the prompt in an unattended run.
+#
+# This wall has now been hit twice. 2026-08-26: the executor refused a whole
+# pass. The rule was then added to the execute prompt and trader.md — and
+# nowhere else. 2026-08-27 12:02: the tick read the broker cleanly, evaluated
+# all eight watches, and could not write its ledger row. Five of six jobs were
+# exposed. This test is the reason a sixth cannot be added without the rule.
+echo
+echo "== every script-granted job states the bare-relative rule =="
+
+for j in preopen postclose execute tick sessionclose weekly-universe; do
+  case "$j" in
+    preopen)         min=500; dow=3 ;;
+    postclose)       min=982; dow=3 ;;
+    execute)         min=600; dow=3 ;;
+    tick)            min=600; dow=3 ;;
+    sessionclose)    min=965; dow=3 ;;
+    weekly-universe) min=460; dow=6 ;;
+  esac
+  rm -rf "$SCRATCH_CRON"
+  TC_DRY_RUN=1 TC_NOW_ET_MIN="$min" TC_DOW="$dow" ./scripts/scheduled-run.sh "$j" >/dev/null 2>&1
+  pf="$SCRATCH_CRON/.${j}.prompt"
+  if [ ! -f "$pf" ]; then
+    bad "$j — never dispatched, so its prompt could not be checked"
+    continue
+  fi
+  # Only jobs that can actually call a script need the rule.
+  if grep -q 'BARE RELATIVE PATH' "$pf"; then
+    ok "$j states the bare-relative invocation rule"
+  else
+    bad "$j is granted Bash(scripts/...) but its prompt never states the invocation form"
+  fi
+done
+rm -rf "$SCRATCH_CRON"
+
 rm -rf "$SCRATCH_CRON" "$sandbox"
 
 # The suite must leave the repo's own status/ alone. On the laptop that path is
