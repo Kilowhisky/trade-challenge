@@ -225,7 +225,8 @@ Use the **status-file HWM** for this session's thresholds — a dead
 session's intraday marks are the least trustworthy numbers in the system,
 and silently adopting a phantom print would ratchet Halt
 permanently. But do not silently ignore them either: if the orphaned
-ledger's highest `comp_capital` exceeds the status-file HWM, write
+ledger's highest `comp_capital` **plus the $900.00 reserve** (that column
+is competition capital; the HWM is account value) exceeds the status-file HWM, write
 `ALERT.md` with that high and let Chris ratify the ratchet. The
 unacknowledged alert puts the account in closing-only posture (§A.2), so
 no new exposure is taken while the true HWM is in question. A same-day
@@ -244,11 +245,11 @@ tested first; a naked position is the loop's top *actionable* alert.
 |---|---|---|---|
 | 1 | **Restriction** | `isClosingOnlyRestricted` true, or `cashCall` ≠ 0 | §5 protocol: no further orders, `ALERT.md`, notify Chris, account read-only. Stop the loop. |
 | 2 | **Reserve invariant** | `min(cashBalance, cashAvailableForTrading + unsettledCash)` < $900.00 | Invariant breach. Halt all buys, `ALERT.md`, investigate before anything else. |
-| 3 | **Drawdown** | `comp_capital` ≤ `halt` | §3.6 Halt — the only level; nothing trips above it. Notify Chris, stop the loop, no buys of any kind. |
+| 3 | **Drawdown** | `account_value` ≤ `halt` — **account value, NOT `comp_capital`; they differ by the $900 reserve and crossing them trips a false halt on a flat book** | §3.6 Halt — the only level; nothing trips above it. Notify Chris, stop the loop, no buys of any kind. |
 | 4 | **Naked position** | any position with no matching resting stop in B3 | Place the stop **immediately** via §E. If it will not take, close the position (§4.3). This is the loop's reason for existing. |
 | 5 | **Partial fill** | resting stop quantity ≠ filled position quantity | Replace the stop to match filled qty (§4.4). Max 3 replaces per stop per day (§4.10). |
 | 6 | **Stop fill** | a position present last tick is gone, or its stop is consumed | Log the exit. Check for an orphaned remainder (§4.7). Redeploy cap = **actual proceeds**, not the pre-exit figure. |
-| 7 | **Clocks** | option ≤ 7 DTE (warn) — **the close is at 5 DTE, §3.3 governs**; leveraged ETF ≥ day 3 of 5 (warn) — close on day 5, §3.5 governs; date ≥ 9/2 (flat by 9/4), ≥ 9/8 (lockout 9/10) — derived from END_DATE 9/14, re-derive if the NYSE calendar changes | Escalating warning from 2 days out; forced close at the limit per §3.3/§3.5 — the manual's numbers govern, not this row. These survive §3.6. |
+| 7 | **Clocks** | option ≤ 7 DTE (warn) — **the close is at 5 DTE, §3.3 governs**; leveraged ETF ≥ day 3 of 5 (warn) — close on day 5, §3.5 governs. *(The endgame calendar dates were removed 2026-08-31 with §8; there is no window end to derive from.)* | Escalating warning from 2 days out; forced close at the limit per §3.3/§3.5 — the manual's numbers govern, not this row. These survive §3.6. |
 | 8 | **Correlation** | weekly, first tick of the week: confirm the 60-day correlation result is **recorded in today's status file** (playbook §9 computes it at session open) | Not computed in-tick — it needs price-history pulls the tick budget forbids. Confirm against the written record, never from memory. If absent, finish the tick, then compute and record it outside the loop before any add. >0.7 cluster → adds blocked (§3.8). |
 
 An entry order resting in B3 with no fill is not a trip — but it shortens the

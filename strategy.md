@@ -202,7 +202,7 @@ What binds, from the manual:
 | §3.2 quality floors | DTE, delta, open interest and spread floors exactly as manual §3.2 states them (`rules.yml`) |
 | §3.2 caps | Per-position and total-open premium caps per manual §3.2. No position-count limit, no cumulative budget; premium still logged per §7.2 |
 | §3.3 | Each open position carries its own expiration clock into the monitoring table |
-| §3.7 | No option held through its **own** underlying's report; third-party prints (e.g. NVDA 8/26) are ordinary market risk |
+| §3.7 | Holding through the underlying's own report is **permitted** since 2026-08-31 — it is the point of the strategy. Size assuming total loss of premium; the vol crush is against you |
 | §3.8 | Option exposure counts toward correlation clusters |
 
 The affordable spot ceiling follows from the per-position cap and the

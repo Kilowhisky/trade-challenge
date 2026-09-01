@@ -75,17 +75,27 @@ self-certify any error already in it.
 ## §3 — The ratchet. This is the one irreversible number you touch.
 
 ```
-new_hwm = max(prior_hwm, closing_account_value)
+prior_hwm_account_basis =
+    prior_hwm + 900.00   if that status file predates 2026-08-31   # one-time
+    prior_hwm            otherwise
+
+new_hwm = max(prior_hwm_account_basis, closing_account_value)
 ```
 
 **Account value, not competition capital.** Until 2026-08-31 this line read
 `closing_competition_capital`, and §3.6 has since been re-anchored to account
 value. The two differ by exactly the $900 reserve, so recording the wrong one
 holds the mark $900 low forever — and no test catches it, because this file
-carries no `<!--rule:-->` marker for `check-consistency.sh` to bind. Every
-`High-water mark:` already on disk is a competition-capital figure; the
-`max()` above lifts it to the account-value basis at the first close after
-the amendment, which is the intended one-time migration.
+carries no `<!--rule:-->` marker for `check-consistency.sh` to bind.
+
+Every `High-water mark:` written before 2026-08-31 is a competition-capital
+figure, which is why it must be CONVERTED (+$900) rather than merely compared.
+`max(old_basis, new_basis)` is itself a cross-basis comparison: it silently
+forgives up to $900 of real drawdown and discards the historical high whenever
+the account sits below its old peak. Converting first is the only arithmetic
+that preserves the mark. Do this once; after the first post-amendment close
+every stored mark is already account-basis and the conversion no longer
+applies.
 
 **The basis is the CLOSE, not the intraday high.** `CLAUDE.md` defines the mark
 as the highest account value *recorded* to date, and recording is what this

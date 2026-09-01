@@ -31,7 +31,13 @@ case "$date" in
   *) echo "evidence-append: DATE must be YYYY-MM-DD, got '$date'" >&2; exit 2 ;;
 esac
 
-req='has("claim") and has("url") and has("source_type") and has("observed") and has("independence")'
+# `has()` is TRUE for an explicit null, so key presence alone accepted
+# {"claim":null,"url":null,...} — a record asserting nothing, in the file whose
+# entire value is that its claims can later be checked. Require non-empty
+# strings of the right type.
+req='(.claim|type=="string" and length>0) and (.url|type=="string" and length>0)
+     and (.source_type|type=="string") and (.observed|type=="string")
+     and (.independence|type=="string" and length>0)'
 types='["end-user","employee","counterparty","enthusiast","primary-doc","mainstream"]'
 
 if ! printf '%s' "$json" | jq -e "type == \"object\" and ($req)" >/dev/null 2>&1; then

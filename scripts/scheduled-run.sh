@@ -158,9 +158,12 @@ was passed to you:
   status/ is gitignored and Glob returns nothing under an ignored path (11
   files present, Glob reported 0, measured 2026-08-26). Resolve the path with
   scripts/latest-status.sh and Read that path.
-- Competition capital: the 'State recorded — current' block of that same file
-  (echo the figure and its date).
-- Active calendar guards: read them from strategy.md §4 and §10 at run time.
+- Account value: the 'State recorded — current' block of that same file (echo
+  the figure and its date). §3 caps are percentages of ACCOUNT VALUE since
+  2026-08-31 — not of competition capital, which is \$900 lower and would
+  understate every cap.
+- Active calendar guards: read them from strategy.md §4 at run time. (§10's
+  endgame calendar was removed 2026-08-31 with §8.)
   Never from a date written into a command file or into this prompt.
 
 §P is file-only: no pings, no §E, no HOT promotions, no candidates.md writes.
@@ -186,9 +189,12 @@ was passed to you:
   status/ is gitignored and Glob returns nothing under an ignored path (11
   files present, Glob reported 0, measured 2026-08-26). Resolve the path with
   scripts/latest-status.sh and Read that path.
-- Competition capital: the 'State recorded — current' block of that same file
-  (echo the figure and its date).
-- Active calendar guards: read them from strategy.md §4 and §10 at run time.
+- Account value: the 'State recorded — current' block of that same file (echo
+  the figure and its date). §3 caps are percentages of ACCOUNT VALUE since
+  2026-08-31 — not of competition capital, which is \$900 lower and would
+  understate every cap.
+- Active calendar guards: read them from strategy.md §4 at run time. (§10's
+  endgame calendar was removed 2026-08-31 with §8.)
 
 You have no session to ping into and no §E authority — §E belongs to the
 parent, and here there is none. Emit your HOT-FRESH: lines in your final
@@ -222,8 +228,8 @@ outranks anything you infer from this prompt.
 
 Order of work, no improvisation:
 1. §1 refusals FIRST. ALERT.md, cashCall, isClosingOnlyRestricted, §3.6 halt,
-   §8 lockout, market not open, check-consistency FAIL, broker unreadable.
-   Any one of them ends the run.
+   market not open, check-consistency FAIL, broker unreadable. Any one of them
+   ends the run. (There is no §8 lockout — §8 was deleted 2026-08-31.)
 2. Reconcile from the broker. Read strategy.md — the manual's header requires
    the playbook before any order, however fresh this process is.
 3. §2 decision. Protective actions outrank entries, always. AT MOST ONE
@@ -326,7 +332,9 @@ number written into this prompt.
 
 Perform the §3 high-water-mark ratchet against the prior mark you resolve
 yourself from the most recent status/*.md 'State recorded — current' block.
-Ratchet on the CLOSING competition capital, never on an intraday print, and
+Ratchet on the CLOSING ACCOUNT VALUE — §3.6 was re-anchored to account value
+on 2026-08-31 and competition capital is \$900 lower, so ratcheting the old
+basis would pin the mark permanently low. Never on an intraday print, and
 never lower the mark.
 
 Write exactly one file, via scripts/status-write.sh ${today}. If it already

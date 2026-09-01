@@ -123,9 +123,9 @@ hard=0
 for f in scripts/*.sh; do
   case "$f" in */lib-rules.sh|*/check-consistency.sh) continue ;; esac
   # a percentage arithmetic literal like "* 35 / 100"
-  if grep -nE '\*[[:space:]]*(35|20|30|50|15)[[:space:]]*/[[:space:]]*100' "$f" >/dev/null 2>&1; then
+  if grep -nE '\*[[:space:]]*(35|30|20|15|10|50)[[:space:]]*/[[:space:]]*100' "$f" >/dev/null 2>&1; then
     bad "$f hard-codes a rule percentage — read it from rules.yml instead"
-    grep -nE '\*[[:space:]]*(35|20|30|50|15)[[:space:]]*/[[:space:]]*100' "$f" | sed 's/^/      /'
+    grep -nE '\*[[:space:]]*(35|30|20|15|10|50)[[:space:]]*/[[:space:]]*100' "$f" | sed 's/^/      /'
     hard=$((hard+1))
   fi
 done
@@ -242,6 +242,44 @@ if [ -f docker/crontab ] && grep -E 'deploy\.sh' docker/crontab | grep -vE '^\s*
 else
   note "deploy.sh is not scheduled inside the container"
 fi
+
+# --- N. the capital basis may not be crossed ------------------------------
+# §3.6 was re-anchored to ACCOUNT VALUE on 2026-08-31. `comp_capital` is
+# account value minus the $900 reserve, so comparing it against an
+# account-value high-water mark reports roughly -24% on a flat book — through
+# the -20% halt, every session, on a portfolio that has lost nothing.
+#
+# That defect shipped into two files and check-consistency reported CONSISTENT
+# through both, because .claude/ carries no <!--rule:--> markers to bind. This
+# check exists because the rule-marker mechanism cannot reach the files that
+# actually execute the rule.
+echo "== the §3.6 capital basis is not crossed =="
+cross=0
+for f in .claude/commands/*.md .claude/agents/*.md; do
+  [ -f "$f" ] || continue
+  # comp_capital on either side of a halt/HWM comparison
+  if grep -nE 'comp_capital[^|]*(<=|≤|>=|≥)[^|]*(halt|hwm)|(halt|hwm)[^|]*(<=|≤|>=|≥)[^|]*comp_capital' "$f" >/dev/null 2>&1; then
+    bad "$f compares comp_capital against a halt/HWM — cross-basis, trips a false halt"
+    grep -nE 'comp_capital[^|]*(<=|≤|>=|≥)[^|]*(halt|hwm)|(halt|hwm)[^|]*(<=|≤|>=|≥)[^|]*comp_capital' "$f" | sed 's/^/      /'
+    cross=$((cross+1))
+  fi
+done
+[ "$cross" -eq 0 ] && note "no cross-basis halt comparison in any agent or command file"
+
+# --- N+1. deleted endgame dates may not survive in an executable position --
+# The §8 calendar was deleted 2026-08-31. A hard-coded 9/10 lockout left in a
+# watch table keeps firing on schedule regardless of what the manual says.
+echo "== the deleted endgame calendar leaves no live date =="
+eg=0
+for f in .claude/commands/*.md .claude/agents/*.md scripts/scheduled-run.sh; do
+  [ -f "$f" ] || continue
+  if grep -nE '(lockout|flat by|END_DATE)[^|]*(9/|2026-09)' "$f" | grep -viE 'removed|deleted|no longer|was ' >/dev/null 2>&1; then
+    bad "$f still carries a live endgame date from the deleted §8"
+    grep -nE '(lockout|flat by|END_DATE)[^|]*(9/|2026-09)' "$f" | grep -viE 'removed|deleted|no longer|was ' | sed 's/^/      /'
+    eg=$((eg+1))
+  fi
+done
+[ "$eg" -eq 0 ] && note "no live endgame dates remain"
 
 echo
 if [ "$fails" -eq 0 ]; then echo "CONSISTENT — rules.yml, docs, and scripts agree."; exit 0; fi

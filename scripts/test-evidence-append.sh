@@ -81,4 +81,15 @@ else
   bad "array source_type: rc=$rc (want 2), lines $before->$after (want unchanged)"
 fi
 
+# Adversarial regression: has() is TRUE for an explicit null, so a key-presence
+# guard accepted a record whose every field was null — in the one file whose
+# value is that its claims can be checked later.
+rc2() { local rc=0; ./scripts/evidence-append.sh "$@" >/dev/null 2>&1 || rc=$?; printf '%s' "$rc"; }
+[ "$(rc2 ROKU "$D" '{"claim":null,"url":null,"source_type":"end-user","observed":"2026-09-01","independence":null}')" = "2" ] \
+  && ok "null-valued required fields are refused" || bad "a record of all nulls was appended"
+[ "$(rc2 ROKU "$D" '{"claim":0,"url":{"a":1},"source_type":"end-user","observed":"2026-09-01","independence":[]}')" = "2" ] \
+  && ok "wrong-typed required fields are refused" || bad "a number claim and object url were appended"
+[ "$(rc2 ROKU "$D" '{"claim":"","url":"https://e.com","source_type":"end-user","observed":"2026-09-01","independence":"x"}')" = "2" ] \
+  && ok "an empty-string claim is refused" || bad "an empty claim was appended"
+
 echo; echo "$pass passed, $fail failed"; [ "$fail" -eq 0 ]

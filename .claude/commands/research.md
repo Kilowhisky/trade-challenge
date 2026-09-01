@@ -30,7 +30,8 @@ The parent does **not** execute §B–§D itself:
    **in the background** — the tick cadence must never block on research.
    The dispatch prompt supplies cached context: date + ET time, held symbols
    and their sectors, account value and drawdown level, settled cash,
-   any active calendar guard (NVDA week 8/24–8/28, endgame dates), and
+   any active calendar guard (earnings-week guards only — the endgame dates
+   were removed 2026-08-31), and
    `$ARGUMENTS` if this pass was run with a stated focus.
 3. When the scout's result arrives, parent runs §E (the ping gate) on any
    `HOT-FRESH:` lines. Pinging never happens inside the subagent.
@@ -174,7 +175,8 @@ A ping fires only when **all** hold:
    upstream (§A.2), so this gate cannot bind here. **Halt is the only
    drawdown level**; there is no intermediate band that restricts an
    instrument, and none may be inferred.
-4. No calendar guard active for adds (NVDA week 8/24–8/28; endgame per §A.5).
+4. No calendar guard active for adds. *(The endgame guard was removed
+   2026-08-31 with §8; §A.5 no longer exists.)*
 5. That symbol has not pinged today, and today's ping count is **< 2**
    (count `"ping"` events in today's events corpus before emitting).
 
@@ -194,7 +196,7 @@ in the file, which the session protocol reads at open and after any exit.
 The research loop inherits the monitoring loop's life: chained after
 `/tick`, it stops when the tick loop stops (§G of tick.md), and additionally
 per §A.4 (no research passes after 16:00 ET — the POST pass belongs to
-/deep-research postclose) and §A.5 (endgame). Flat book + stopped tick
+/deep-research postclose). Flat book + stopped tick
 loop = no research passes either; run one manually at the next session open
 if wanted.
 

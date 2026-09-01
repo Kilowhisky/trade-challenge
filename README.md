@@ -1,8 +1,14 @@
-# Trading Competition
+# Trading Account
 
-A one-month, cash-only trading competition run by an AI agent under a written
-rule set. This repo publishes **the rules, the strategy, and the tooling** — the
-constraints the agent operates under and the machinery that enforces them.
+A cash-only trading account run by an AI agent under a written rule set. This
+repo publishes **the rules, the strategy, and the tooling** — the constraints
+the agent operates under and the machinery that enforces them.
+
+It began as a one-month competition (2026-08-14 → 2026-09-14). Chris withdrew
+on 2026-08-29 and the contest-specific rules were retired the same week: the
+scoring section, the endgame calendar, and the prohibition on holding a
+position through an earnings report. `CHANGELOG.md` records what changed and
+why.
 
 It does **not** publish results. The trade log, daily status notes, and research
 output are untracked and stay on the operating machine. See
@@ -27,8 +33,9 @@ The high-water mark was re-anchored to a round $2,900.00 at that point; it
 ratchets upward from there and is not a current figure.
 
 Every risk limit in the manual — position caps, sleeve ceilings, the high-water
-mark, the drawdown circuit breaker — is computed against **competition capital**,
-never against total account value. The reserve adds float, never risk. Total
+mark, the drawdown circuit breaker — is computed against **account value**
+*(re-anchored 2026-08-31; it was competition capital, i.e. account value minus
+the reserve, while the competition ran)*. The reserve adds float, never risk. Total
 position exposure never exceeds 100% of competition capital.
 
 Marks are honest by construction: the liquidity floors mean scoring prices are
@@ -214,6 +221,10 @@ timestamp was altered by that pass.
    stop can fill far below its trigger on overnight news. See §0 and §3.7.
 3. **Long options are never held near expiration.** Auto-exercise of an
    in-the-money contract would blow through a cash account this size. See §3.3.
-4. **Every percentage is against competition capital**, not account value.
-   Competition capital is account value minus the $900.00 reserve — reading a
-   cap against the full balance overstates the intended risk by about a third.
+4. **Every percentage is against account value.** This was re-anchored on
+   2026-08-31; it previously read against competition capital (account value
+   minus the $900.00 reserve). The two differ by exactly the reserve, and
+   crossing the bases is not cosmetic — measuring one against a high-water
+   mark recorded on the other reports roughly −24% on a flat book, which is
+   through the −20% halt. `scripts/check-consistency.sh` now fails the build
+   if any agent or command file compares them.

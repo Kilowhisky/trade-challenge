@@ -76,8 +76,14 @@ this process is.
    §3.6.
 4. **§3.3** — any long option at ≤ the close-at-DTE threshold. Never hold
    into expiration week's final trading day.
-5. An **orphaned stop** on a position no longer held (§4.7) → cancel it.
-6. A **ratchet or stall-rule** action per playbook §6, if and only if the
+5. A position whose underlying has had a **corporate action** (split, reverse
+   split, ticker change, spinoff) since the stop was placed → recompute and
+   re-place the stop at the post-action price (§3.7). A stop priced before a
+   split is arithmetically meaningless afterward, and §3.7 no longer forces an
+   exit, so re-pricing is the only thing standing between the position and an
+   unprotected gap. Counts as one replace under §4.10.
+6. An **orphaned stop** on a position no longer held (§4.7) → cancel it.
+7. A **ratchet or stall-rule** action per playbook §6, if and only if the
    quote is fresh and the rule's conditions are met on the close, not
    intraday noise.
 

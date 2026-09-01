@@ -24,7 +24,10 @@ Procedure — no improvisation:
    an empty screen, an empty `## Open cohorts` promotion are correct
    results, not failures to fix.
 3. The dispatch prompt supplies cached context: date + ET time, held
-   symbols + sectors, the comp-capital figure + its status-file date,
+   symbols + sectors, the ACCOUNT VALUE figure + its status-file date (§3
+   caps are percentages of account value since 2026-08-31; sizing against
+   competition capital understates every cap by the $900 reserve and would
+   wrongly reject affordable contracts),
    active calendar guards, and mode. Trust it — you have no account tools
    by design, so this is the only account state you get. Sizing math for
    any hypothetical or roster figure uses the supplied comp-capital

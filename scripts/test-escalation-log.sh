@@ -101,4 +101,54 @@ n_probe="$(grep -cF "\"id\":\"$probe\"" "$F" 2>/dev/null || true)"; n_probe="${n
 ./scripts/escalation-log.sh score "$id" maybe >/dev/null 2>&1
 [ "$?" -ne 0 ] && ok "refuses an outcome outside right|wrong|void" || bad "accepted outcome 'maybe'"
 
+# == adversarial regressions (independent review, 2026-08-31) ===============
+# Every assertion below checks the DOCUMENTED exit status, not merely
+# "non-zero". A review found 22 of 30 assertions across these suites stayed
+# green against a writer whose every refusal returned the wrong status — and
+# 13 stayed green against no script at all, because a missing command exits
+# 127 and satisfies any "must fail" test.
+rc_of() { local rc=0; "$@" >/dev/null 2>&1 || rc=$?; printf '%s' "$rc"; }
+E=./scripts/escalation-log.sh
+GOOD='{"claim":"real","direction":"up","event_date":"2026-10-15","source_types":["counterparty","enthusiast"]}'
+
+# A8: a raise carrying its own outcome recorded a prediction and its result in
+# ONE write — the single property this ledger exists to make impossible.
+[ "$(rc_of $E raise A8X 2026-09-01 '{"claim":"c","direction":"up","event_date":"2026-10-15","source_types":["counterparty","enthusiast"],"outcome":"right"}')" = "2" ] \
+  && ok "a raise may not carry its own outcome" \
+  || bad "a raise smuggled an outcome — prediction and result in one write"
+
+# A5: the bar is 2+ DISTINCT VALID types. Length alone let one source, or a
+# mainstream story that is by definition already priced, clear it.
+[ "$(rc_of $E raise A5X 2026-09-01 '{"claim":"c","direction":"up","event_date":"2026-10-15","source_types":["end-user","end-user"]}')" = "2" ] \
+  && ok "the same source type twice does not clear the two-source bar" \
+  || bad "one source counted twice cleared the bar"
+[ "$(rc_of $E raise A5Y 2026-09-01 '{"claim":"c","direction":"up","event_date":"2026-10-15","source_types":["mainstream","mainstream"]}')" = "2" ] \
+  && ok "mainstream is a disqualifier, not a source type" \
+  || bad "a mainstream-only story cleared the bar — it is already priced"
+
+# A6: has() is true for null, so key-presence alone accepted a claim of null.
+[ "$(rc_of $E raise A6X 2026-09-01 '{"claim":null,"direction":"up","event_date":"2026-10-15","source_types":["end-user","employee"]}')" = "2" ] \
+  && ok "a null claim is refused, not merely a missing one" \
+  || bad "claim:null was accepted — a prediction asserting nothing"
+
+# A4: the guards failed OPEN on an unparseable ledger, so one truncated append
+# disabled the duplicate check while the writer still reported success.
+corrupt="$TC_RESEARCH_DIR/escalations.jsonl"
+cp "$corrupt" "$corrupt.keep" 2>/dev/null || true
+printf '{"kind":"rai' >> "$corrupt"
+[ "$(rc_of $E raise A4X 2026-09-01 "$GOOD")" = "4" ] \
+  && ok "a raise onto a corrupt ledger fails closed" \
+  || bad "appended to a corrupt ledger — the duplicate guard is disabled"
+[ "$(rc_of $E score ANY-ID right)" = "4" ] \
+  && ok "a score against a corrupt ledger fails closed" \
+  || bad "scored against a corrupt ledger"
+mv "$corrupt.keep" "$corrupt" 2>/dev/null || true
+
+# B3: score must not attach to a score row. Correct in the code, untested.
+raised_id="$(jq -r 'select(.kind=="raise")|.id' "$corrupt" 2>/dev/null | head -1)"
+$E score "$raised_id" right >/dev/null 2>&1
+[ "$(rc_of $E score "$raised_id" wrong)" = "0" ] \
+  && ok "re-scoring a raise is allowed (a correction is a new row, §7.1)" \
+  || bad "re-scoring was refused; §7.1 says a correction is a new row"
+
 echo; echo "$pass passed, $fail failed"; [ "$fail" -eq 0 ]

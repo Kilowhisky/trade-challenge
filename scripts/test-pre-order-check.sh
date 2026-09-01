@@ -215,6 +215,11 @@ a="$(./scripts/pre-order-check.sh --instrument equity --symbol X --qty 1 --price
       --intent-notional 10 --account-value 3758.76 --settled-cash 2393.57 2>&1; echo "rc=$?")"
 b="$(./scripts/pre-order-check.sh --instrument equity --symbol X --qty 1 --price 10 \
       --intent-notional 10 --comp-capital 3758.76 --settled-cash 2393.57 2>&1; echo "rc=$?")"
+# Equality alone is too weak — two IDENTICAL FAILURES would satisfy it. Both
+# invocations must actually PASS the gate, then be identical.
+printf '%s' "$a" | grep -q "rc=0" \
+  && ok "--account-value invocation passes the gate" \
+  || bad "--account-value invocation did not pass: $a"
 [ "$a" = "$b" ] && ok "--account-value and --comp-capital are equivalent" \
   || bad "the two capital flags disagree; one caller would size against the wrong base"
 # Must assert the flag is RECOGNISED, not merely that the script produced

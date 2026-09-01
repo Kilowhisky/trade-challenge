@@ -33,9 +33,19 @@ case "$mode" in
     symbol="$2"; date="$3"; json="$4"
     case "$symbol" in *[!A-Za-z0-9.-]*|"") echo "escalation-log: bad symbol '$symbol'" >&2; exit 2 ;; esac
     is_date "$date" || { echo "escalation-log: DATE must be YYYY-MM-DD, got '$date'" >&2; exit 2; }
-    req='has("claim") and has("direction") and has("event_date") and has("source_types")'
+    # `has()` is TRUE for an explicit null, so a key-presence test alone
+    # accepts {"claim":null} — a prediction asserting nothing. Require a
+    # non-null value of the right type.
+    req='(.claim|type=="string" and length>0) and (.direction|type=="string")
+         and (.event_date|type=="string") and (.source_types|type=="array")'
     printf '%s' "$json" | jq -e "type==\"object\" and ($req)" >/dev/null 2>&1 \
-      || { echo "escalation-log: missing required field" >&2; exit 2; }
+      || { echo "escalation-log: missing, null, or wrong-typed required field" >&2; exit 2; }
+    # A raise must not carry its own outcome. `. + {…}` only reserves the four
+    # keys it sets, so {"outcome":"right"} survived into the raise row — a
+    # prediction and its result written in ONE call, which is the single
+    # property this ledger exists to make impossible.
+    printf '%s' "$json" | jq -e 'has("outcome") or has("scored") or has("kind")' >/dev/null 2>&1 \
+      && { echo "escalation-log: a raise may not carry outcome/scored/kind — score it separately" >&2; exit 2; }
     d="$(printf '%s' "$json" | jq -r .direction)"
     case "$d" in up|down) ;; *) echo "escalation-log: direction must be up|down" >&2; exit 2 ;; esac
     ev="$(printf '%s' "$json" | jq -r .event_date)"
@@ -44,12 +54,24 @@ case "$mode" in
     # otherwise clear a two-source bar on its character count alone.
     printf '%s' "$json" | jq -e '.source_types | type == "array"' >/dev/null 2>&1 \
       || { echo "escalation-log: source_types must be a JSON array" >&2; exit 2; }
-    n="$(printf '%s' "$json" | jq -r '.source_types | length')"
-    [ "$n" -ge 2 ] || { echo "escalation-log: need 2+ source types, got $n" >&2; exit 2; }
+    # DISTINCT and VALID, not merely two entries. Spec §5 defines the bar as
+    # two INDEPENDENT source types, and names mainstream a disqualifier rather
+    # than a source: if the story is there it is already priced. Counting raw
+    # length accepted ["end-user","end-user"] and ["mainstream","mainstream"],
+    # letting one source — or a dead idea — clear the bar.
+    valid='["end-user","employee","counterparty","enthusiast","primary-doc"]'
+    n="$(printf '%s' "$json" | jq -r --argjson v "$valid" \
+         '[.source_types[] | select(type=="string") | select(. as $t | $v | index($t))] | unique | length')"
+    [ "${n:-0}" -ge 2 ] || { echo "escalation-log: need 2+ DISTINCT valid source types (mainstream does not count), got ${n:-0}" >&2; exit 2; }
     id="$symbol-$date-$(printf '%s' "$json" | jq -Sc . | cksum | awk '{print $1}')"
-    if [ -f "$file" ] && [ "$(jq -s --arg i "$id" \
-         '[.[] | select(.kind=="raise" and .id==$i)] | length' "$file" 2>/dev/null || echo 0)" -gt 0 ]; then
-      echo "escalation-log: $id already raised; one prediction is one row" >&2; exit 2
+    # FAIL CLOSED. `|| echo 0` could not tell "no matching raise" from "jq
+    # could not parse this file", so one truncated append disabled the
+    # duplicate guard while the writer still reported success.
+    if [ -f "$file" ]; then
+      dup="$(jq -s --arg i "$id" '[.[] | select(.kind=="raise" and .id==$i)] | length' "$file" 2>/dev/null)" \
+        || { echo "escalation-log: ledger is not valid JSONL — refusing to append to a corrupt file" >&2; exit 4; }
+      [ "${dup:-0}" -eq 0 ] \
+        || { echo "escalation-log: $id already raised; one prediction is one row" >&2; exit 2; }
     fi
     printf '%s' "$json" | jq -c --arg i "$id" --arg s "$symbol" --arg d "$date" \
       '. + {id:$i, symbol:$s, raised:$d, kind:"raise"}' >> "$file"
@@ -63,9 +85,9 @@ case "$mode" in
     # do (BRK.B), and a regex lookup would attach this outcome to BRKXB's
     # prediction — a hit rate scored against a claim nobody made.
     [ -f "$file" ] || { echo "escalation-log: no ledger at $file" >&2; exit 2; }
-    [ "$(jq -s --arg i "$id" '[.[] | select(.kind=="raise" and .id==$i)] | length' \
-         "$file" 2>/dev/null || echo 0)" -gt 0 ] \
-      || { echo "escalation-log: no such id" >&2; exit 2; }
+    found="$(jq -s --arg i "$id" '[.[] | select(.kind=="raise" and .id==$i)] | length' "$file" 2>/dev/null)" \
+      || { echo "escalation-log: ledger is not valid JSONL — refusing to score against a corrupt file" >&2; exit 4; }
+    [ "${found:-0}" -gt 0 ] || { echo "escalation-log: no such id" >&2; exit 2; }
     jq -nc --arg i "$id" --arg o "$outcome" \
       --arg t "$(TZ=America/New_York date +%Y-%m-%d)" \
       '{id:$i, outcome:$o, scored:$t, kind:"score"}' >> "$file"

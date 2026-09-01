@@ -311,11 +311,16 @@ any kind. Notify Chris. Trading resumes only after an explicit conversation.
 competition-capital high-water mark. A drawdown brake is sound independent of
 any contest, so the rule survives at −20% with the denominator changed.
 **Migration note:** every `High-water mark:` figure already written to
-`status/` is a competition-capital number, i.e. $900 low. Because the ratchet
-takes `max(prior, current)`, the first session close after this amendment
-raises it to the account-value reading and it is correct from then on. The one
-transient effect is that the halt threshold sits $720 low for that single
-session — the brake is briefly harder to trip, never easier.)*
+`status/` is a competition-capital number, i.e. $900 low, and must be
+**converted** (`+ $900.00`) before it is compared to anything on the new basis
+— not merely fed to `max()`. A bare `max(old_basis, new_basis)` is itself a
+cross-basis comparison: it silently forgives up to $900 of real drawdown and
+discards the historical high whenever the account sits below its old peak.
+`session-close.md` §3 performs the conversion once, at the first close after
+this amendment. Every consumer of the mark — the §3.6 halt test, the tick
+watch table, the orphan-ledger guard — must read **account value** against it,
+never competition capital; the two differ by exactly the reserve, and crossing
+them reports roughly −24% on a flat book, which is through the halt.)*
 
 "New position" means **any buy order** — including adds to an existing position,
 re-entering a name that just stopped out, and rolling an option. Closing orders

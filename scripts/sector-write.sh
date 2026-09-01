@@ -27,9 +27,21 @@ case "$sector" in
   *) echo "sector-write: unknown sector '$sector'" >&2; exit 2 ;;
 esac
 
-dir="${TC_RESEARCH_DIR:-$(cd "$(dirname "$0")/.." && pwd)/research}"
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=lib-lock.sh
+. "$repo_root/scripts/lib-lock.sh"
+
+dir="${TC_RESEARCH_DIR:-$repo_root/research}"
 mkdir -p "$dir"
 file="$dir/sectors.tsv"
+
+# Read-modify-write. Unlocked, 20 concurrent writes of distinct symbols lost 16
+# of them, every one exiting 0. research-write.sh, research-replace.sh and
+# status-write.sh all take this lock; so does this.
+if ! acquire_lock "$file" 10; then
+  echo "sector-write: refused — could not acquire lock (another writer active?)" >&2
+  exit 5
+fi
 if [ -n "$date_arg" ]; then
   case "$date_arg" in
     [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
@@ -42,7 +54,12 @@ fi
 
 tmp="$file.tmp.$$"
 if [ -f "$file" ]; then
-  awk -F'\t' -v s="$symbol" '$1 != s' "$file" > "$tmp"
+  # $1"" and s"" force STRING comparison. Without the concatenation awk treats
+  # a numeric-looking field as a strnum and compares numerically, so tagging
+  # "1E2" deletes the row for "100" (and on BSD awk, "NAN" too — a real listed
+  # ticker). Silent row loss, exit 0: exactly the "universe that quietly gets
+  # smaller" this file's header warns about.
+  awk -F'\t' -v s="$symbol" '$1"" != s""' "$file" > "$tmp"
 else
   : > "$tmp"
 fi
