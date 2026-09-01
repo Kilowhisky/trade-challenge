@@ -38,6 +38,31 @@ record() { # from to verdict detail
 
 command -v git >/dev/null 2>&1 || { say "git not found"; exit 2; }
 
+# --- refuse to run on a human's checkout ----------------------------------
+# This script's whole job is `git checkout --detach origin/deploy`. On the
+# SERVER that is correct and idempotent. On a laptop it silently abandons
+# whatever branch you were working on, discarding the working tree with it.
+#
+# Measured 2026-09-01: something invoked this from an interactive checkout
+# mid-session and moved HEAD off a feature branch onto origin/deploy, taking
+# eleven files with it. The commits survived, so the damage was recoverable —
+# but only because they had been committed minutes earlier, and nothing about
+# that was by design.
+#
+# The test is HEAD's shape, not a hostname: the server always runs detached
+# (this script put it there), while a human checkout is on a named branch.
+# TC_DEPLOY_TARGET=1 overrides for the first run on a fresh box, where
+# bootstrap leaves the checkout on a branch.
+if [ "${TC_DEPLOY_TARGET:-0}" != "1" ]; then
+  on_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  if [ -n "$on_branch" ]; then
+    say "refusing: HEAD is on branch '$on_branch', so this is a working checkout, not a deploy target"
+    say "this script detaches HEAD onto origin/$branch and would discard that branch's working tree"
+    say "set TC_DEPLOY_TARGET=1 if this really is the server's checkout"
+    exit 2
+  fi
+fi
+
 # A dirty tree on a deploy target means somebody edited in place. Refuse rather
 # than clobber: git checkout would silently discard their work.
 if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then

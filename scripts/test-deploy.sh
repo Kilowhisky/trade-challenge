@@ -90,6 +90,24 @@ else
   fi
 fi
 
+echo "== repo-update refuses to run on a working checkout =="
+# repo-update.sh's job is `git checkout --detach origin/deploy`. On the server
+# that is correct. On a laptop it silently abandons the branch you are on and
+# takes the working tree with it — measured 2026-09-01, mid-session, eleven
+# files. The server is always detached; a human checkout is on a named branch,
+# and that shape difference is the guard.
+head_before="$(git rev-parse HEAD)"
+out="$(./scripts/repo-update.sh 2>&1)"; rc=$?
+head_after="$(git rev-parse HEAD)"
+if [ "$head_before" != "$head_after" ]; then
+  bad "repo-update MOVED HEAD from ${head_before:0:8} to ${head_after:0:8} during the test suite"
+  git checkout --quiet "$head_before" 2>/dev/null || true
+elif [ "$rc" = "2" ] && printf '%s' "$out" | grep -q "working checkout"; then
+  ok "repo-update refuses on a branch and leaves HEAD untouched"
+else
+  bad "repo-update did not refuse on a branch: rc=$rc out='$(printf '%s' "$out" | head -1)'"
+fi
+
 echo
 echo "-------------------------------------------"
 echo "$pass passed, $fail failed"
