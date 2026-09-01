@@ -332,6 +332,8 @@ contract_for() {
     tick)               echo .claude/commands/tick.md ;;
     sessionclose)       echo .claude/agents/session-close.md ;;
     execute)            echo .claude/agents/trader.md ;;
+    scout)              echo .claude/commands/scout.md ;;
+    catalyst)           echo .claude/commands/catalyst.md ;;
     *)                  echo "" ;;
   esac
 }
@@ -340,7 +342,8 @@ missing=0
 inspected=0
 for spec in "preopen $((8*60+30)) 2" "postclose $((16*60+30)) 2" \
             "weekly-universe $((7*60+40)) 6" "tick $((12*60)) 3" "execute $((12*60)) 3" \
-            "sessionclose $((16*60+5)) 2"; do
+            "sessionclose $((16*60+5)) 2" "scout $((7*60+30)) 2" \
+            "catalyst $((18*60+30)) 2"; do
   set -- $spec; j="$1"; m="$2"; d="$3"
   # execute dispatches an agent, not a command file; its contract is the
   # agent definition instead.
@@ -368,8 +371,9 @@ for spec in "preopen $((8*60+30)) 2" "postclose $((16*60+30)) 2" \
     fi
   done
 done
-[ "$missing" -eq 0 ] && [ "$inspected" -eq 6 ] \
-  && ok "all 6 job allowlists cover every script their contract file invokes"
+[ "$missing" -eq 0 ] && [ "$inspected" -eq 8 ] \
+  && ok "all 8 job allowlists cover every script their contract file invokes" \
+  || bad "allowlist coverage: inspected $inspected of 8 jobs, missing=$missing"
 
 # == verdict classification (content-level failure) ========================
 # rc=0 means "claude ran", NOT "the job did its work". Every dispatch prompt
@@ -464,7 +468,7 @@ grep -q 'get_accounts' <<<"$b2" \
 echo
 echo "== every script-granted job states the bare-relative rule =="
 
-for j in preopen postclose execute tick sessionclose weekly-universe; do
+for j in preopen postclose execute tick sessionclose weekly-universe scout catalyst; do
   case "$j" in
     preopen)         min=500; dow=3 ;;
     postclose)       min=982; dow=3 ;;
@@ -472,6 +476,8 @@ for j in preopen postclose execute tick sessionclose weekly-universe; do
     tick)            min=600; dow=3 ;;
     sessionclose)    min=965; dow=3 ;;
     weekly-universe) min=460; dow=6 ;;
+    scout)           min=450; dow=3 ;;
+    catalyst)        min=1110; dow=3 ;;
   esac
   rm -rf "$SCRATCH_CRON"
   TC_DRY_RUN=1 TC_NOW_ET_MIN="$min" TC_DOW="$dow" ./scripts/scheduled-run.sh "$j" >/dev/null 2>&1

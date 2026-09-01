@@ -122,10 +122,15 @@ echo "== scripts do not hard-code rule values =="
 hard=0
 for f in scripts/*.sh; do
   case "$f" in */lib-rules.sh|*/check-consistency.sh) continue ;; esac
-  # a percentage arithmetic literal like "* 35 / 100"
-  if grep -nE '\*[[:space:]]*(35|30|20|15|10|50)[[:space:]]*/[[:space:]]*100' "$f" >/dev/null 2>&1; then
+  # A percentage arithmetic literal like "* 35 / 100". Comment lines are
+  # stripped first: a comment cannot hard-code anything, and a file that
+  # EXPLAINS this rule by quoting the pattern was being reported as violating
+  # it. grep -v on a leading-# line, keeping line numbers via the = prefix.
+  hits="$(grep -nE '\*[[:space:]]*(35|30|20|15|10|50)[[:space:]]*/[[:space:]]*100' "$f" 2>/dev/null \
+          | awk -F: '{ line=$0; sub(/^[0-9]+:/,"",line); if (line !~ /^[[:space:]]*#/) print }')"
+  if [ -n "$hits" ]; then
     bad "$f hard-codes a rule percentage — read it from rules.yml instead"
-    grep -nE '\*[[:space:]]*(35|30|20|15|10|50)[[:space:]]*/[[:space:]]*100' "$f" | sed 's/^/      /'
+    printf '%s\n' "$hits" | sed 's/^/      /'
     hard=$((hard+1))
   fi
 done

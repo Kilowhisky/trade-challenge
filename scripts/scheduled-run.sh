@@ -346,6 +346,78 @@ CLOSE-FAIL with the reason — an unwritten close file is what halts trading
 tomorrow, so it must not fail silently."
     ;;
 
+  scout)
+    agent="scout"
+    # 07:00-08:00 ET, before the 08:17 preopen deep run. Weekdays only: the
+    # cohort is derived from an earnings calendar and nothing moves on a
+    # weekend. Deliberately OUTSIDE the session — this pass reads the web, not
+    # the tape, and nothing it finds is actionable inside a 15-minute window.
+    window_open=$((7*60)); window_close=$((8*60))
+    days="1 2 3 4 5"
+    # Generous: a pass makes many web searches and several fetches, and web
+    # latency is not ours to control. Still well clear of the 08:17 preopen.
+    job_timeout=2400
+    allowed="$common_tools mcp__schwab__get_datetime mcp__schwab__get_market_hours mcp__schwab__get_accounts mcp__schwab__get_quotes mcp__schwab__get_instruments mcp__schwab__get_option_chain Bash(scripts/cohort.sh:*) Bash(scripts/evidence-append.sh:*) Bash(scripts/escalation-log.sh:*) Bash(scripts/sector-write.sh:*) Bash(scripts/latest-status.sh:*)"
+    prompt="Run /scout for ${today}.
+
+You are the SCHEDULED, UNATTENDED information-edge scout. Execute
+.claude/commands/scout.md §B-§D exactly as written.
+
+Resolve the date from get_datetime, never the machine clock — this host runs
+Pacific and would file an evening pass under the wrong day, corrupting the
+ledger dates every later delta is computed against.
+
+Take the first 2-3 cohort names not already observed today. Working the whole
+cohort in one pass is how a scout runs out of budget and starts guessing.
+
+**An empty cohort is a correct result, not a failure.** Between earnings
+seasons there is nothing to work, and the weekly sweep may not yet have written
+research/universe-qualified.tsv. Emit the return line with cohort 0 and stop.
+Do not widen the window to find work.
+
+**Zero escalations is the expected result of almost every pass.** Do not
+manufacture a finding to look productive: a false escalation costs more than a
+missed one, because it spends the attention that makes the real ones legible.
+
+You have no order tools and no Write/Edit. Output the canonical line, plus one
+ESCALATE: line per bar clear, and nothing else."
+    ;;
+
+  catalyst)
+    agent="catalyst"
+    # 18:00-19:30 ET, after the postclose deep run has finished. This channel
+    # is source-driven rather than calendar-driven, so it has no reason to sit
+    # near the open, and running it in the evening keeps it clear of every
+    # other job's window.
+    window_open=$((18*60)); window_close=$((19*60+30))
+    days="1 2 3 4 5"
+    job_timeout=2400
+    allowed="$common_tools mcp__schwab__get_datetime mcp__schwab__get_market_hours mcp__schwab__get_accounts mcp__schwab__get_quotes mcp__schwab__get_instruments Bash(scripts/evidence-append.sh:*) Bash(scripts/escalation-log.sh:*) Bash(scripts/sector-write.sh:*) Bash(scripts/latest-status.sh:*)"
+    prompt="Run /catalyst for ${today}.
+
+You are the SCHEDULED, UNATTENDED catalyst sweep. Execute
+.claude/commands/catalyst.md §B-§D exactly as written.
+
+Resolve the date from get_datetime, never the machine clock.
+
+This channel is source-driven, not calendar-driven, and it is the only one that
+produces anything between earnings seasons.
+
+**Rumour is abundant and nearly all of it is noise.** Merger chatter propagates
+by citation: a dozen articles routinely trace to one unnamed source, which is
+ONE source. Two distinct source TYPES is the bar, never two URLs.
+
+**If research/sectors.tsv does not exist yet, emit the return line with
+scanned 0 and stop.** An empty universe is a correct state, not something to
+work around.
+
+**Zero escalations is the expected result of almost every pass.** Do not lower
+the bar to produce output.
+
+You have no order tools and no Write/Edit. Output the canonical line, plus one
+ESCALATE: line per bar clear, and nothing else."
+    ;;
+
   weekly-universe)
     agent="weekly-universe"
     window_open=$((6*60));  window_close=$((12*60))
@@ -577,6 +649,20 @@ if [ "$job" = "execute" ]; then
     notify "⚙️ **EXECUTE — $today $(et '+%H:%M') ET**
 \`\`\`
 $ex
+\`\`\`"
+  fi
+fi
+
+# --- relay a scout/catalyst escalation --------------------------------------
+# An escalation is the entire product of these two jobs. A clean pass relays
+# nothing, deliberately: a scout that reports daily that it found nothing
+# trains its reader to stop looking, and then the one that matters scrolls past.
+if [ "$job" = "scout" ] || [ "$job" = "catalyst" ]; then
+  esc="$(grep -E '^ESCALATE:' <<<"$output" || true)"
+  if [ -n "$esc" ]; then
+    notify "🔎 **$(printf '%s' "$job" | tr 'a-z' 'A-Z') — $today** — corroborated evidence cleared the bar. **This is not a trade recommendation and nothing has acted on it**: the scout has no order tools and forms no thesis. The judgement is yours.
+\`\`\`
+$esc
 \`\`\`"
   fi
 fi

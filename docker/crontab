@@ -30,6 +30,22 @@
 # relayed to Discord for a human to act on — it is not the live §E loop.
 2-59/15 9-15 * * 1-5   /app/scripts/scheduled-run.sh tick
 
+# --- information-edge research (design 2026-08-30) ------------------------
+# scout is calendar-driven: it works the earnings cohort 3-6 weeks ahead of a
+# print, which is the option ENTRY window. 07:12 ET puts it well before the
+# 08:17 preopen deep run and nowhere near the session.
+#
+# catalyst is source-driven and has no calendar, so it runs in the evening,
+# clear of every other job. It is the only channel that produces anything
+# between earnings seasons — expect it to carry September alone.
+#
+# Both are read-only at the broker, hold no order tools, and relay to Discord
+# only when evidence clears the bar. A quiet scout is the normal state, not a
+# failure: the strategy's own history is a handful of trades, and a scout that
+# escalated weekly would be finding worse, not more.
+12 7  * * 1-5   /app/scripts/scheduled-run.sh scout
+33 18 * * 1-5   /app/scripts/scheduled-run.sh catalyst
+
 # --- session close (§7.2) -------------------------------------------------
 # 16:04 ET, four minutes after the bell so the marks are closing marks, and
 # eighteen before the postclose deep run that reads the file it writes.
