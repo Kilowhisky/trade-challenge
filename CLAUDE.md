@@ -1,6 +1,6 @@
-# Trading Competition — Operating Manual
+# Trading Account — Operating Manual
 
-**Manual version v3.** This file is the binding rule set for this project. It
+**Manual version v4.** This file is the binding rule set for this project. It
 loads automatically at the start of every session. Read it before taking any
 action on the account.
 
@@ -8,28 +8,29 @@ action on the account.
 |---|---|
 | **Account owner** | Chris |
 | **Account** | ACCOUNT_REDACTED "LLM YOLO" · Charles Schwab, via the Schwab MCP server · **CASH — no margin** · hash `HASH_REDACTED` |
-| **Competition capital** | Account value − the $900.00 reserve. Recomputed every session; never carried forward from this file |
+| **Account value** | The live broker reading — settled cash + unsettled cash + marked-to-market positions. Recomputed every session; never carried forward from this file |
 | **Settlement reserve** | $900.00 — float to bridge T+1 settlement, never deployed |
-| **Scoring** | Final account value **minus the $900.00 reserve** |
-| **High-water mark** | Highest competition capital **recorded** to date. Resolved per session from the latest `status/` file's *State recorded — current* block (tick.md §B5) — not from this file |
-| **Window** | 2026-08-14 → 2026-09-14 · 21 NYSE sessions (Labor Day 9/07 excluded) |
-| **Final session** | Monday 2026-09-14 |
-| **§8 lockout** | From Thursday 2026-09-10 — no new positions, all options closed |
+| **High-water mark** | Highest account value **recorded** to date. Resolved per session from the latest `status/` file's *State recorded — current* block (tick.md §B5) — not from this file |
 
-**Risk anchoring — the misreading this manual most wants to prevent.** Every
-percentage in §3 — position caps, sleeve limits, the high-water mark, the §3.6
-triggers — is computed against **competition capital**, never against total
-account value. Reading a cap against the full balance overstates the intended
-risk by roughly a third. The reserve exists only to bridge T+1 settlement:
-it adds float, never risk, and total position exposure never exceeds 100% of
-competition capital.
+**There is no competition.** Chris withdrew on 2026-08-29, and §8 — scoring,
+the window, the final session, the lockout — was deleted the same week per §9
+(`CHANGELOG.md`). No deadline forces a position, no calendar refuses an entry,
+and no score subtracts the reserve. The account is now run as an ongoing book.
+
+**Risk anchoring.** Every percentage in §3 — position caps, sleeve limits, the
+high-water mark, the §3.6 triggers — is computed against **account value**, the
+whole broker balance. *(Amended 2026-08-31 per §9: the anchor was "competition
+capital" = account value − the $900 reserve, which existed to make scoring and
+risk agree. With no score to compute, a second capital number is one more thing
+to get wrong.)* The reserve is now a working settlement buffer: it bridges T+1,
+it is not deployed, and it is **not** subtracted before a cap is taken.
 
 **Percentages are canonical; dollar figures are not.** This manual states caps
 and thresholds only as percentages and formulas, because every dollar
 equivalent drifts the moment capital or the high-water mark moves — and a
 stale dollar figure in a rule is a rule that silently stops matching itself.
-Current dollar values are resolved at the moment they are needed: competition
-capital from the live broker read (§4.5), the high-water mark from the latest
+Current dollar values are resolved at the moment they are needed: account
+value from the live broker read (§4.5), the high-water mark from the latest
 `status/` file, and every cap arithmetic by `scripts/pre-order-check.sh`.
 **Never hard-code a dollar cap into this file, the playbook, or a command
 file.** The one standing exception is the $900.00 reserve, which is a fixed
@@ -40,8 +41,8 @@ done. It does not define *how the account is traded*. That is the playbook:
 
 > **`strategy.md`**
 > — sleeve architecture and the reserve invariant, core and catalyst selection
-> rules, the options sleeve, the order workflow, the monitoring loop, the
-> session protocol, and the endgame calendar. Two supporting documents in the
+> rules, the options sleeve, the order workflow, the monitoring loop, and the
+> session protocol. Two supporting documents in the
 > same directory record the adversarial review and the comparative research
 > synthesis it draws on.
 
@@ -74,10 +75,13 @@ why a rule says what it says, or what it said before.
 
 I am not a financial advisor and nothing here is financial advice. This is real
 money that can go to zero. Chris is the account owner and bears responsibility
-for every trade placed. These rules exist because a one-month competition creates
-pressure to take variance that would be irrational under any other framing — and
-that pressure peaks exactly when the account is down. The rules do not bend
-because we are losing. Amendments happen through §9, in writing, never mid-panic.
+for every trade placed. These rules exist because a small, actively traded
+account creates pressure to take variance that would be irrational under any
+other framing — and that pressure peaks exactly when the account is down. The
+rules do not bend because we are losing. Amendments happen through §9, in
+writing, never mid-panic. *(The original wording named a "one-month
+competition" as the source of that pressure. The competition ended 2026-08-29;
+the pressure did not, so the rule stands with its real cause named.)*
 
 **Operating limitation #1 — I am scheduled, not continuous.** *(Amended
 2026-08-24 per §9; the prior text — "I act only while a session is open on this
@@ -144,10 +148,14 @@ Absolute. No argument from opportunity cost overrides these.
    position by accident (see §4.7 on orphaned stop orders).
 6. **No trading securities of any company Chris has material non-public
    information about**, including his employer if applicable.
-7. **No moving money into or out of the account** during the window. Dividends
-   and cash-sweep interest are permitted inflows and count toward scoring. One
-   field-agreed deposit was ratified as a single exception on 2026-08-14
-   (`CHANGELOG.md`); **no further transfers are permitted.**
+7. **No moving money into or out of the account.** Dividends and cash-sweep
+   interest are permitted inflows. One field-agreed deposit was ratified as a
+   single exception on 2026-08-14 (`CHANGELOG.md`); **no further transfers are
+   permitted.** *(Reworded 2026-08-31: the prohibition was scoped "during the
+   window" and justified by scoring, both of which died with §8. It is
+   retained unchanged in force — a §3.6 high-water mark means nothing if the
+   denominator can be topped up — and deliberately not relaxed here. Relaxing
+   it is a §9 conversation Chris can open at any time.)*
 
 ---
 
@@ -184,17 +192,23 @@ Two independent reasons, either sufficient on its own:
 ## 3. Position sizing and risk limits
 
 **3.1 — Single position cap.** No single position may exceed **35%**<!--rule:manual_single_position_pct--> of
-competition capital (account value − the $900 reserve) after the order
+**account value** after the order
 fills**, counting all prior adds to that position. This is
 a cap on the resulting total, not on each individual order — three compliant 30%
 buys stacking into a 90% position is a violation, not a loophole.
 
 **3.2 — Option sizing and quality.** Options are capped as a percentage of
-**competition capital**, so capacity scales with the account — wins expand it,
+**account value**, so capacity scales with the account — wins expand it,
 losses shrink it — and gated on contract quality.
 
-- Max premium in any single option position: **20%**<!--rule:manual_option_single_position_pct--> of competition capital at entry.
-- Max total open option premium: **30%**<!--rule:manual_option_open_premium_pct--> of competition capital.
+- Max premium in any single option position: **10%**<!--rule:manual_option_single_position_pct--> of account value at entry.
+  *(Cut from 20% on 2026-08-31 per §9. The strategy this account is being
+  rebuilt around buys long options into scheduled events, where total loss of
+  premium is the modal outcome and the edge is unvalidated — design spec §8.1.
+  Fractional Kelly at a ~50% hit rate and 2:1 payoff puts quarter-Kelly near
+  6%, so 10% is already the aggressive end. It should fall further if the
+  measured hit rate disappoints, and may rise if it holds up.)*
+- Max total open option premium: **30%**<!--rule:manual_option_open_premium_pct--> of account value.
 - No limit on the number of open option positions. The 30% aggregate cap is
   the binding constraint; every position still carries its own §3.3
   expiration clock and §3.2 quality floors.
@@ -213,7 +227,14 @@ Quality floors — all must hold at entry:
   §3.3 exit or lengthening the token cycle moves this floor rather than
   silently leaving it stale. *(Amended 2026-08-17 — was a flat 21, which
   carried the same protection with three days of unexamined margin on top.)*
-- **Delta ≥ 0.35**<!--rule:manual_option_min_delta--> (no far-OTM lottery tickets)
+- **Delta band: ≥ 0.45**<!--rule:manual_option_min_delta--> and **≤ 0.75**<!--rule:manual_option_max_delta-->.
+  *(Was a bare floor of 0.35 until 2026-08-31 per §9.)* A floor alone is the
+  wrong shape for buying options into a scheduled event: implied volatility
+  collapses after the print, that crush destroys **extrinsic** value, and an
+  ITM contract is mostly intrinsic. Below 0.45 is a lottery ticket bought
+  into a known volatility collapse; above 0.75 is paying option spreads to
+  own something that already behaves like the stock, where buying the shares
+  is the better trade.
 - **Open interest ≥ 500**<!--rule:manual_option_min_open_interest--> on the specific contract
 - **Bid/ask spread ≤ 10%**<!--rule:manual_option_max_spread_pct_of_mid--> of mid
 - Underlying satisfies §1.4 and the §2 liquidity floor
@@ -222,8 +243,8 @@ Quality floors — all must hold at entry:
 account.** The OCC auto-exercises any long option that finishes $0.01 in the
 money. On a cash account this size that is catastrophic:
 - An ITM long call auto-exercises into a strike × 100 stock purchase. At any
-  underlying this account can trade, that obligation exceeds competition
-  capital several times over — producing a cash call, forced liquidation, and
+  underlying this account can trade, that obligation exceeds account value
+  several times over — producing a cash call, forced liquidation, and
   a violation under §5.
 - An ITM long put exercises into a **short stock position**, which §1.5 forbids
   and a cash account cannot hold, forcing a broker buy-in at any price.
@@ -232,6 +253,13 @@ money. On a cash account this size that is catastrophic:
 under no circumstances hold any option into its expiration week's final trading
 day. If a position cannot be closed for any reason, file a **Do-Not-Exercise
 instruction with Schwab the same session** and notify Chris immediately.
+
+**This rule was deliberately left untouched by the 2026-08-31 amendment, and it
+binds harder now than it did before.** §3.7's earnings prohibition is gone, so
+the account will hold long options *through* binary events on purpose. That
+makes an option far more likely to finish deep ITM — which is the winning case,
+and also the exact input to OCC auto-exercise. The 5-DTE close is the only
+thing standing between a correct thesis and a cash call.
 
 **3.4 — Stop-loss.** Every stock and ETF position gets a **stop-limit** order,
 placed as a resting GTC order immediately after the entry fill is confirmed.
@@ -263,7 +291,7 @@ order (§4.1).
 
 **3.5 — Leveraged ETF constraints.** Leveraged and inverse ETFs reset daily and
 decay when held through volatility.
-- **20%**<!--rule:manual_leveraged_aggregate_pct--> of competition capital, aggregate, across all leveraged/inverse ETFs
+- **20%**<!--rule:manual_leveraged_aggregate_pct--> of account value, aggregate, across all leveraged/inverse ETFs
   combined — not per position. A 3x fund at 20% is already 60% effective
   notional.
 - Max holding period **5**<!--rule:manual_leveraged_max_hold_sessions--> trading days (NYSE sessions, holidays excluded). A
@@ -272,13 +300,22 @@ decay when held through volatility.
   neither "a leveraged ETF position" nor covered by the hold limit.
 
 **3.6 — Drawdown circuit breaker.** Measured against the **high-water mark**
-(the highest **competition-capital** value — account value − the $900
-reserve — recorded to date). **Checked at every session open, immediately
-after the §4.5 broker reconciliation that supplies the numbers** — and not
-only at close.
+(the highest **account value** recorded to date). **Checked at every session
+open, immediately after the §4.5 broker reconciliation that supplies the
+numbers** — and not only at close.
 
-**Halt — competition capital ≤ 0.80**<!--rule:manual_halt_multiple_of_hwm--> **× high-water (−20%).** No buy orders of
+**Halt — account value ≤ 0.80**<!--rule:manual_halt_multiple_of_hwm--> **× high-water (−20%).** No buy orders of
 any kind. Notify Chris. Trading resumes only after an explicit conversation.
+
+*(Re-anchored 2026-08-31 per §9 — was competition capital against a
+competition-capital high-water mark. A drawdown brake is sound independent of
+any contest, so the rule survives at −20% with the denominator changed.
+**Migration note:** every `High-water mark:` figure already written to
+`status/` is a competition-capital number, i.e. $900 low. Because the ratchet
+takes `max(prior, current)`, the first session close after this amendment
+raises it to the account-value reading and it is correct from then on. The one
+transient effect is that the halt threshold sits $720 low for that single
+session — the brake is briefly harder to trip, never easier.)*
 
 "New position" means **any buy order** — including adds to an existing position,
 re-entering a name that just stopped out, and rolling an option. Closing orders
@@ -290,20 +327,31 @@ no position is closed on account of drawdown alone. A "Caution" band at −12%
 previously halved sizes and closed options; it was removed 2026-08-17 per §9
 (`CHANGELOG.md`). Do not reintroduce an intermediate level by inference.
 
-**3.7 — Event risk.** Because stops do not cover gaps (§0):
-- **Check the earnings date before every equity entry.** No position may be held
-  through a scheduled earnings report. This binds a position to **its own
-  underlying's** scheduled report; exposure to third-party events (another
-  company's print moving the sector) is ordinary market risk, not a §3.7
-  violation. *(Scope ruled by Chris 2026-08-13 per §9.)* If earnings land inside a planned holding
-  period, either size to exit before, or don't take the trade.
-- **Check for pending corporate actions** (splits, mergers, spinoffs, ticker
-  changes) before entry. Exit any position that undergoes one — a stop priced
-  before a reverse split is meaningless afterward.
+**3.7 — Event risk.**
+
+- **Earnings are no longer a prohibition.** *(Amended 2026-08-31 per §9 — the
+  prior rule forbade holding any position through a scheduled report, which
+  categorically outlawed the only strategy this account has a demonstrated
+  edge in. Chris: "Ditch 3.7 entirely", scoped to "Kill earnings bar, keep
+  halt rule only".)* Know the date — it is the event a thesis is timed
+  against — but it gates nothing. Sizing, not avoidance, is now what carries
+  event risk: §3.2's 10% single-thesis premium cap is set assuming total loss
+  of premium precisely because a print can deliver it.
+- **Corporate actions re-price the stop, they do not force an exit.** A stop
+  priced before a split is arithmetically meaningless afterward, so recompute
+  and re-place it in the same session the action takes effect. The prior rule
+  required exiting the position, which would have forced a close on exactly
+  the merger theses §3.7 now exists to permit. Still check for pending splits,
+  mergers, spinoffs and ticker changes before entry — the check survives; only
+  the mandatory exit is gone.
 - **Halted stock:** place no orders in a halted security. Wait for the reopen,
   reassess from scratch, and log the halt.
 
-**3.8 — Correlation cap.** Max **50%**<!--rule:manual_correlation_cap_pct--> of competition capital in positions with
+**Stops still do not cover gaps (§0), and that has not changed.** What changed
+is the conclusion drawn from it: the account now accepts gap risk knowingly, at
+a size chosen for it, instead of refusing the trade.
+
+**3.8 — Correlation cap.** Max **50%**<!--rule:manual_correlation_cap_pct--> of account value in positions with
 materially correlated exposure — same sector, same macro theme, or
 correlation > **0.7**<!--rule:manual_correlation_threshold-->.
 35% QQQ + 35% SPY + 20% TQQQ satisfies every individual rule and is a 90%
@@ -362,8 +410,10 @@ price and resulting position. Never assume a fill matched the quote.
 
 **4.9 — Pre-trade rule check,** written into the trade log before placing any
 order: instrument permitted (§2), size within caps (§3.1/§3.2), option quality
-floors met (§3.2), earnings and corporate actions checked (§3.7), stop planned
-(§3.4), **settled** funds available (§5), drawdown level (§3.6).
+floors met (§3.2, including the delta **band**), earnings date and corporate
+actions **noted** (§3.7 — recorded as context, no longer a gate), halt status
+checked (§3.7), stop planned (§3.4), **settled** funds available (§5),
+drawdown level (§3.6).
 
 **4.10 — Operational hard gates.** Four checks that run on every order, lifted
 into the manual from the playbook because each traces to a documented
@@ -418,7 +468,7 @@ not placed.
 ## 5. Cash account settlement discipline
 
 Settlement is **T+1** for stocks, ETFs, and options. In a cash account this
-creates violations that can freeze the account mid-competition:
+creates violations that can freeze the account outright:
 
 - **Good faith violation** — buying with unsettled proceeds and selling that
   position before the proceeds settle.
@@ -500,22 +550,31 @@ sensitive is committed, tell Chris immediately — do not attempt a silent fix.
 
 ---
 
-## 8. Scoring and endgame
+## 8. Scoring and endgame — DELETED
 
-- Winner determined by **final account value minus the $900.00 settlement
-  reserve, at the closing bell on the final NYSE trading session on or before
-  2026-09-14.**
-- Account value = settled cash + unsettled cash + marked-to-market positions.
-  The score subtracts the reserve from that total.
-- **No new positions may be opened in the final 3 trading days.** Marking to
-  market at a fixed deadline otherwise makes maximum variance on the last morning
-  the mathematically optimal play — 0DTE contracts into an earnings print. That
-  is a bug in the scoring rule, not a strategy.
-- **All option positions must be closed by the start of the final 3 trading
-  days**, bringing open premium to $0.
-- Log the final value as the last entry in `trade-log.csv` and in the closing
-  `status/` note. Both are local-only per §7.1 — there is no final commit of
-  the result to make.
+**Deleted 2026-08-31 per §9.** Chris withdrew from the competition on
+2026-08-29: *"The competition is over, i'm dropping out."*
+
+This section defined a winner, a final session, a 3-day new-position lockout,
+and a date by which all options had to be flat. **A scoring rule with no
+contest still constrains trades** — the lockout would still refuse entries, the
+flat-by date would still force closes, and both would be doing it in service of
+a deadline that no longer exists. Deletion is therefore the conservative
+action, not the permissive one.
+
+The section number is retained as a tombstone so that older `status/` notes,
+command files and commit messages referencing "§8" resolve to an explanation
+rather than to a renumbered rule. **Do not reuse §8 for a new rule.**
+
+Account value is still defined the same way — settled cash + unsettled cash +
+marked-to-market positions — and is now the anchor for every §3 percentage; see
+the header. The $900.00 reserve is a settlement buffer, subtracted from
+nothing.
+
+What replaced this section is nothing: there is no end date, so there is no
+endgame. The clocks that still bind are §3.3 (close every long option at 5 DTE)
+and §3.5 (5-session leveraged hold), and both are risk rules that never
+depended on a calendar.
 
 ---
 
@@ -547,7 +606,7 @@ conditions.
 
 ## Verified account facts
 
-Confirmed against the broker 2026-08-13, unchanged since. The pre-competition
+Confirmed against the broker 2026-08-13, unchanged since. The onboarding
 checklist that established them is in `CHANGELOG.md`.
 
 - **Account type is CASH.** The entire margin field set is absent — no

@@ -78,8 +78,6 @@ The parent does not execute §P/§D itself:
 2. Halt / restriction / cash call (latest tick or status): no runs.
 3. Unacknowledged `ALERT.md`: run is file-only (postclose parent §E
    suppressed; preopen is file-only always, §P).
-4. §8 endgame: from 9/8, no runs. Nothing this pass could surface is
-   enterable inside the lockout horizon.
 5. postclose only: if `research/oi/DATE.jsonl` already has today's §B-oi
    rows **and** `research/screen/DATE.jsonl` exists, today's run already
    happened — no-op. (Belt-and-suspenders on top of `oi-append.sh`'s own
@@ -352,7 +350,7 @@ reached:**
    enforced, anchored `^Verified as of:` stamp line — a banner-substring
    match alone is not enough, the script refuses a write whose stamp line
    is missing even if the phrase appears elsewhere in prose) **whenever
-   any derived number moved this run** — competition capital, §3.1/§3.2
+   any derived number moved this run** — account value, §3.1/§3.2
    caps, sleeve bands, ATR baselines, the calendar map. **Macro-calendar
    maintenance** (spec §12 adoption 2) is part of the calendar map: this
    step keeps scheduled macro events — FOMC, CPI, PPI, employment (the

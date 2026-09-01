@@ -13,7 +13,7 @@
 #     --instrument equity|option|leveraged_etf \
 #     --symbol SYM --qty N --price DOLLARS \
 #     --intent-notional DOLLARS \
-#     --comp-capital DOLLARS --settled-cash DOLLARS \
+#     --account-value DOLLARS --settled-cash DOLLARS \
 #     [--existing-position-value DOLLARS]   # same symbol stock/ETF value; default 0
 #                                           # (stock/ETF instruments only)
 #     [--existing-option-premium DOLLARS]   # prior premium in THIS contract; default 0
@@ -80,7 +80,7 @@ prog="pre-order-check"
 usage_text() {
   cat <<EOF
 usage: $prog --instrument equity|option|leveraged_etf --symbol SYM --qty N \\
-  --price D --intent-notional D --comp-capital D --settled-cash D \\
+  --price D --intent-notional D --account-value D --settled-cash D \\
   [--existing-position-value D] [--existing-option-premium D] \\
   [--open-option-premium D] [--leveraged-aggregate D] \\
   [--underlying-price D] [--leveraged-underlying]
@@ -149,7 +149,13 @@ while [ "$#" -gt 0 ]; do
     --qty) need_val "$@"; once "$1"; qty="$2"; shift 2 ;;
     --price) need_val "$@"; once "$1"; price="$2"; shift 2 ;;
     --intent-notional) need_val "$@"; once "$1"; intent_notional="$2"; shift 2 ;;
-    --comp-capital) need_val "$@"; once "$1"; comp_capital="$2"; shift 2 ;;
+    # §3 caps are percentages of ACCOUNT VALUE since the 2026-08-31 §9
+    # amendment. --account-value is the correct name; --comp-capital is kept
+    # as a deprecated alias so no caller breaks, but a flag whose name says
+    # "competition capital" while it must receive account value is a trap —
+    # passing the old basis would size every cap against a base $900 too
+    # small. Both set the same variable; prefer the new name.
+    --account-value|--comp-capital) need_val "$@"; once "$1"; comp_capital="$2"; shift 2 ;;
     --settled-cash) need_val "$@"; once "$1"; settled_cash="$2"; shift 2 ;;
     --existing-position-value) need_val "$@"; once "$1"; existing_position_value="$2"; shift 2 ;;
     --existing-option-premium) need_val "$@"; once "$1"; existing_option_premium="$2"; shift 2 ;;
@@ -267,8 +273,8 @@ NOT-CHECKED (remain the operator's §4.9/§4.10 duty — this script does not ev
   - order-rate ceilings (§4.10)
   - quote freshness (§4.10)
   - reserve invariant (header rule: total position exposure ≤ 100% of
-    competition capital — settled cash includes the $900 reserve, so the
-    §5 check passing does NOT establish this)
+    account value minus the $900 settlement buffer — settled cash includes
+    that buffer, so the §5 check passing does NOT establish this)
 EOF
 }
 

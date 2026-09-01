@@ -18,6 +18,125 @@ reaction to a losing position. Playbook rules marked
 
 ## Manual — `CLAUDE.md`
 
+### 2026-08-31 · The competition rule set is retired (§9 amendment)
+
+Chris withdrew from the competition on 2026-08-29. In his words:
+
+> "The competition is over, i'm dropping out."
+
+and, on §3.7:
+
+> "Ditch 3.7 entirely"
+
+— scoped in the same conversation to *"Kill earnings bar, keep halt rule
+only."* Manual version v3 → **v4**. Title changed from "Trading Competition —
+Operating Manual" to "Trading Account — Operating Manual".
+
+**Parameter changes** (`rules.yml` and `CLAUDE.md` amended in the same commit
+per the file's CONTRACT):
+
+| Key | Before | After |
+|---|---|---|
+| `manual.option_single_position_pct` | 20 | **10** |
+| `manual.option_min_delta` | 0.35 | **0.45** (now a band floor) |
+| `manual.option_max_delta` | *(did not exist)* | **0.75** |
+| `manual.window_start` | 2026-08-14 | **deleted** |
+| `manual.window_end` | 2026-09-14 | **deleted** |
+| `manual.final_session` | 2026-09-14 | **deleted** |
+| `manual.lockout_start` | 2026-09-10 | **deleted** |
+| `manual.lockout_final_sessions` | 3 | **deleted** |
+| `strategy.option_min_delta` | 0.40 | **0.50** |
+| `strategy.all_options_flat_by` | 2026-09-04 | **deleted** |
+| `strategy.last_leveraged_entry` | 2026-09-01 | **deleted** |
+| `strategy.option_expiry_min_days_past_earnings` | *(new)* | **14** |
+| `strategy.option_expiry_max_days_past_earnings` | *(new)* | **28** |
+| `strategy.scout_entry_window_min_days` | *(new)* | **21** |
+| `strategy.scout_entry_window_max_days` | *(new)* | **42** |
+
+**§8 scoring and endgame — deleted.** It defined a winner, a final session, a
+3-day new-position lockout, and an all-options-flat date. A scoring rule with
+no contest still constrains trades: the lockout would still refuse entries and
+the flat-by date would still force closes, in service of a deadline that no
+longer exists. The section number is retained as a tombstone so older `status/`
+notes and commit messages that reference "§8" resolve to an explanation rather
+than to a renumbered rule.
+
+**§3.7 event risk — reduced to the halt rule.** The earnings prohibition ("no
+position may be held through a scheduled earnings report") is removed for all
+instruments. It categorically outlawed the only strategy this account has a
+demonstrated edge in — see
+`docs/superpowers/specs/2026-08-30-information-edge-scout-design.md` §2. The
+corporate-action **exit** requirement became a stop **re-pricing**
+requirement: same arithmetic protection (a stop priced before a split is
+meaningless afterward), without forcing a close on exactly the merger theses
+the amendment exists to permit. The halt provision is unchanged.
+
+**§3.2 delta floor → band, 0.45–0.75.** A floor alone is the wrong shape for
+buying options into a scheduled event. IV collapses after the print and that
+crush destroys *extrinsic* value, so an ITM contract survives it: below 0.45 is
+a lottery ticket bought into a known volatility collapse, and above 0.75 is
+paying option spreads to own something that already behaves like the stock.
+
+**§3.2 single-thesis premium cap 20% → 10%.** Fractional-Kelly grounds: the
+edge is unvalidated (design spec §8.1 — two remembered winners cannot
+distinguish edge from survivorship), total loss of premium is the modal
+outcome of a long option, and at a ~50% hit rate with 2:1 payoff quarter-Kelly
+is ~6%. 10% is already the aggressive end. The 30% aggregate cap is unchanged.
+
+**"Competition capital" → account value throughout.** Every §3 percentage now
+anchors on the full broker balance rather than on account value − $900. The
+reserve stops being a scoring artifact and becomes a working settlement
+buffer, enforced directly by the playbook's reserve invariant (total cash ≥
+$900.00 at all times) rather than by subtraction from a capital definition.
+Consequence stated plainly: every **equity** ceiling is nominally larger in
+dollars than before, while the options sleeve moved the other way and moved
+further.
+
+**§3.6 migration note.** The circuit breaker is retained at −20% but now
+measures account value against an account-value high-water mark. Every
+`High-water mark:` figure already written to `status/` is a competition-capital
+number, i.e. $900 low. Because the ratchet takes `max(prior, current)`, the
+first session close after this amendment raises it and it is correct from then
+on; for that single session the halt threshold sits $720 low, which makes the
+brake harder to trip, never easier.
+
+**Deliberately NOT changed.**
+
+- **§1 in full** — no margin, no selling options, no spreads, no shorting, no
+  penny/OTC. These are what make the system safe to run unattended and none of
+  them constrains the strategy.
+- **§3.3 expiration handling**, which now binds *harder*: removing the earnings
+  bar means the account will hold long options through binary events on
+  purpose, which makes finishing deep ITM more likely — and that is the exact
+  input to OCC auto-exercise on a cash account. The 5-DTE close is the only
+  thing between a correct thesis and a cash call.
+- **§5 settlement, §7 logging, §9 amendment procedure.**
+- **§1.7 transfers**, reworded only to drop its dead "during the window" scope
+  and scoring justification. It is retained at full force and deliberately not
+  relaxed: a §3.6 high-water mark means nothing if the denominator can be
+  topped up. Relaxing it is a §9 conversation Chris can open at any time.
+- **The playbook's rejected "catch-up branch"** (2026-08-13, no late-variance
+  rotation to make up ground). Argued as final for the competition window; the
+  window is gone but the ruling is kept, because its reasoning was about
+  behaviour under pressure rather than about a deadline, and §9.3 forbids
+  loosening a rule at the moment it would help.
+
+**Enforcement added.** `scripts/check-consistency.sh` gained two checks: the
+delta band must be ordered (min < max) and the strategy tightening must sit
+*inside* it — the pre-existing tightness check compares only against the floor
+and would have passed a strategy delta of 0.90, outside the band entirely.
+It also now fails if any deleted competition or endgame-calendar key reappears
+in `rules.yml`. `scripts/test-pre-order-check.sh` gained matching assertions,
+including a functional one proving the gate rejects a 200.00 premium that the
+old 20% cap admitted.
+
+**Known follow-up, not done here.** The `Competition capital:` field in
+`status/` files is a serialization key read by `scripts/status-write.sh`,
+`scripts/scheduled-run.sh` and three test suites, and present in every
+historical status file. Renaming it is a data-format migration and was
+deliberately kept out of a rules amendment. It is now a legacy field name, not
+a rule anchor.
+
 ### 2026-08-17 · §7 logging: trade log, status, and research are local-only
 
 The trade log, `status/`, and `research/` were removed from git tracking and

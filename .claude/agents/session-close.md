@@ -28,8 +28,11 @@ per §4.5: all positions, all open orders, settled cash (`cashAvailableForTradin
 in `currentBalances`, never `initialBalances`), unsettled cash, `cashCall`,
 `isClosingOnlyRestricted`, and account value (`liquidationValue`).
 
-Competition capital = account value − the $900.00 reserve. Compute it; do not
-copy yesterday's.
+**The §3.6 basis is ACCOUNT VALUE**, re-anchored 2026-08-31 per §9. The
+`Competition capital:` line survives in the file only as a legacy
+serialization key (`status-write.sh` still requires it, and every historical
+status file carries it) — compute it as account value − the $900.00 reserve,
+do not copy yesterday's, and do **not** use it as the high-water basis.
 
 Two field traps the manual and `tick.md` both call out, and you will misreport
 without them:
@@ -72,24 +75,35 @@ self-certify any error already in it.
 ## §3 — The ratchet. This is the one irreversible number you touch.
 
 ```
-new_hwm = max(prior_hwm, closing_competition_capital)
+new_hwm = max(prior_hwm, closing_account_value)
 ```
 
+**Account value, not competition capital.** Until 2026-08-31 this line read
+`closing_competition_capital`, and §3.6 has since been re-anchored to account
+value. The two differ by exactly the $900 reserve, so recording the wrong one
+holds the mark $900 low forever — and no test catches it, because this file
+carries no `<!--rule:-->` marker for `check-consistency.sh` to bind. Every
+`High-water mark:` already on disk is a competition-capital figure; the
+`max()` above lifts it to the account-value basis at the first close after
+the amendment, which is the intended one-time migration.
+
 **The basis is the CLOSE, not the intraday high.** `CLAUDE.md` defines the mark
-as the highest competition capital *recorded* to date, and recording is what this
+as the highest account value *recorded* to date, and recording is what this
 file does. An intraday print is not a recorded close, and `tick.md` is explicit
 that adopting a phantom print "would ratchet Halt permanently."
 
 But do not discard the intraday high either. Read today's tick ledger
-(`status/ticks/YYYY-MM-DD.tsv`, `comp_capital` column) and, **if its maximum
-exceeds the new HWM**, state that in the file with the figure and the time. It
+(`status/ticks/YYYY-MM-DD.tsv`, `comp_capital` column — that column is
+competition capital, so **add the $900.00 reserve before comparing**) and,
+**if its maximum exceeds the new HWM**, state that in the file with the figure
+and the time. It
 is information the next session needs and it must not vanish silently.
 
 **The mark only ever ratchets up.** If the close is below the prior mark, carry
 the prior mark unchanged and say so. Never lower it.
 
-Then: `halt = 0.80 × new_hwm`, `drawdown = comp/new_hwm − 1`, and the §3.6
-level — **Halt** if `comp ≤ halt`, otherwise **OK**. There is no intermediate
+Then: `halt = 0.80 × new_hwm`, `drawdown = account_value/new_hwm − 1`, and the
+§3.6 level — **Halt** if `account_value ≤ halt`, otherwise **OK**. There is no intermediate
 band; do not invent one.
 
 ## §4 — Write the file

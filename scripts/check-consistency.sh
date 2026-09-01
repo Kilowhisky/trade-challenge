@@ -85,6 +85,38 @@ else
   note "option_min_dte $RULE_manual_option_min_dte = $RULE_manual_option_close_at_dte + $RULE_manual_option_max_blind_days + $RULE_manual_option_dte_execution_margin_days OK"
 fi
 
+# §3.2's delta became a BAND on 2026-08-31, and a band has two failure modes a
+# single floor never had: it can be inverted, and the strategy tightening can
+# fall off either END of it. The tightness check above only compares against
+# the floor, so it would happily pass a strategy delta of 0.90 — outside the
+# manual band entirely, and exactly the "behaves like stock" case the ceiling
+# exists to reject.
+mn="$(rule_get manual_option_min_delta)" || exit 2
+mx="$(rule_get manual_option_max_delta)" || exit 2
+sd="$(rule_get strategy_option_min_delta)" || exit 2
+if awk -v a="$mn" -v b="$mx" 'BEGIN{exit !(a+0<b+0)}'; then
+  note "option delta band is ordered ($mn < $mx) OK"
+else
+  bad "option delta band inverted: min=$mn max=$mx"
+fi
+if awk -v s="$sd" -v a="$mn" -v b="$mx" 'BEGIN{exit !(s+0>=a+0 && s+0<=b+0)}'; then
+  note "strategy option_min_delta $sd sits inside the manual band $mn-$mx OK"
+else
+  bad "strategy option_min_delta $sd is outside manual band $mn-$mx"
+fi
+
+# §8 was deleted 2026-08-31 per §9. These keys must stay gone: a calendar key
+# that reappears in rules.yml is a lockout that starts refusing entries again.
+dead_found=0
+for dead in window_start window_end final_session lockout_start \
+            lockout_final_sessions all_options_flat_by last_leveraged_entry; do
+  if grep -qE "^[[:space:]]+${dead}:" rules.yml; then
+    bad "rules.yml carries '$dead' — §8 and the endgame calendar were deleted 2026-08-31 per §9"
+    dead_found=$((dead_found+1))
+  fi
+done
+[ "$dead_found" -eq 0 ] && note "no competition/endgame calendar keys in rules.yml"
+
 # --- 3. no hard-coded rule percentages in scripts -------------------------
 echo "== scripts do not hard-code rule values =="
 hard=0

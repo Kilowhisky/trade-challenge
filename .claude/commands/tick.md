@@ -129,7 +129,7 @@ Read from **`currentBalances`**, never `initialBalances`:
 
 | Field | Use |
 |---|---|
-| `liquidationValue` | account value → competition capital |
+| `liquidationValue` | account value — the §3.6 and §3.1/§3.2 denominator |
 | `cashAvailableForTrading` | **settled cash** — but until its semantics are observed with unsettled proceeds present (first real sale), every buy gates on `cashAvailableForTrading − unsettledCash`, wrong only in the safe direction (playbook §7.8) |
 | `unsettledCash` | reserve invariant, T+1 tracking |
 | `cashBalance` | reserve invariant cross-check |
@@ -167,14 +167,26 @@ that depends on price may proceed (§4.10).
 ### B5. Compute — before evaluating any watch
 
 ```
-comp_capital = liquidationValue − 900.00          # the reserve, never in the risk math
-hwm          = recorded_hwm                        # recorded values only — see below
-halt         = 0.80 × hwm        # the only drawdown level (§3.6)
-drawdown_pct = (comp_capital − hwm) / hwm × 100
+account_value = liquidationValue                   # THE §3.6 DENOMINATOR
+comp_capital  = liquidationValue − 900.00          # ledger/display column only
+hwm           = recorded_hwm                       # recorded values only — see below
+halt          = 0.80 × hwm       # the only drawdown level (§3.6)
+drawdown_pct  = (account_value − hwm) / hwm × 100
 ```
 
+**Both figures, and do not cross them.** §3.6 was re-anchored to account value
+on 2026-08-31 per §9, while the tick ledger's `comp_capital` column and the
+canonical line keep their existing meaning so the file format stays readable
+against every historical row. The drawdown and the halt test use
+**`account_value`**; `comp_capital` is display only.
+
+Crossing them is not a cosmetic error, it is a false halt. The two differ by
+exactly the $900 reserve, so measuring `comp_capital` against an account-value
+`hwm` reports roughly −24% on a flat book — through the −20% halt, every
+session, permanently, with no position having lost anything.
+
 **The HWM never ratchets intraday.** §3.6 defines it as the highest
-competition-capital value *recorded* to date; a transient bad print at 11:04
+account-value figure *recorded* to date; a transient bad print at 11:04
 must not permanently raise Halt and then force loss-taking closes
 when marks revert. New highs are recorded — and the HWM ratchets — at the
 session-close status write (§7.2), from closing marks.

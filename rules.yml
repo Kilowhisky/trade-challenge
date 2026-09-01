@@ -31,16 +31,24 @@ manual:
   min_share_price_usd: 5.00
   # Liquidity is gated on DOLLAR volume, not share count. A share-count floor
   # is a proxy for "can we get filled" calibrated to account size; at a max
-  # §3.1 position near $1,015 a $5M/day name absorbs us at ~0.02% of volume.
+  # §3.1 position this account can take, a $5M/day name absorbs us at a small
+  # fraction of a percent of its volume. (A dated dollar figure stood here and
+  # was removed 2026-08-31 — §3.1 now anchors on account value, so the number
+  # was both stale and computed off the wrong base.)
   # The share floor survives only as a sanity check on thin, high-priced names.
   min_avg_daily_dollar_volume: 5000000
   min_avg_daily_volume: 100000
 
-  # §3.1 — single position cap, % of competition capital, after the fill
+  # §3.1 — single position cap, % of account value, after the fill
   single_position_pct: 35
 
-  # §3.2 — option sizing, % of competition capital
-  option_single_position_pct: 20
+  # §3.2 — option sizing, % of ACCOUNT VALUE (was "competition capital",
+  # which died with the competition on 2026-08-29).
+  # Single-thesis cap cut 20 -> 10 on fractional-Kelly grounds: the edge is
+  # unvalidated, the modal outcome of a long option is total loss of premium,
+  # and at a ~50% hit rate with 2:1 payoff quarter-Kelly is ~6%. Raise only
+  # when a measured hit rate justifies it (design spec §8.1).
+  option_single_position_pct: 10
   option_open_premium_pct: 30
   # §3.2 — option quality floors, all must hold at entry
   # DERIVED, not chosen. Options carry no resting stop (§3.4 excludes them),
@@ -54,7 +62,12 @@ manual:
   option_min_dte: 18
   option_max_blind_days: 10          # 7-day token lapse + a long weekend
   option_dte_execution_margin_days: 3 # a close may need several sessions
-  option_min_delta: 0.35
+  # §3.2 — delta is a BAND, not a floor. Vol crush destroys EXTRINSIC value,
+  # so an ITM contract survives it; below 0.45 is a lottery ticket bought into
+  # a known volatility collapse, above 0.75 is paying option spreads to own
+  # something that already behaves like stock.
+  option_min_delta: 0.45
+  option_max_delta: 0.75
   option_min_open_interest: 500
   option_max_spread_pct_of_mid: 10
 
@@ -87,18 +100,17 @@ manual:
   max_orders_per_symbol_per_session: 4
   max_replaces_per_stop_per_day: 3
 
-  # §8 — window and endgame
-  window_start: 2026-08-14
-  window_end: 2026-09-14
-  final_session: 2026-09-14
-  lockout_start: 2026-09-10
-  lockout_final_sessions: 3
+  # §8 — DELETED 2026-08-31 per §9. Chris withdrew from the competition on
+  # 2026-08-29. window_start / window_end / final_session / lockout_start /
+  # lockout_final_sessions are gone, not merely unused: a scoring rule with no
+  # contest still constrains trades, and a lockout date still refuses entries.
+  # Do not reintroduce a calendar key here without a fresh §9 amendment.
 
 strategy:
   # Stricter than the manual by construction. Each must stay on the tight side
   # of the manual value it references; check-consistency.sh enforces that.
 
-  # Playbook §3 — sleeve ceilings, % of competition capital
+  # Playbook §3 — sleeve ceilings, % of account value
   sleeve_core_pct: 50
   sleeve_catalyst_pct: 30
   sleeve_options_open_pct: 30
@@ -159,14 +171,27 @@ strategy:
   ratchet_entry_plus8_at_gain_pct: 15
 
   # Playbook §6 — options, tighter than manual §3.2
-  option_min_delta: 0.40               # manual floor is 0.35
+  option_min_delta: 0.50               # manual band floor is 0.45
   leveraged_exit_session: 4            # manual limit is 5
+
+  # Design spec §4 — expiry must clear the print, so a correct thesis is never
+  # FORCED to sell into the vol crush and can hold into the drift instead.
+  # Never the front weekly: that is where event vol is most concentrated.
+  option_expiry_min_days_past_earnings: 14
+  option_expiry_max_days_past_earnings: 28
+
+  # Design spec §4 — the option ENTRY window, and therefore the research
+  # window: IV ramps in the final ~2 weeks into a print, so we look at a name
+  # 3-6 weeks out in order to buy vol before it is bid up.
+  scout_entry_window_min_days: 21
+  scout_entry_window_max_days: 42
 
   # Playbook §8 — monitoring cadence, seconds
   tick_interval_naked_s: 60
   tick_interval_working_order_s: 300
   tick_interval_positions_s: 900
 
-  # Playbook §10 — endgame calendar
-  all_options_flat_by: 2026-09-04
-  last_leveraged_entry: 2026-09-01
+  # Playbook §10 — endgame calendar DELETED 2026-08-31 alongside manual §8.
+  # all_options_flat_by and last_leveraged_entry were dates in a contest that
+  # no longer exists; §3.3's 5-DTE close and §3.5's 5-session hold are the
+  # clocks that actually bind, and both survive untouched.

@@ -1,4 +1,4 @@
-# Competition Strategy Design
+# Trading Strategy Playbook
 
 **The playbook.** How the account is actually traded, inside the box that
 `CLAUDE.md` defines. Required reading at every session open.
@@ -15,35 +15,32 @@ manual sections rather than repeating their numbers.
 
 ---
 
-## 1. Goal and scoring — stated honestly
+## 1. Goal — stated honestly
 
-- Winner-take-all against a small field of **unconstrained, long-biased**
-  traders (live intel: margin, fast call-flipping, NVDA 220/225 calls held
-  into the confirmed 2026-08-26 print).
-- **Score = account value at the 2026-09-14 close − $900.00 reserve.**
-  Mark-to-market; nothing is liquidated for scoring; the account continues.
-- **The trade we have knowingly made:** the manual's box caps our right tail
-  far below an unconstrained book's. Estimated P(first) ≈ 5–25% — the top of
-  that range only because the field looks correlated-long, making our real
-  win path "*the AI-complex trade has a bad month and we preserve capital
-  through it*." What the box buys is near-zero probability of destroying real
-  money, and Chris has chosen that explicitly. This document optimizes
-  P(first) **subject to** the manual — it does not pretend rank or
-  "finishing well" is the objective, and it does not pretend the constraints
-  are free. The month's dominant event (NVDA 8/26) is one we are structurally
-  excluded from playing directly; that is the headline cost of the box.
-- Marks are honest by construction: §1.4/§2 liquidity floors mean scoring
+**Rewritten 2026-08-31.** Chris withdrew from the competition on 2026-08-29
+and the manual's §8 was deleted the same week per §9. This section used to
+state a winner-take-all objective, a 2026-09-14 score, and a P(first)
+estimate. All three are gone. What survives is the part that was never about
+the contest:
+
+- **The objective is the sequence, not a date.** Chris's 2026-08-13 horizon
+  correction — "9/14 is a checkpoint, not a terminus" — turned out to be the
+  whole story rather than a caveat on it. There is now no checkpoint at all:
+  the account compounds or it does not, and every rule is judged on whether it
+  survives being run for years rather than for a month.
+- **The box is still the point.** `CLAUDE.md` §1's prohibitions were adopted
+  because they make near-zero the probability of destroying real money. That
+  argument never referenced the competition and does not weaken without it.
+- Marks are honest by construction: §1.4/§2 liquidity floors mean quoted
   prices are realizable prices.
-- **Horizon correction (Chris, 2026-08-13, after the review):** 9/14 is a
-  **checkpoint, not a terminus** — the game is friendly, repeated, and
-  intended to run long-term, with the account persisting. This inverts the
-  review's one-shot game theory: in a repeated game, the unconstrained
-  field's variance must survive every checkpoint while a disciplined book
-  compounds through each one it doesn't. The P(first-at-this-checkpoint)
-  estimate above stands; the strategy's true objective is the sequence.
-  Competition-scoped rules (§8 lockout, scoring, the §3.2 option caps) get
-  revisited per §9 at the checkpoint — this month runs as agreed with the
-  field.
+- **What replaced the old edge thesis.** v1 selected on generic factor
+  screening at a three-week horizon and was, separately, structurally
+  incapable of opening a position. v2's edge is Chris's domain knowledge in
+  three sectors applied to dispersed public information before it is
+  aggregated into price — see
+  `docs/superpowers/specs/2026-08-30-information-edge-scout-design.md`.
+  **No validated hit rate exists yet**, which is exactly why §3.2's
+  single-thesis premium cap was cut to 10%.
 
 ## 2. Operating constraints (verified 2026-08-13)
 
@@ -52,24 +49,33 @@ manual sections rather than repeating their numbers.
 | Execution autonomous. MCP gate flipped 2026-08-14; place/cancel round-trip drill passed the same session. `replace_order` is absent from the tool surface — a stop amendment is cancel + re-place, counted per CLAUDE.md §4.10 | I place orders under §6 |
 | Stop rejected until entry fills (verified live) | Fill→stop window real; naked-position watch is the loop's top alert |
 | T+1 cash account, zero GFV tolerance | $900 reserve as float; invariant in §3; field semantics gated (§7.6) |
-| Token expires every 7 days | **Re-auth: 8/19, 8/26, 9/2, and 9/8 pre-market** (9/8 token outlives the 9/14 bell) |
+| Token expires every 7 days | Re-auth roughly weekly, pre-market. There is no longer a terminal date the token has to outlive; it is a standing operational chore |
 | Loop coverage honestly ≈ 5–15% of the trading day, ≈0% at open/close | Operative deadline everywhere = **session end**, never "market close"; Chris does a 5-min 9:30 ET check any day a position is open |
-| §3.2 per-position cap: 20% of competition capital | At present capital that reaches mid-priced underlyings at calm IV, appreciably less at realistic IV. Re-derive at order time — never carry a spot ceiling forward |
-| Earnings calendar (verified): HD 8/18, TGT+LOW 8/19, WMT 8/20, NVDA+CRM 8/26, DLTR 8/27, AVGO 9/3 | Supply themes are consumer-retail and tech, clustered 8/18–9/3; desert after ~9/4 |
+| §3.2 per-position option cap: 10% of account value | Cut from 20% on 2026-08-31 per §9. At present capital this reaches mid-priced underlyings at calm IV and appreciably less at realistic IV — which is the intended pressure, not a defect. Re-derive at order time; never carry a spot ceiling forward |
+| Earnings are a **timing input**, not a barrier (§3.7, amended 2026-08-31) | The cohort builder schedules research off the calendar rather than avoiding it. Names reporting in 21–42 days are the working set (`rules.yml` `scout_entry_window_*`) |
 
 ## 3. Capital architecture
 
-**Competition capital = account value − $900.00 reserve.**
+**Every ceiling is a percentage of account value** — the whole broker balance
+— since the 2026-08-31 amendment. *(It was "competition capital" = account
+value − $900.00, a second capital number that existed to make scoring and risk
+agree. With no score, it was one more thing to get wrong.)*
 
-**The reserve invariant** *(strategy rule, replaces the old bridge wording)*:
-**total cash (settled + unsettled) ≥ $900.00 at all times.** Equivalently:
-position exposure at marks never exceeds competition capital. A bridged buy is
-capped at min(planned size, incoming unsettled proceeds); same-day proceeds
-qualify. This forbids the leak where a stopped-out loss plus full-size
-redeployment quietly eats the reserve: **redeploys are capped at actual
-proceeds, not at original position size.**
+**The reserve invariant** *(strategy rule)*: **total cash (settled +
+unsettled) ≥ $900.00 at all times.** This is now a pure settlement buffer and
+is stated directly as a cash floor rather than derived from a capital
+definition. A bridged buy is capped at min(planned size, incoming unsettled
+proceeds); same-day proceeds qualify. This forbids the leak where a
+stopped-out loss plus full-size redeployment quietly eats the reserve:
+**redeploys are capped at actual proceeds, not at original position size.**
 
-Ceilings are percentages of competition capital. Dollar equivalents are
+Note the consequence, stated plainly: because §3 percentages now take account
+value rather than account value − $900, **every equity ceiling is nominally
+larger in dollars than it was**, while the reserve invariant above is what
+actually stops the book from consuming the buffer. The options sleeve moved
+the other way and moved further — 20% → 10% per thesis.
+
+Ceilings are percentages of account value. Dollar equivalents are
 deliberately not written here — they drift with capital and go stale silently
 (manual header, *Percentages are canonical*). `scripts/pre-order-check.sh`
 computes them from the live figure at order time.
@@ -78,16 +84,16 @@ computes them from the live figure at order time.
 |---|---|---|
 | Core | **50%**<!--rule:strategy_sleeve_core_pct--> | No name count *(strategy rule)*; per-position §3.1/§3.8 bind |
 | Catalyst | **30%**<!--rule:strategy_sleeve_catalyst_pct--> | 1, occasionally 2 |
-| Options | 30% open / 20% per position (§3.2) | No count limit |
+| Options | 30% open / 10% per position (§3.2) | No count limit |
 | Leveraged ETF | **20%**<!--rule:strategy_sleeve_leveraged_pct--> aggregate, within the rows above | Gated (§6) |
 | **Max deployed** | **100%**<!--rule:strategy_max_deployed_pct--> | Sleeves sum to 110% — they are individual ceilings; the 100% total-deployment line and the reserve invariant bind first |
 
-- **Sleeve compliance is checked at order time only**, against competition
-  capital at current marks. Mark drift never forces a sale and never frees
+- **Sleeve compliance is checked at order time only**, against account value
+  at current marks. Mark drift never forces a sale and never frees
   option capacity. "Open premium" (§3.2) = premium **paid** on open
   positions; marks irrelevant.
-- **§3.6 threshold ratchets:** Halt is the manual's multiple of HWM of
-  competition value. It is
+- **§3.6 threshold ratchets:** Halt is the manual's multiple of the HWM of
+  **account value**. It is
   the only drawdown level — nothing happens above it (§3.6). HWM resolution —
   source, once-per-session caching, and the no-intraday-ratchet rule — is
   defined in tick.md §B5, one place.
@@ -101,8 +107,10 @@ computes them from the live figure at order time.
 
 ## 4. Core sleeve — selection
 
-- Universe: large/mid caps and sector ETFs passing §1.4/§2 floors, **no
-  earnings scheduled before 9/14** (verified at entry, §3.7).
+- Universe: large/mid caps and sector ETFs passing §1.4/§2 floors. **The
+  "no earnings inside the holding period" screen is removed** (§3.7 amended
+  2026-08-31); note each name's report date at entry as context for the exit
+  plan, and let §3.4's stop and §3.1's size carry the event risk.
 - Tilt: 3–6 month relative strength, uptrend, proximity to 52-week high
   (the tilt with live large-cap evidence at this horizon).
 - Volatility ceiling *(strategy rule)*: reject if daily ATR exceeds
@@ -123,7 +131,7 @@ computes them from the live figure at order time.
   2000/2007/2021-signature record, so our win path is surviving the field's
   event rather than joining it — but that argues against *correlated*
   exposure, not against trading at all. *(Was 8/24–8/28 and a blanket freeze:
-  five sessions, 24% of the window, closed to every name regardless of
+  five sessions closed to every name regardless of
   whether it had any connection to the event.)* Expect a muted
   tape to produce few qualified catalyst setups generally (Q4-25: under half
   of beats saw a positive next-day move); **zero qualified setups is a
@@ -132,13 +140,19 @@ computes them from the live figure at order time.
 ## 5. Catalyst sleeve — post-earnings momentum continuation
 
 Relabeled honestly: academic PEAD is dead in our forced (liquid, large-cap)
-universe, and this window cannot reach the day-20+ horizon where residual
-drift is claimed. What the qualification rules actually select — a
+universe. What the qualification rules actually select — a
 high-turnover large cap gapping to near its 52-week high on a clean beat —
 carries a **short-term momentum continuation** premium with current,
 replicated large-cap evidence. Same trades; correct theory; success judged
-accordingly (§12). Entry remains **after** the print, never through it
-(§3.7 + IV/gap math).
+accordingly (§12).
+
+Entry remains **after** the print for this sleeve — *(strategy rule as of
+2026-08-31, no longer a §3.7 requirement)*. §3.7's earnings bar is gone, so
+holding through a print is now permitted by the manual; this sleeve
+nonetheless keeps the post-print entry because its thesis **is** the
+post-print drift and the IV/gap math is what makes it work. The
+scout/catalyst channel is where through-the-print exposure now lives, and it
+expresses that view in long options (§6), not in shares.
 
 **Qualification (all required):** reported within last 1–3 sessions; clean
 beat, ideally raised guidance; **gapped up and held** (closed report day in
@@ -172,7 +186,6 @@ in the first half of a session Chris intends to keep open *(strategy rule)*.
   never lowered): **+8%**<!--rule:strategy_ratchet_breakeven_at_gain_pct--> → breakeven, **+15%**<!--rule:strategy_ratchet_entry_plus8_at_gain_pct--> → entry+8%, limit
   always 5% below trigger, single-message replace only, §4.6 applies to
   replaces.
-- Endgame calendar (§10)
 
 ## 6. Options and leveraged ETFs
 
@@ -200,30 +213,36 @@ grows; scarcity discipline lives in the 30% open cap and the quality floors.
 
 Two *(strategy rules)* from the comparative research tighten this:
 
-- **Δ ≥ 0.40**<!--rule:strategy_option_min_delta--> **for long premium** — the
-  manual's §3.2 floor of 0.35 sits exactly on the boundary of the documented
-  Δ 0.05–0.35 lottery-overpricing zone, so a strategy-level buffer above it is
-  warranted; 0.40 clears the zone while 0.50 was buying far more intrinsic
-  value than the evidence asks for. Combined with the §3.2 premium cap, a
-  0.50 floor forced deep, expensive contracts — few of them, and low
-  convexity for a book whose theses are directional and short-horizon.
-  *(Was 0.50, lowered 2026-08-17.)*
+- **Δ ≥ 0.50**<!--rule:strategy_option_min_delta--> **for long premium** — one
+  step inside the manual's §3.2 band floor of 0.45, leaving the ceiling of
+  0.75 as the manual states it. *(Raised from 0.40 on 2026-08-31, tracking the
+  manual's move from a 0.35 floor to a 0.45–0.75 band.)* The reasoning changed
+  along with the number: the old buffer existed to clear the Δ 0.05–0.35
+  lottery-overpricing zone. The band exists for a different hazard — buying
+  options into a scheduled print means buying into a known post-event
+  volatility collapse, and that crush destroys **extrinsic** value, so a
+  contract that is mostly intrinsic survives it. The earlier objection to 0.50
+  (it forced deep, expensive contracts, few of them) is now the intended
+  trade-off rather than a cost: fewer, higher-conviction, crush-resistant
+  positions is the design.
+- **Expiry sits 14–28 days past the print** and never on the front weekly,
+  where event vol is most concentrated (`rules.yml`
+  `strategy.option_expiry_*_days_past_earnings`). The point is that a correct
+  thesis is never *forced* to sell into the crush.
+- **Entry sits 21–42 days before the print** (`rules.yml`
+  `strategy.scout_entry_window_*`), which is deliberately the same interval as
+  the research window: IV ramps in the final ~2 weeks, so entering early buys
+  vol before it is bid up.
 - **Unspent is the sleeve's default state, not its fallback.** Retail long
-  premium is documented negative-EV at baseline. The evidence-backed uses are
-  (a) post-crush continuation calls 1–2 sessions after a qualified beat, when
-  IV has reset 30–60% lower, and (b) anti-field long puts. Expect 2–3 shots
-  across the window; commission runs 1.3%+ per cap-sized leg.
-
-**All options flat by the 9/4 close** *(strategy rule)*, via escalating limit
-reprices ending marketable-at-the-bid. If unfilled at the bell: marketable
-limit at the next open, logged as a breach with remedy per §7.3.
+  premium is documented negative-EV at baseline, and this structure minimises
+  what we pay for the earnings volatility premium without defeating it — the
+  premium is real and it is against us. The thesis has to be right often
+  enough to clear it. Commission runs 1.3%+ per cap-sized leg.
 
 **Leveraged ETFs: gated shut by default.** Specific short-horizon dislocation
 thesis only, uncorrelated with core+catalyst, ≤20% aggregate, calendar exit
 at **trading day 4** set at entry *(strategy rule — one session inside the
-manual's §3.5 day-5 limit, so a missed session cannot breach it)*. Last
-routine entry 9/1 *(strategy rule — day-5 must never straddle the dark
-stretch)*.
+manual's §3.5 day-5 limit, so a missed session cannot breach it)*.
 
 ## 7. Order workflow (autonomous once unlocked)
 
@@ -293,9 +312,9 @@ required, not a new rule — and the script's NOT-CHECKED block is the
 standing reminder of the gates that stay qualitative and stay with the
 operator (earnings, corporate actions, §3.8 correlation, halts, §3.6
 drawdown, §3.2 option quality floors, order-rate ceilings, quote freshness,
-and the header-rule reserve invariant — settled cash includes the $900
-reserve, so the §5 check passing does not establish total exposure ≤ 100% of
-competition capital). A FAIL from the script aborts the order exactly as a
+and the reserve invariant — settled cash includes the $900
+reserve, so the §5 check passing does not establish that total cash stays
+≥ $900.00). A FAIL from the script aborts the order exactly as a
 §4.10 mismatch does: stop, reconcile, do not resubmit blind.
 
 ## 8. Monitoring — the 5-minute loop
@@ -309,9 +328,9 @@ Chris's 9:30 ET check-in covers the gap that matters most. Watches:
 | **Naked position** | position without resting stop | Place stop immediately; if it won't take, close (§4.3) |
 | Stop fill | position gone / stop consumed | Log exit; check orphaned remainder (§4.7); **redeploy cap = actual proceeds (§3 invariant)** |
 | Partial fill | filled qty ≠ stop qty | Replace stop (§4.4) |
-| Drawdown | comp value vs the §3.6 Halt multiple of HWM (recorded HWM — resolved once per session from the latest status file; ratchets only at the session-close §7.2 write, never intraday) | Halt per §3.6 — the only level |
+| Drawdown | account value vs the §3.6 Halt multiple of HWM (recorded HWM — resolved once per session from the latest status file; ratchets only at the session-close §7.2 write, never intraday) | Halt per §3.6 — the only level |
 | Reserve | total cash < $900, computed per tick.md watch 2 (canonical — a conservative min() over both candidate totals until §7.8's field-semantics observation) | Invariant breach — halt buys, investigate |
-| Clocks | option DTE, leveraged day count, **9/4** flats, 9/10 lockout | Escalating from 2 days out |
+| Clocks | option DTE (§3.3 close at 5), leveraged day count (§3.5) | Escalating from 2 days out |
 | Correlation | weekly: 60-day corr of held names | >0.7 cluster → adds blocked |
 | Restriction | `isClosingOnlyRestricted` true | §5 protocol: read-only, notify |
 
@@ -395,6 +414,14 @@ ends with a **"State recorded — current"** block (account value, competition
 capital, HWM, settled/unsettled cash) — tick.md §B5 resolves `recorded_hwm`
 from exactly that heading, so a close that names it differently orphans the
 next session's HWM lookup.
+
+**The `Competition capital:` line is a retained legacy field name**, not a
+live rule anchor. Since 2026-08-31 every §3 cap is taken against **account
+value**; the line is still written (account value − $900.00) so that the
+existing `status/` history stays parseable and `scripts/status-write.sh` and
+its three test suites keep agreeing on the format. Read `Account value:` for
+sizing and `High-water mark:` for §3.6. Renaming the field is a data-format
+migration, deliberately not bundled into a rules amendment.
 **Data corpus** *(strategy rule, added 2026-08-13 — Chris: "We might even
 want to write out all our acquired data every day so we can do a review
 and reinforcement")*: session state that isn't in the trade log or tick
@@ -440,7 +467,8 @@ Clean ticks are exempt (the tick ledger is that record). Commit the day's
 corpus with the session close; the close-of-market review reads it.
 **Close = session end, whenever that is:** no working entry orders survive
 the session; stops match filled quantities; status file; commit.
-**Token:** re-auth 8/19, 8/26, 9/2, **9/8 pre-market**. **Token-death rule**
+**Token:** re-auth roughly weekly, pre-market, on a standing rota rather than
+against a fixed end date. **Token-death rule**
 *(strategy rule)*: if Chris knows he cannot re-auth before ≥2 consecutive
 dark days, positions are flattened the prior session or the accepted gap risk
 is logged in writing beforehand.
@@ -453,18 +481,31 @@ An unacknowledged alert at the next session open puts the account in
 closing-only posture until Chris responds. Chris's 9:30 ET check-ins are
 noted in the daily status file so the human heartbeat is verifiable.
 
-## 10. Endgame and continuation
+## 10. Continuation
 
-| Date | Action |
-|---|---|
-| 9/1 | Last routine leveraged-ETF entry |
-| **9/4 close** | **All options flat. All discretionary clocks satisfied. Last routine new entry.** Nothing mandatory sits beyond the dark stretch |
-| 9/5–9/7 | Dark (weekend + Labor Day). Book carries only stopped equity positions |
-| 9/8 pre-market | Re-auth (token → past 9/14). Full reconciliation |
-| 9/8–9/9 | **Catch-up branch: REJECTED by Chris, 2026-08-13, in calm conditions.** No late-variance rotation under any circumstances, regardless of standing. If behind on 9/8, the book holds posture and finishes where it finishes. This rejection is final for the window and is not revisited under pressure — §9.3 applies |
-| 9/10–9/14 | Lockout (**from** 9/10): no new positions; stops and §3.5 forced closes still run |
-| 9/14 16:00 | Final value; **score = value − $900**; final commit |
-| After | Nothing forced. Positions worth holding stay held. §9 conversation revisits competition-scoped rules in calm conditions |
+**The endgame calendar was deleted 2026-08-31**, alongside the manual's §8.
+It scheduled a last leveraged entry (9/1), an all-options-flat date (9/4), a
+lockout (9/10) and a final mark (9/14) — every one of them a deadline serving
+a contest that Chris left on 2026-08-29. `rules.yml` no longer carries
+`all_options_flat_by` or `last_leveraged_entry`, and
+`scripts/check-consistency.sh` fails the build if either returns.
+
+There is no terminal date, so nothing is forced by the calendar. The clocks
+that remain are risk clocks and are unchanged:
+
+| Clock | Rule | Why it survives |
+|---|---|---|
+| Close every long option at **5 DTE** | manual §3.3 | OCC auto-exercise on a cash account, which §3.7's amendment makes *more* likely by design — we now hold options through prints |
+| Leveraged/inverse ETF out by **session 4** | strategy §6, inside manual §3.5's 5 | Daily-reset decay; one session of slack so a missed session cannot breach the manual |
+| Re-auth roughly weekly | operational | A lapsed token costs all read access |
+
+**One deliberate carry-over.** Chris's 2026-08-13 rejection of the
+"catch-up branch" — no late-variance rotation to make up ground, ever — was
+argued as final for the competition window. The window is gone; **the ruling
+is kept**, because its reasoning ("if behind, the book holds posture") was
+about behaviour under pressure, not about a deadline, and §9.3 forbids
+loosening a rule at the moment it would help. Reopening it is a §9
+conversation Chris can start in calm conditions.
 
 ## 11. Open items
 

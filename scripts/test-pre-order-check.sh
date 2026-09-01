@@ -11,7 +11,7 @@
 # Run: bash scripts/test-pre-order-check.sh    (0 = all pass, 1 = failures)
 #
 # Conventions: comp-capital 1000.00 makes every cap a round number —
-#   §3.1 350.00 · §3.2 single 200.00 · §3.2 open 300.00 · §3.5 200.00
+#   §3.1 350.00 · §3.2 single 100.00 · §3.2 open 300.00 · §3.5 200.00
 # so a boundary case is legible rather than arithmetic-by-inspection.
 
 set -uo pipefail
@@ -49,9 +49,9 @@ LEV=(--instrument leveraged_etf --symbol TQQQ --comp-capital 1000.00 --settled-c
 
 echo "== happy paths (exit 0) =="
 expect_exit 0 "equity within every cap" -- "${EQ[@]}" --qty 10 --price 10.00 --intent-notional 100.00
-expect_exit 0 "option within every cap" -- "${OPT[@]}" --qty 1 --price 1.00 --intent-notional 100.00
+expect_exit 0 "option within every cap" -- "${OPT[@]}" --qty 1 --price 0.50 --intent-notional 50.00
 expect_exit 0 "leveraged ETF within caps" -- "${LEV[@]}" --qty 10 --price 10.00 --intent-notional 100.00 --leveraged-aggregate 0
-expect_exit 0 "option on leveraged underlying" -- "${OPT[@]}" --qty 1 --price 1.00 --intent-notional 100.00 --leveraged-underlying --leveraged-aggregate 0
+expect_exit 0 "option on leveraged underlying" -- "${OPT[@]}" --qty 1 --price 0.50 --intent-notional 50.00 --leveraged-underlying --leveraged-aggregate 0
 expect_match 0 'ALL CHECKED GATES PASS' "pass prints the affirmative line" -- "${EQ[@]}" --qty 10 --price 10.00 --intent-notional 100.00
 expect_match 0 'NOT-CHECKED' "pass prints the NOT-CHECKED block" -- "${EQ[@]}" --qty 10 --price 10.00 --intent-notional 100.00
 expect_match 5 'NOT-CHECKED' "a cap FAIL also prints the NOT-CHECKED block" -- "${EQ[@]}" --qty 1 --price 350.01 --intent-notional 350.01
@@ -69,7 +69,7 @@ expect_exit 0 "intent off by exactly \$0.01 (tolerance boundary)" -- "${EQ[@]}" 
 expect_exit 4 "intent off by \$0.0101 (just past tolerance)" -- "${EQ[@]}" --qty 1 --price 100.00 --intent-notional 100.0101
 expect_match 4 'unit-confusion' "notional breach names the unit-confusion abort" -- "${EQ[@]}" --qty 1 --price 100.00 --intent-notional 500.00
 expect_exit 4 "option: multiplier omitted from intent (unit confusion)" -- "${OPT[@]}" --qty 1 --price 5.50 --intent-notional 5.50
-expect_exit 0 "option: multiplier included in intent" -- "${OPT[@]}" --qty 1 --price 1.50 --intent-notional 150.00
+expect_exit 0 "option: multiplier included in intent" -- "${OPT[@]}" --qty 1 --price 0.50 --intent-notional 50.00
 expect_exit 4 "equity: shares read as contracts (100x)" -- "${EQ[@]}" --qty 1 --price 10.00 --intent-notional 1000.00
 
 echo "== §3.1 single position cap, 35% of 1000 = 350.00 (exit 5) =="
@@ -79,11 +79,15 @@ expect_match 5 '350\.00' "breach message names the actual §3.1 cap (350.00)" --
 expect_exit 5 "prior adds push it over" -- "${EQ[@]}" --qty 1 --price 100.00 --intent-notional 100.00 --existing-position-value 260.00
 expect_exit 0 "prior adds land exactly on cap" -- "${EQ[@]}" --qty 1 --price 100.00 --intent-notional 100.00 --existing-position-value 250.00
 
-echo "== §3.2 option caps, single 200.00 / open 300.00 (exit 5) =="
-expect_exit 0 "single exactly at cap" -- "${OPT[@]}" --qty 1 --price 2.00 --intent-notional 200.00
-expect_exit 5 "single one cent over" -- "${OPT[@]}" --qty 1 --price 2.0001 --intent-notional 200.01
-expect_match 5 '200\.00' "breach message names the actual §3.2 single cap (200.00)" -- "${OPT[@]}" --qty 1 --price 2.50 --intent-notional 250.00
-expect_exit 5 "prior premium in same contract pushes over" -- "${OPT[@]}" --qty 1 --price 1.00 --intent-notional 100.00 --existing-option-premium 101.00
+echo "== §3.2 option caps, single 100.00 / open 300.00 (exit 5) =="
+# The single-thesis cap was cut 20% -> 10% on 2026-08-31 (§9), so at the 1000.00
+# convention it is 100.00, not 200.00. These are boundary assertions: if the
+# gate is still reading 20% they pass a 200.00 order and this block goes red.
+expect_exit 0 "single exactly at cap" -- "${OPT[@]}" --qty 1 --price 1.00 --intent-notional 100.00
+expect_exit 5 "single one cent over" -- "${OPT[@]}" --qty 1 --price 1.0001 --intent-notional 100.01
+expect_exit 5 "the OLD 20% cap is no longer honoured (200.00 must now fail)" -- "${OPT[@]}" --qty 1 --price 2.00 --intent-notional 200.00
+expect_match 5 '100\.00' "breach message names the actual §3.2 single cap (100.00)" -- "${OPT[@]}" --qty 1 --price 1.50 --intent-notional 150.00
+expect_exit 5 "prior premium in same contract pushes over" -- "${OPT[@]}" --qty 1 --price 1.00 --intent-notional 100.00 --existing-option-premium 0.01
 expect_exit 0 "aggregate exactly at cap" -- "${OPT[@]}" --qty 1 --price 1.00 --intent-notional 100.00 --open-option-premium 200.00
 expect_exit 5 "aggregate one cent over" -- "${OPT[@]}" --qty 1 --price 1.00 --intent-notional 100.00 --open-option-premium 200.01
 expect_match 5 'aggregate' "aggregate breach names the aggregate gate" -- "${OPT[@]}" --qty 1 --price 1.00 --intent-notional 100.00 --open-option-premium 250.00
@@ -162,6 +166,63 @@ _runtmp "${EQ[@]}" --qty 1 --price 10.00 --intent-notional 10.00
 printf 'this is not: valid: yaml: at all\n' > "$TMP/rules.yml"
 _runtmp "${EQ[@]}" --qty 1 --price 10.00 --intent-notional 10.00
 [ $? -eq 7 ] && { pass=$((pass+1)); echo "  ok   malformed rules.yml exits 7"; } || { fail=$((fail+1)); echo "FAIL  malformed rules.yml exits 7"; }
+
+echo "== v2 option rules (2026-08-31 §9 amendment) =="
+# This suite otherwise exercises the GATE's arithmetic. These assertions are
+# declarative: they pin the rules.yml values the amendment set, so a later edit
+# that quietly restores a competition-era number goes red here as well as in
+# check-consistency.sh.
+ok()  { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
+bad() { fail=$((fail+1)); printf 'FAIL  %s\n' "$1"; }
+
+# The delta FLOOR became a BAND on 2026-08-31. A floor alone permits 0.35-delta
+# contracts that vol crush guts; the band also rejects >0.75, where you are
+# paying option spreads to own something that behaves like stock.
+mind="$(awk -F': *' '/^  option_min_delta:/{print $2; exit}' rules.yml | tr -d ' ')"
+maxd="$(awk -F': *' '/^  option_max_delta:/{print $2; exit}' rules.yml | tr -d ' ')"
+[ "$mind" = "0.45" ] && ok "manual option_min_delta is 0.45" \
+  || bad "manual option_min_delta is '${mind:-<unset>}', want 0.45"
+[ "$maxd" = "0.75" ] && ok "manual option_max_delta is 0.75" \
+  || bad "manual option_max_delta is '${maxd:-<unset>}', want 0.75"
+
+sp="$(awk -F': *' '/^  option_single_position_pct:/{print $2; exit}' rules.yml | tr -d ' ')"
+[ "$sp" = "10" ] && ok "single-thesis premium cap reduced to 10%" \
+  || bad "option_single_position_pct is '${sp:-<unset>}', want 10"
+
+# The competition is over. A scoring rule with no contest still constrains
+# trades, so these keys must be GONE, not merely unused.
+for dead in window_start window_end lockout_start lockout_final_sessions \
+            final_session all_options_flat_by last_leveraged_entry; do
+  grep -q "^ *${dead}:" rules.yml \
+    && bad "rules.yml still carries competition key '$dead'" \
+    || ok "competition key '$dead' removed from rules.yml"
+done
+
+# scripts/cohort.sh (Task B3) needs the scout entry window, and this repo
+# forbids a rule number living anywhere but rules.yml.
+wmin="$(awk -F': *' '/^  scout_entry_window_min_days:/{print $2; exit}' rules.yml | tr -d ' ')"
+wmax="$(awk -F': *' '/^  scout_entry_window_max_days:/{print $2; exit}' rules.yml | tr -d ' ')"
+[ "$wmin" = "21" ] && ok "scout_entry_window_min_days is 21" \
+  || bad "scout_entry_window_min_days is '${wmin:-<unset>}', want 21"
+[ "$wmax" = "42" ] && ok "scout_entry_window_max_days is 42" \
+  || bad "scout_entry_window_max_days is '${wmax:-<unset>}', want 42"
+
+echo "== --account-value alias =="
+# The caps are percentages of ACCOUNT VALUE since 2026-08-31. The old flag name
+# says "competition capital", a figure $900 smaller. Both names must set the
+# same variable or a caller silently sizes against the wrong base.
+a="$(./scripts/pre-order-check.sh --instrument equity --symbol X --qty 1 --price 10 \
+      --intent-notional 10 --account-value 3758.76 --settled-cash 2393.57 2>&1; echo "rc=$?")"
+b="$(./scripts/pre-order-check.sh --instrument equity --symbol X --qty 1 --price 10 \
+      --intent-notional 10 --comp-capital 3758.76 --settled-cash 2393.57 2>&1; echo "rc=$?")"
+[ "$a" = "$b" ] && ok "--account-value and --comp-capital are equivalent" \
+  || bad "the two capital flags disagree; one caller would size against the wrong base"
+# Must assert the flag is RECOGNISED, not merely that the script produced
+# output. "rc=" appears even in an error, so a grep for it proves nothing —
+# the mutation that removes the alias left this assertion green.
+printf '%s' "$a" | grep -q "unrecognized argument" \
+  && bad "--account-value is not a recognised flag" \
+  || ok "--account-value is a recognised flag"
 
 echo
 echo "-------------------------------------------"

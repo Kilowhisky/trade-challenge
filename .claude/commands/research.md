@@ -29,7 +29,7 @@ The parent does **not** execute §B–§D itself:
 2. Parent dispatches **`research-scout`** (`.claude/agents/research-scout.md`)
    **in the background** — the tick cadence must never block on research.
    The dispatch prompt supplies cached context: date + ET time, held symbols
-   and their sectors, competition capital and drawdown level, settled cash,
+   and their sectors, account value and drawdown level, settled cash,
    any active calendar guard (NVDA week 8/24–8/28, endgame dates), and
    `$ARGUMENTS` if this pass was run with a stated focus.
 3. When the scout's result arrives, parent runs §E (the ping gate) on any
@@ -57,8 +57,6 @@ the monitoring loop.
    POST pass — including §B-oi — is owned exclusively by the 16:20 ET
    deep-research run (/deep-research postclose; design rev2 §8.1). A
    chained invocation after 16:00 simply stops here.
-5. **§8 endgame:** from 9/8 onward, no passes. Nothing researched can be
-   entered inside the lockout horizon.
 
 ## §B — The sweep (scout-side)
 
@@ -128,8 +126,9 @@ Open interest updates once daily (OCC overnight) — this never runs intraday.
    with the observation and its size recorded — never straight to HOT,
    never a ping, never a trade trigger. Frame skeptically in the file: in
    our liquid large-cap universe most OI flow is hedging, spread legs, or
-   market-maker positioning, and §3.7 forbids the earnings plays that
-   classic "unusual activity" chasing points at. It is an idea source, not
+   market-maker positioning. Earnings-timed theses are now permitted
+   (§3.7 no longer bars them), so treat OI flow as one weak input among
+   several — never as corroboration on its own. It is an idea source, not
    a signal.
 
 ## §C — Tier rules
