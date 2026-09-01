@@ -99,7 +99,7 @@ Fallback chain on a `FAIL:` about missing tools, same as tick.md/research.md
      N="$(rule_get strategy_working_universe_size)"
      scripts/universe-filter.sh \
        --payload PATH1 --payload PATH2 ... \
-       --qualified-only --rank-top "$N" \
+       --qualified-only --emit-qualified-set --rank-top "$N" \
        --out /tmp/universe-ranked.tsv
    '
    ```
@@ -109,6 +109,33 @@ Fallback chain on a `FAIL:` about missing tools, same as tick.md/research.md
    direct call is safe; it is the `. scripts/lib-rules.sh` line above it that
    needs the bash wrapper.
 
+   **This one call now produces TWO files, for two tiers.**
+
+   - `/tmp/universe-ranked.tsv` — the DAILY tier. Ranked by proximity to the
+     52-week high, truncated to `working_universe_size`. §C writes it into
+     `research/universe.md`, exactly as before.
+   - `research/universe-qualified.tsv` — the SCOUT tier. Written by the filter
+     itself on `--emit-qualified-set`: **every** name that clears the §1.4/§2
+     liquidity floors, untruncated, same ten columns. There is no separate
+     write step and nothing to pipe; it needs no `research-replace.sh` because
+     it is machine-read data, not a document.
+
+   **`--emit-qualified-set` belongs to THIS command and no other.** It is a
+   second flag rather than a behaviour of `--qualified-only` because the daily
+   `/deep-research` screen passes `--qualified-only` too, over a re-quote of
+   the ~500 names already in `research/universe.md`. Were emission tied to
+   that flag, the daily run would overwrite a ~3,196-name scout universe with
+   ≤500 of its own names every morning, silently, and the file would look
+   freshly written throughout. The filter refuses `--emit-qualified-set`
+   without `--qualified-only` (exit 2): an ungated pass is not a qualified
+   set, and mislabelling one is worse than writing nothing.
+
+   The second file is not a convenience copy. The rank keeps the ~500
+   best-covered names and discards ~2,700 — and the slow-diffusion edge the
+   scout hunts lives in exactly the low-coverage mid-caps a liquidity ranking
+   throws away. Those names exist ONLY in the qualified file. The path honours
+   `$TC_RESEARCH_DIR` (tests redirect it; the sweep never sets it).
+
    Exit 0 success. Exit 2 usage — a defect in this command; stop, record in
    §D. Exit 7 — `rules.yml` missing, unreadable, or incomplete: **abort the
    sweep entirely** (per the design doc's failure-mode table, this is not a
@@ -116,13 +143,18 @@ Fallback chain on a `FAIL:` about missing tools, same as tick.md/research.md
    is a stop-everything condition), keep the existing `research/universe.md`,
    record in §D.
 
-   Read stderr — four possible lines, all of which belong in the §D ledger:
+   Read stderr — five possible lines, all of which belong in the §D ledger:
 
    - `"skipped N unquotable symbol(s)"` when any symbol could not be quoted.
    - `"stub-filtered N symbol(s) under X% session range"` — the takeover-stub
      gate (below). Names are listed; tombstone the confirmed ones.
    - `"N symbol(s) had no usable high/low"` — the stub gate could not be
      evaluated for these and they were **kept**, never rejected.
+   - `"wrote N qualified symbol(s) to .../universe-qualified.tsv
+     (untruncated)"` — the scout tier's file. N is the QUALIFIED count and
+     must match the `ranked N of M` line's M below; if it matches the ranked
+     count instead, the scout universe has been truncated and the low-coverage
+     tail is gone.
    - `"ranked N of M (dropped D)"` reporting qualified vs. ranked vs. dropped.
 
    **The takeover-stub gate.** Under `--qualified-only` the filter also

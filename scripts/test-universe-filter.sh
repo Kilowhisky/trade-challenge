@@ -21,7 +21,13 @@ no()   { fail=$((fail+1)); printf 'FAIL  %s\n       %s\n' "$1" "${2:-}"; }
 # was down and we didn't check" for "we checked and it was fine".
 skip() { skip=$((skip+1)); printf '  SKIP %s (offline — not executed)\n' "$1"; }
 
-OUT=$(mktemp); ERR=$(mktemp); trap 'rm -f "$OUT" "$ERR"' EXIT
+OUT=$(mktemp); ERR=$(mktemp)
+# research/ is a SYMLINK into the private store repo. universe-filter.sh now
+# writes research/universe-qualified.tsv under --qualified-only, so every run
+# in this suite is redirected to a scratch dir: a test must never overwrite the
+# live weekly sweep's output with 13 rows of fixture data.
+TCRD=$(mktemp -d); export TC_RESEARCH_DIR="$TCRD"
+trap 'rm -f "$OUT" "$ERR"; rm -rf "$TCRD"' EXIT
 
 echo "== parsing =="
 bash "$F" --payload "$FIX" --out "$OUT" >/dev/null 2>"$ERR"
@@ -94,6 +100,86 @@ top=$(tail -n +2 "$OUT" | cut -f1)
 # does not silently turn this into an assertion about the wrong number.
 grep -q "dropped $((qualified_n - 1))" "$ERR" && ok "truncation count is reported accurately" \
   || no "truncation count is reported accurately" "expected dropped $((qualified_n - 1)); stderr was: $(cat "$ERR")"
+
+echo "== qualified-set emission (--emit-qualified-set writes the FULL set) =="
+# The --out file is the DAILY tier's list: ranked, then truncated to
+# working_universe_size. The scout tier needs the set that ranking DISCARDS —
+# the low-coverage names the information edge lives in — so
+# --emit-qualified-set writes every qualifying row, untruncated, to
+# ${TC_RESEARCH_DIR:-research}/universe-qualified.tsv.
+QDIR=$(mktemp -d)
+# --rank-top 1 truncates as hard as the fixture allows, so "the full set" and
+# "the ranked set" cannot be the same file by coincidence.
+TC_RESEARCH_DIR="$QDIR" bash "$F" --payload "$FIX" --out "$OUT" --qualified-only --emit-qualified-set --rank-top 1 >/dev/null 2>"$ERR"
+Q="$QDIR/universe-qualified.tsv"
+ranked_n=$(tail -n +2 "$OUT" 2>/dev/null | wc -l | tr -d ' ')
+[ -f "$Q" ] && ok "--emit-qualified-set emits research/universe-qualified.tsv" \
+  || no "--emit-qualified-set emits research/universe-qualified.tsv" "no file at $Q"
+# Exact header, all ten columns in order — universe-qualified.tsv is indexed
+# POSITIONALLY by the cohort builder, and last_earnings (col 8) is the column
+# the earnings cohort is derived from. A renamed, reordered or absent header
+# must fail here.
+qhdr=$(head -n1 "$Q" 2>/dev/null)
+[ "$qhdr" = "$EXPECTED_HEADER" ] \
+  && ok "qualified file carries the exact 10-column header incl. last_earnings" \
+  || no "qualified file carries the exact 10-column header incl. last_earnings" "got: $qhdr"
+# THE TRUNCATION ASSERTION. qualified_n is the untruncated qualified count
+# measured above; the emitted file must carry all of it even though --out was
+# capped to one row. Guarded on qualified_n > ranked_n, because if the fixture
+# ever qualified only one name this comparison would pass while proving
+# nothing — emitting after truncation would give the same number.
+q_n=$(tail -n +2 "$Q" 2>/dev/null | wc -l | tr -d ' ')
+if [ "$qualified_n" -le "$ranked_n" ]; then
+  no "qualified file is written BEFORE truncation" "fixture qualifies $qualified_n name(s) and --out kept $ranked_n — the comparison cannot discriminate"
+elif [ "$q_n" -eq "$qualified_n" ]; then
+  ok "qualified file is written BEFORE truncation ($q_n rows vs $ranked_n ranked)"
+else
+  no "qualified file is written BEFORE truncation" "qualified file has $q_n rows, expected $qualified_n (--out kept $ranked_n)"
+fi
+# last_earnings must survive with its VALUE, not just its header: the cohort
+# builder estimates the next print from it. CSX is deliberately the assertion
+# subject — --rank-top 1 drops it from --out, so a truncated emission cannot
+# satisfy this either.
+q_csx=$(awk -F'\t' '$1=="CSX"{print $8}' "$Q" 2>/dev/null)
+[ "$q_csx" = "2026-07-22" ] \
+  && ok "last_earnings survives into the qualified file (CSX 2026-07-22)" \
+  || no "last_earnings survives into the qualified file (CSX 2026-07-22)" "got '$q_csx'"
+# The stderr line must name the path AND the untruncated count. A bare
+# "universe-qualified.tsv" match would still pass if the count reported were
+# the ranked one — which is precisely the confusion this whole task is about.
+grep -q "wrote $qualified_n qualified symbol(s) to $Q" "$ERR" \
+  && ok "stderr names the qualified file and its untruncated count ($qualified_n)" \
+  || no "stderr names the qualified file and its untruncated count ($qualified_n)" "stderr was: $(cat "$ERR")"
+rm -rf "$QDIR"
+
+echo "== the qualified file is written ONLY on the explicit flag =="
+# An unfiltered pass has not applied the gates, so its rows are not a QUALIFIED
+# set. Writing the file anyway would silently replace the scout universe with
+# an ungated one.
+QDIR2=$(mktemp -d)
+TC_RESEARCH_DIR="$QDIR2" bash "$F" --payload "$FIX" --out "$OUT" >/dev/null 2>&1
+[ ! -e "$QDIR2/universe-qualified.tsv" ] \
+  && ok "an unfiltered run writes no qualified file" \
+  || no "an unfiltered run writes no qualified file" "$QDIR2/universe-qualified.tsv was written with $(tail -n +2 "$QDIR2/universe-qualified.tsv" | wc -l | tr -d ' ') rows"
+# THE DAILY-RUN GUARD. /deep-research re-quotes the ~500 names already in
+# research/universe.md and passes --qualified-only over them, every morning.
+# If the emission triggered on that flag alone, the daily run would overwrite
+# a ~3,196-name scout universe with <=500 of its own names — silently, and
+# looking freshly written the whole time. Emission requires the explicit
+# --emit-qualified-set, which only the weekly whole-market sweep passes.
+TC_RESEARCH_DIR="$QDIR2" bash "$F" --payload "$FIX" --out "$OUT" --qualified-only >/dev/null 2>&1
+[ ! -e "$QDIR2/universe-qualified.tsv" ] \
+  && ok "--qualified-only alone (the daily sweep) writes no qualified file" \
+  || no "--qualified-only alone (the daily sweep) writes no qualified file" "the daily run would clobber the weekly scout universe"
+# And the converse must be refused rather than mislabelled: an ungated set
+# written under the qualified name is worse than no file at all.
+QDIR3=$(mktemp -d)
+TC_RESEARCH_DIR="$QDIR3" bash "$F" --payload "$FIX" --out "$OUT" --emit-qualified-set >/dev/null 2>"$ERR"
+rc=$?
+[ "$rc" -eq 2 ] && [ ! -e "$QDIR3/universe-qualified.tsv" ] \
+  && ok "--emit-qualified-set without --qualified-only is a usage error (exit 2)" \
+  || no "--emit-qualified-set without --qualified-only is a usage error (exit 2)" "got rc=$rc; file present: $([ -e "$QDIR3/universe-qualified.tsv" ] && echo yes || echo no); stderr: $(cat "$ERR")"
+rm -rf "$QDIR2" "$QDIR3"
 
 echo "== takeover-stub gate (§4, strategy_min_session_range_pct) =="
 # An announced all-cash deal target trades pinned a hair under its deal

@@ -5,6 +5,31 @@
 # Usage: scripts/universe-filter.sh --payload FILE [--payload FILE ...] --out TSV
 # Exit: 0 ok · 2 usage · 7 rules.yml missing/unreadable/incomplete
 #
+# TWO OUTPUTS, TWO TIERS. --out is the DAILY tier's list: ranked by
+# proximity to the 52-week high and truncated to --rank-top. Add
+# --emit-qualified-set (which requires --qualified-only) and the SCOUT tier's
+# list is written as well -- ${TC_RESEARCH_DIR:-research}/universe-qualified.tsv,
+# every name that passes the §1.4/§2 liquidity floors, in payload order,
+# NEVER truncated. Both files come out of one writer, so their columns cannot
+# drift apart.
+#
+# The ranked file is not a superset-minus-the-tail of anything useful: a
+# liquidity/proximity ranking discards precisely the low-coverage mid-caps
+# the information edge lives in. ~3,196 names qualify and 500 survive the
+# rank, so the 2,696 the scout wants exist ONLY in the qualified file.
+#
+# WHY THE SECOND FLAG, when --qualified-only already means "apply the gates".
+# Because --qualified-only is not the weekly sweep's flag -- it is the
+# QUALIFICATION flag, and the DAILY /deep-research run passes it too, over a
+# re-quote of the 500 names already in research/universe.md. Emitting on
+# --qualified-only alone would let that daily run overwrite a ~3,196-name
+# scout universe with <=500 of its own names, every morning, silently, and
+# the file would look freshly written the whole time. Only the whole-market
+# weekly sweep may claim to have produced the qualified SET, so only it
+# passes --emit-qualified-set. Forgetting the flag leaves last week's file in
+# place -- visibly stale, and recoverable; the alternative failure is
+# invisible and destroys data.
+#
 # python3 is used for parsing (research path only). lib-rules.sh and
 # pre-order-check.sh stay awk-only because they sit in the ORDER path.
 #
@@ -36,12 +61,13 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.." || exit 2
 . scripts/lib-rules.sh
 load_rules || exit 7
 
-payloads=(); out=""; qualified=0; ranktop=0
+payloads=(); out=""; qualified=0; ranktop=0; emit_qset=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --payload) shift; [ $# -gt 0 ] || { echo "universe-filter: --payload needs a path" >&2; exit 2; }; payloads+=("$1") ;;
     --out)     shift; [ $# -gt 0 ] || { echo "universe-filter: --out needs a path" >&2; exit 2; }; out="$1" ;;
     --qualified-only) qualified=1 ;;
+    --emit-qualified-set) emit_qset=1 ;;
     --rank-top) shift; [ $# -gt 0 ] || { echo "universe-filter: --rank-top needs a count" >&2; exit 2; }; ranktop="$1" ;;
     *) echo "universe-filter: unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -49,6 +75,13 @@ while [ $# -gt 0 ]; do
 done
 [ "${#payloads[@]}" -gt 0 ] || { echo "universe-filter: at least one --payload is required" >&2; exit 2; }
 [ -n "$out" ] || { echo "universe-filter: --out is required" >&2; exit 2; }
+# An ungated pass has not applied the §1.4/§2 floors at all, so its rows are
+# not a qualified set. Writing them under that name would swap an ungated
+# universe in behind the scout's back — refuse rather than mislabel.
+if [ "$emit_qset" -eq 1 ] && [ "$qualified" -eq 0 ]; then
+  echo "universe-filter: --emit-qualified-set requires --qualified-only (an ungated pass is not a qualified set)" >&2
+  exit 2
+fi
 for p in "${payloads[@]}"; do
   [ -r "$p" ] || { echo "universe-filter: cannot read payload: $p" >&2; exit 2; }
 done
@@ -58,14 +91,21 @@ MIN_DOLLAR="$(rule_get manual_min_avg_daily_dollar_volume)" || exit 7
 MIN_SHARES="$(rule_get manual_min_avg_daily_volume)"    || exit 7
 MIN_RANGE="$(rule_get strategy_min_session_range_pct)"  || exit 7
 
-python3 - "$out" "$MIN_PRICE" "$MIN_DOLLAR" "$MIN_SHARES" "$qualified" "$ranktop" "$MIN_RANGE" "${payloads[@]}" <<'PY'
-import json, re, sys
+# cwd is the repo root (the cd above), so the bare relative default resolves
+# to the research/ symlink the rest of the tree writes through. Same
+# ${TC_RESEARCH_DIR:-...} contract as sector-write.sh and evidence-append.sh.
+QDIR="${TC_RESEARCH_DIR:-research}"
+
+python3 - "$out" "$MIN_PRICE" "$MIN_DOLLAR" "$MIN_SHARES" "$qualified" "$ranktop" "$MIN_RANGE" "$QDIR" "$emit_qset" "${payloads[@]}" <<'PY'
+import json, os, re, sys
 
 out, min_price, min_dollar, min_shares = sys.argv[1], float(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4])
 qualified = sys.argv[5] == "1"
 ranktop   = int(sys.argv[6])
 min_range = float(sys.argv[7])
-paths     = sys.argv[8:]
+qdir      = sys.argv[8]
+emit_qset = sys.argv[9] == "1"
+paths     = sys.argv[10:]
 
 # ---------------------------------------------------------------------------
 # Sub-block-anchored field access.
@@ -210,20 +250,59 @@ for path in paths:
 for r in rows:
     r['gap'] = ((r['high52'] - r['price']) / r['high52'] * 100.0) if r['high52'] else 999.0
 
+HEADER = "symbol\tprice\tadv10\tdollar_vol\tpct_from_52wk_high\toptionable\tleverage\tlast_earnings\tis_etf\tsession_range_pct\n"
+
+def fmt(r):
+    return "%s\t%.4f\t%.0f\t%.0f\t%.2f\t%s\t%.1f\t%s\t%s\t%s\n" % (
+        r['symbol'], r['price'], r['adv10'], r['dollar_vol'], r['gap'],
+        r['optionable'], r['leverage'], r['last_earnings'], r['is_etf'],
+        '-' if r['range_pct'] is None else '%.2f' % r['range_pct'])
+
+def write_tsv(path, out_rows):
+    """The ONE writer for both outputs. The ranked file and the qualified file
+    must carry identical columns in identical order -- the cohort builder
+    indexes universe-qualified.tsv positionally (last_earnings is column 8) --
+    and two copies of a format string is how that quietly stops being true."""
+    d = os.path.dirname(os.path.abspath(path))
+    if d:
+        os.makedirs(d, exist_ok=True)
+    tmp = "%s.tmp.%d" % (path, os.getpid())
+    with open(tmp, 'w') as f:
+        f.write(HEADER)
+        for r in out_rows:
+            f.write(fmt(r))
+    # Atomic. A reader that opens the universe mid-write must see last week's
+    # file or this week's, never half of this week's.
+    os.replace(tmp, path)
+
 total = len(rows)
+
+# ---- SCOUT TIER: the full qualified set, written BEFORE ranking ------------
+# Everything below this point either reorders or DISCARDS rows, and what it
+# discards is the point: a proximity/liquidity rank keeps the 500 most-covered
+# names and throws away the ~2,700 low-coverage mid-caps the information edge
+# lives in. So the qualified file is written here, from the untruncated list,
+# in payload order (which is directory order -- stable week to week, so the
+# file diffs cleanly; the ranked order does not).
+#
+# Only on the explicit --emit-qualified-set (which the bash half has already
+# refused to accept without --qualified-only). See the flag rationale in the
+# header: the daily run also qualifies, and must not be able to overwrite the
+# weekly whole-market set with its own 500-name subset.
+qpath = None
+if qualified and emit_qset:
+    # Absolute, so the stderr line names a path the reader can act on
+    # regardless of the cwd the sweep was launched from.
+    qpath = os.path.abspath(os.path.join(qdir, "universe-qualified.tsv"))
+    write_tsv(qpath, rows)
+
 rows.sort(key=lambda r: (r['gap'], -r['dollar_vol']))
 dropped = 0
 if ranktop and total > ranktop:
     dropped = total - ranktop
     rows = rows[:ranktop]
 
-with open(out, 'w') as f:
-    f.write("symbol\tprice\tadv10\tdollar_vol\tpct_from_52wk_high\toptionable\tleverage\tlast_earnings\tis_etf\tsession_range_pct\n")
-    for r in rows:
-        f.write("%s\t%.4f\t%.0f\t%.0f\t%.2f\t%s\t%.1f\t%s\t%s\t%s\n" % (
-            r['symbol'], r['price'], r['adv10'], r['dollar_vol'], r['gap'],
-            r['optionable'], r['leverage'], r['last_earnings'], r['is_etf'],
-            '-' if r['range_pct'] is None else '%.2f' % r['range_pct']))
+write_tsv(out, rows)
 if skipped:
     shown = skipped[:20]
     more = len(skipped) - len(shown)
@@ -242,6 +321,9 @@ if nodata:
     print("universe-filter: %d symbol(s) had no usable high/low; stub gate not applied: %s" % (
         len(nodata), _name_list(nodata)), file=sys.stderr)
 print("universe-filter: parsed %d symbols from %d payload(s)" % (total, len(paths)), file=sys.stderr)
+if qpath:
+    print("universe-filter: wrote %d qualified symbol(s) to %s (untruncated)" % (
+        total, qpath), file=sys.stderr)
 if ranktop:
     print("universe-filter: ranked %d of %d (dropped %d)" % (len(rows), total, dropped), file=sys.stderr)
 PY

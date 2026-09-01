@@ -243,6 +243,14 @@ reached:**
         `fields=` instead; the design spike found it silently ignored
         (see `schwab-mcp-notes`).
 
+        **Never pass `--emit-qualified-set` here.** That flag writes
+        `research/universe-qualified.tsv`, the SCOUT tier's whole-market
+        qualified set (~3,196 names), and it belongs to `/weekly-universe`
+        alone. This run qualifies a re-quote of the ~500 names already in
+        `research/universe.md`, so passing it would overwrite the scout
+        universe with a subset of itself — silently, every morning, with the
+        file looking freshly written the whole time.
+
      *(The 50-symbol chunking and `_sweep_cursor` resume machinery were
      removed 2026-08-17: they existed only because quote payloads entered
      agent context, and they put the universe on an 11-day lap.)*
