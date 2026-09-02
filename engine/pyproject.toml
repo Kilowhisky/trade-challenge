@@ -39,6 +39,12 @@ target-version = "py312"
 select = ["E", "F", "I", "B", "UP", "N", "ASYNC", "S", "RUF"]
 ignore = ["S101"]  # asserts in tests
 
+[tool.ruff.lint.per-file-ignores]
+# tc/rules/model.py: the compact one-line @property table (16 accessors) is
+# deliberate; some exceed the line-length limit. Scoped here rather than a
+# global ignore so line length still enforces everywhere else.
+"tc/rules/model.py" = ["E501"]
+
 [tool.mypy]
 strict = true
 python_version = "3.12"
