@@ -23,6 +23,14 @@ def test_unknown_key_raises() -> None:
         r.get("manual", "does_not_exist")
 
 
+def test_unknown_section_raises() -> None:
+    r = Rules.load(REPO / "rules.yml")
+    with pytest.raises(KeyError):
+        r.get("strateyg", "option_min_delta")
+    with pytest.raises(KeyError):
+        r.get("Manual", "single_position_pct")
+
+
 def test_rejects_nesting_deeper_than_two(tmp_path: Path) -> None:
     p = tmp_path / "rules.yml"
     p.write_text("manual:\n  a:\n    b: 1\nstrategy: {}\n")

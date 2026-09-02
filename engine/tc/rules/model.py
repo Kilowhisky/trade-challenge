@@ -55,6 +55,8 @@ class Rules:
         )
 
     def get(self, section: str, key: str) -> Decimal:
+        if section not in SECTIONS:
+            raise KeyError(f"no such rules section: {section!r} (expected one of {SECTIONS})")
         table = self.manual if section == "manual" else self.strategy
         if key not in table:
             raise KeyError(f"no such rule: {section}.{key} (in {self.source})")
