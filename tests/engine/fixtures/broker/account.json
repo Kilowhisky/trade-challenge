@@ -1,0 +1,30 @@
+{
+ "securitiesAccount": {
+  "type": "CASH",
+  "isClosingOnlyRestricted": false,
+  "positions": [
+   {
+    "instrument": {
+     "symbol": "AMH",
+     "assetType": "EQUITY"
+    },
+    "longQuantity": 29.0,
+    "shortQuantity": 0.0,
+    "settledLongQuantity": 29.0,
+    "averagePrice": 34.79,
+    "marketValue": 990.64,
+    "currentDayProfitLoss": -11.6
+   }
+  ],
+  "currentBalances": {
+   "liquidationValue": 3781.06,
+   "cashAvailableForTrading": 2393.57,
+   "unsettledCash": 0.0,
+   "cashBalance": 2393.57,
+   "cashCall": 0.0
+  },
+  "initialBalances": {
+   "liquidationValue": 999999.0
+  }
+ }
+}

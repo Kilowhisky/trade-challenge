@@ -1,0 +1,23 @@
+[
+ {
+  "orderId": 1000000000001,
+  "status": "WORKING",
+  "orderType": "STOP_LIMIT",
+  "duration": "GOOD_TILL_CANCEL",
+  "enteredTime": "2026-08-24T14:32:11+0000",
+  "quantity": 29.0,
+  "filledQuantity": 0.0,
+  "price": 30.4,
+  "stopPrice": 32.01,
+  "orderLegCollection": [
+   {
+    "instruction": "SELL",
+    "quantity": 29.0,
+    "instrument": {
+     "symbol": "AMH",
+     "assetType": "EQUITY"
+    }
+   }
+  ]
+ }
+]
