@@ -26,6 +26,11 @@ def _dec(v: Any, default: str = "0") -> Decimal:
     return D(default) if v is None else cents(D(str(v)))
 
 
+def _dec_raw(v: Any) -> Decimal:
+    """Like _dec but keeps full precision (no cents rounding)."""
+    return D("0") if v is None else D(str(v))
+
+
 def _int(v: Any) -> int:
     return int(D(str(v or 0)))
 
@@ -79,7 +84,7 @@ class AccountSnapshot(BaseModel):
                 symbol=p["instrument"]["symbol"],
                 asset_type=p["instrument"].get("assetType", ""),
                 quantity=_int(p.get("longQuantity")) - _int(p.get("shortQuantity")),
-                average_price=D(str(p.get("averagePrice", 0))),
+                average_price=_dec_raw(p.get("averagePrice")),
                 market_value=_dec(p.get("marketValue")),
                 day_pl=_dec(p.get("currentDayProfitLoss")),
                 settled_quantity=_int(p.get("settledLongQuantity")),
@@ -163,7 +168,10 @@ class Quote(BaseModel):
 
     @classmethod
     def from_payload(cls, symbol: str, q: dict[str, Any]) -> Quote:
-        quote = q.get("quote", {})
+        try:
+            quote = q["quote"]
+        except KeyError:
+            raise ValueError(f"no quote payload for {symbol}") from None
         return cls(
             symbol=symbol,
             last=_dec(quote.get("lastPrice")),

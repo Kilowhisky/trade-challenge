@@ -1,6 +1,8 @@
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+import pytest
+
 from tc.broker.models import AccountSnapshot, MarketWindow, OrderRow, Quote
 
 ACCOUNT = {
@@ -69,3 +71,32 @@ def test_market_window_open_and_closed_shapes() -> None:
     assert w.is_trading_day and w.rth_start is not None and w.rth_start.hour == 9
     c = MarketWindow.from_payload(date(2026, 9, 7), HOURS_CLOSED)
     assert not c.is_trading_day and c.rth_start is None
+
+
+def test_null_average_price_defaults_to_zero() -> None:
+    now = datetime(2026, 9, 2, 16, 5, tzinfo=UTC)
+    payload = {
+        "securitiesAccount": {
+            "type": "CASH",
+            "isClosingOnlyRestricted": False,
+            "positions": [
+                {
+                    "instrument": {"symbol": "AMH", "assetType": "EQUITY"},
+                    "longQuantity": 29.0, "shortQuantity": 0.0, "settledLongQuantity": 29.0,
+                    "averagePrice": None, "marketValue": 990.64, "currentDayProfitLoss": -11.6,
+                }
+            ],
+            "currentBalances": {
+                "liquidationValue": 3781.06, "cashAvailableForTrading": 2393.57,
+                "unsettledCash": 0.0, "cashBalance": 2393.57, "cashCall": 0.0,
+            },
+        }
+    }
+    a = AccountSnapshot.from_payload("HASH", payload, now)
+    assert a.positions[0].average_price == Decimal("0")
+    assert a.positions[0].lifetime_pl == a.positions[0].market_value
+
+
+def test_quote_without_quote_block_raises() -> None:
+    with pytest.raises(ValueError, match="no quote payload for BAD"):
+        Quote.from_payload("BAD", {"reference": {"description": "no data"}})
