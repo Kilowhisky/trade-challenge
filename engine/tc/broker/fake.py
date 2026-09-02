@@ -48,6 +48,8 @@ class FakeBroker:
         return MarketWindow.from_payload(d, self._load(f"hours-{d.isoformat()}.json"))
 
     async def daily_bars(self, symbol: str, days: int) -> list[DailyBar]:
+        if days <= 0:
+            raise ValueError("days must be positive")
         candles = self._load(f"bars-{symbol}.json").get("candles", [])
         return [DailyBar.from_payload(c) for c in candles][-days:]
 

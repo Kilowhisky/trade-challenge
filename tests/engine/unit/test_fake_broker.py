@@ -33,3 +33,11 @@ async def test_unauthorized_marker(tmp_path: Path) -> None:
     b = FakeBroker(tmp_path, NOW)
     with pytest.raises(BrokerUnauthorized):
         await b.account_hashes()
+
+
+async def test_daily_bars_rejects_non_positive_days() -> None:
+    b = FakeBroker(FIX, NOW)
+    with pytest.raises(ValueError, match="days must be positive"):
+        await b.daily_bars("AMH", 0)
+    with pytest.raises(ValueError, match="days must be positive"):
+        await b.daily_bars("AMH", -1)

@@ -113,6 +113,8 @@ class SchwabBroker:
         return MarketWindow.from_payload(d, data)
 
     async def daily_bars(self, symbol: str, days: int) -> list[DailyBar]:
+        if days <= 0:
+            raise ValueError("days must be positive")
         end = self.now()
         start = end - timedelta(days=days * 2 + 7)  # weekends/holidays; trimmed below
         data = _raise_for(
