@@ -12,9 +12,9 @@
 
 ## Global Constraints
 
-- Python **3.12**; `mypy --strict` and `ruff check` clean after every task; `pytest -q` green before every commit.
+- Python **3.12**; `mypy --strict` and `ruff check` clean after every task, over `tc` **and** `../tests/engine`; `pytest -q` green before every commit. The gate is `cd engine && pytest -q && mypy && ruff check . ../tests/engine`.
 - All money is `decimal.Decimal`, quantized to cents with `ROUND_FLOOR` where a cap is computed (spec §5.2: "caps in `Decimal`, floored"). Never `float` for money.
-- Every model is `pydantic.BaseModel` with `model_config = ConfigDict(extra="forbid", strict=True)` unless a task says otherwise.
+- Every model is `pydantic.BaseModel` with `model_config = ConfigDict(extra="forbid")` unless a task says otherwise. (Not `strict=True`: the models coerce Schwab's JSON numbers into `Decimal` deliberately, which strict mode forbids.)
 - `rules.yml` stays the single source of truth; **no rule number is hard-coded** in `engine/` (the ported consistency check enforces this on `engine/**/*.py` too).
 - The public repo must never contain an account number, account hash, token, or secret (`CLAUDE.md §7.4`). Fixtures are redacted; a test asserts it.
 - No file under `engine/` shells out to bash. No `subprocess` in this plan.
@@ -105,10 +105,14 @@ target-version = "py312"
 select = ["E", "F", "I", "B", "UP", "N", "ASYNC", "S", "RUF"]
 ignore = ["S101"]  # asserts in tests
 
+[tool.ruff.lint.per-file-ignores]
+"../tests/engine/**/*.py" = ["E501"]  # wide fixture literals; every other rule still applies
+
 [tool.mypy]
 strict = true
+files = ["tc", "../tests/engine"]   # the tests are type-checked too
+plugins = ["pydantic.mypy"]         # BaseSettings fields come from the env, not __init__
 python_version = "3.12"
-packages = ["tc"]
 ignore_missing_imports = true  # schwab-py ships no stubs
 
 [tool.pytest.ini_options]
@@ -200,7 +204,7 @@ def test_reauth_must_precede_hard_expiry(tmp_path: Path) -> None:
 
 - [ ] **Step 5: Run it to verify it fails**
 
-Run: `cd engine && pytest ../tests/engine/unit/test_config.py -q`
+Run: `cd engine && pytest -q -c pyproject.toml ../tests/engine/unit/test_config.py`
 Expected: FAIL with `ModuleNotFoundError: No module named 'tc.config'`
 
 - [ ] **Step 6: Implement `engine/tc/config.py`**
@@ -285,7 +289,7 @@ def load_settings(config_path: Path, env_file: Path | None = None) -> Settings:
 
 - [ ] **Step 7: Run tests and type checks**
 
-Run: `cd engine && pytest ../tests/engine/unit/test_config.py -q && mypy && ruff check .`
+Run: `cd engine && pytest -q -c pyproject.toml ../tests/engine/unit/test_config.py && mypy && ruff check . ../tests/engine`
 Expected: `4 passed`, mypy `Success`, ruff clean.
 
 - [ ] **Step 8: Create the checked-in `config.yml` at the repo root**
@@ -377,7 +381,7 @@ def test_money_helpers() -> None:
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `cd engine && pytest ../tests/engine/unit/test_rules_model.py -q`
+Run: `cd engine && pytest -q -c pyproject.toml ../tests/engine/unit/test_rules_model.py`
 Expected: FAIL, `No module named 'tc.money'`.
 
 - [ ] **Step 3: Implement `engine/tc/money.py`**
@@ -507,7 +511,7 @@ class Rules:
 
 - [ ] **Step 5: Run tests, mypy, ruff**
 
-Run: `cd engine && pytest ../tests/engine/unit/test_rules_model.py -q && mypy && ruff check .`
+Run: `cd engine && pytest -q -c pyproject.toml ../tests/engine/unit/test_rules_model.py && mypy && ruff check . ../tests/engine`
 Expected: `5 passed`; clean. (If ruff flags the one-line properties under `E701`, add `E701` to the ignore list in `pyproject.toml` — the compact form is deliberate for a 17-accessor table.)
 
 - [ ] **Step 6: Commit**
@@ -675,7 +679,7 @@ def test_halt_is_exactly_at_or_below_threshold(av: Decimal, hwm: Decimal) -> Non
 
 - [ ] **Step 3: Run to verify failure**
 
-Run: `cd engine && pytest ../tests/engine/unit/test_arith.py ../tests/engine/property -q`
+Run: `cd engine && pytest -q -c pyproject.toml ../tests/engine/unit/test_arith.py ../tests/engine/property`
 Expected: FAIL, `cannot import name 'arith'`.
 
 - [ ] **Step 4: Implement `engine/tc/rules/arith.py`**
@@ -778,7 +782,7 @@ def dte_floor_identity_holds(rules: Rules) -> bool:
 
 - [ ] **Step 5: Run tests, mypy, ruff**
 
-Run: `cd engine && pytest ../tests/engine/unit/test_arith.py ../tests/engine/property -q && mypy && ruff check .`
+Run: `cd engine && pytest -q -c pyproject.toml ../tests/engine/unit/test_arith.py ../tests/engine/property && mypy && ruff check . ../tests/engine`
 Expected: all pass. If `test_stop_trigger_pct_inside_band_and_monotone` fails on `g.limit < g.trigger < entry` for tiny entries (e.g. `0.01`), raise `money`'s `min_value` in the property file to `Decimal("5.00")` — the `CLAUDE.md §1.4` floor makes sub-$5 entries impossible anyway, and say so in a comment.
 
 - [ ] **Step 6: Commit**
@@ -907,7 +911,7 @@ def test_cross_basis_is_found(tmp_path: Path) -> None:
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `cd engine && pytest ../tests/engine/unit/test_consistency.py -q`
+Run: `cd engine && pytest -q -c pyproject.toml ../tests/engine/unit/test_consistency.py`
 Expected: FAIL, `No module named 'tc.rules.consistency'`.
 
 - [ ] **Step 3: Implement `engine/tc/rules/consistency.py`**
@@ -1121,7 +1125,7 @@ def run_checks(repo_root: Path, rules: Rules | None = None) -> Report:
 
 - [ ] **Step 4: Run tests, mypy, ruff**
 
-Run: `cd engine && pytest ../tests/engine/unit/test_consistency.py -q && mypy && ruff check .`
+Run: `cd engine && pytest -q -c pyproject.toml ../tests/engine/unit/test_consistency.py && mypy && ruff check . ../tests/engine`
 Expected: `8 passed`. If `test_real_repo_is_consistent` fails, the finding is real — a doc drifted from `rules.yml`. Fix the doc (never the checker) in a separate commit, then rerun. Note that the real repo's `docs/superpowers/specs/2026-09-02-v3-engine-architecture-design.md` contains the literal string `--jesus-take-the-wheel` in no place, but `docker/docker-compose.yml` mentions it in comments only; the comment filter handles that.
 
 - [ ] **Step 5: Commit**
@@ -1230,7 +1234,7 @@ def test_market_window_open_and_closed_shapes() -> None:
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `cd engine && pytest ../tests/engine/unit/test_broker_models.py -q`
+Run: `cd engine && pytest -q -c pyproject.toml ../tests/engine/unit/test_broker_models.py`
 Expected: FAIL, `No module named 'tc.broker'`.
 
 - [ ] **Step 3: Implement `engine/tc/broker/models.py`** (plus empty `engine/tc/broker/__init__.py`)
@@ -1443,7 +1447,7 @@ class DailyBar(BaseModel):
 
 - [ ] **Step 4: Run tests, mypy, ruff**
 
-Run: `cd engine && pytest ../tests/engine/unit/test_broker_models.py -q && mypy && ruff check .`
+Run: `cd engine && pytest -q -c pyproject.toml ../tests/engine/unit/test_broker_models.py && mypy && ruff check . ../tests/engine`
 Expected: `4 passed`, clean.
 
 - [ ] **Step 5: Commit**
@@ -1578,7 +1582,7 @@ def test_complete_auth_without_context_raises(tmp_path: Path) -> None:
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `cd engine && pytest ../tests/engine/unit/test_token.py -q`
+Run: `cd engine && pytest -q -c pyproject.toml ../tests/engine/unit/test_token.py`
 Expected: FAIL, `No module named 'tc.broker.token'`.
 
 - [ ] **Step 3: Implement `engine/tc/broker/token.py`**
@@ -1717,7 +1721,7 @@ class TokenStore:
 
 - [ ] **Step 4: Run tests, mypy, ruff**
 
-Run: `cd engine && pytest ../tests/engine/unit/test_token.py -q && mypy && ruff check .`
+Run: `cd engine && pytest -q -c pyproject.toml ../tests/engine/unit/test_token.py && mypy && ruff check . ../tests/engine`
 Expected: `7 passed`, clean. mypy may need `# type: ignore[attr-defined]` on the two `schwab_auth.` calls because the package has no stubs and `ignore_missing_imports` only silences the import; add it if reported.
 
 - [ ] **Step 5: Commit**
@@ -1743,7 +1747,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   - `BrokerError(Exception)`, `BrokerUnauthorized(BrokerError)` (401/invalid_grant → the token is dead).
   - `SchwabBroker(store: TokenStore, app_key, app_secret)` with `async def open() -> None` (builds `schwab.auth.client_from_access_functions(..., asyncio=True)`), `async def close()`.
   - `FakeBroker(fixture_dir: Path, frozen_now: datetime)` loading `account.json`, `orders.json`, `quotes.json`, `hours-<date>.json`, `bars-<symbol>.json`; raises `BrokerUnauthorized` if a file `unauthorized` exists in the dir.
-  - `Recorder(broker: SchwabBroker, out_dir: Path)` with `async def record(symbols: Sequence[str]) -> None` — calls each read, **redacts** before writing: `accountNumber` → `"REDACTED"`, every hash value → `"HASH_REDACTED"`, and the recorded `account_hashes()` list → `["HASH_REDACTED"]`.
+  - `Recorder(broker: SchwabBroker, out_dir: Path)` with `async def record(symbols: Sequence[str], d: date) -> None` — calls each read, **redacts** before writing: `accountNumber` → `"REDACTED"`, every hash value → `"HASH_REDACTED"`, and the recorded `account_hashes()` list → `["HASH_REDACTED"]`.
 
 - [ ] **Step 1: Create synthetic fixtures**
 
@@ -1817,7 +1821,7 @@ def test_no_fixture_carries_an_identifier() -> None:
 
 - [ ] **Step 3: Run to verify failure**
 
-Run: `cd engine && pytest ../tests/engine/unit/test_fake_broker.py ../tests/engine/contract -q`
+Run: `cd engine && pytest -q -c pyproject.toml ../tests/engine/unit/test_fake_broker.py ../tests/engine/contract`
 Expected: the fake test FAILS with import error; the contract test PASSES (fixtures are clean).
 
 - [ ] **Step 4: Implement `engine/tc/broker/client.py`**
@@ -2038,7 +2042,7 @@ class Recorder:
 
 - [ ] **Step 6: Run tests, mypy, ruff**
 
-Run: `cd engine && pytest ../tests/engine -q && mypy && ruff check .`
+Run: `cd engine && pytest -q && mypy && ruff check . ../tests/engine`
 Expected: all green. ruff `S101` (assert) is already ignored; if `ASYNC` rules flag the sync `json` reads in the fake, add `# noqa: ASYNC240` — fixture reads are tiny and deliberate.
 
 - [ ] **Step 7: Commit**
@@ -2164,7 +2168,7 @@ async def test_alerts_and_job_runs(tmp_path: Path) -> None:
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `cd engine && pytest ../tests/engine/unit/test_store.py -q`
+Run: `cd engine && pytest -q -c pyproject.toml ../tests/engine/unit/test_store.py`
 Expected: FAIL, `No module named 'tc.store'`.
 
 - [ ] **Step 3: Write `engine/tc/store/schema.sql`**
@@ -2449,7 +2453,7 @@ class Store:
 
 - [ ] **Step 5: Run tests, mypy, ruff**
 
-Run: `cd engine && pytest ../tests/engine/unit/test_store.py -q && mypy && ruff check .`
+Run: `cd engine && pytest -q -c pyproject.toml ../tests/engine/unit/test_store.py && mypy && ruff check . ../tests/engine`
 Expected: `5 passed`, clean. The trigger message contains "append-only", which the `pytest.raises(match=...)` relies on; do not reword it.
 
 - [ ] **Step 6: Commit**
@@ -2527,7 +2531,7 @@ def test_fallback_window() -> None:
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `cd engine && pytest ../tests/engine/unit/test_clock.py -q`
+Run: `cd engine && pytest -q -c pyproject.toml ../tests/engine/unit/test_clock.py`
 Expected: FAIL, `No module named 'tc.clock'`.
 
 - [ ] **Step 3: Implement `engine/tc/clock.py`**
@@ -2596,7 +2600,7 @@ def fallback_window(d: date) -> MarketWindow:
 
 - [ ] **Step 4: Run tests, mypy, ruff**
 
-Run: `cd engine && pytest ../tests/engine/unit/test_clock.py -q && mypy && ruff check .`
+Run: `cd engine && pytest -q -c pyproject.toml ../tests/engine/unit/test_clock.py && mypy && ruff check . ../tests/engine`
 Expected: `4 passed`, clean. (`tzdata` must be present on the Pi image; the Dockerfile in Phase 0b installs it — on macOS/Linux dev boxes the system zoneinfo suffices.)
 
 - [ ] **Step 5: Commit**
@@ -2685,7 +2689,7 @@ def test_unknown_command_is_usage_error(capsys: pytest.CaptureFixture[str]) -> N
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `cd engine && pytest ../tests/engine/unit/test_cli.py -q`
+Run: `cd engine && pytest -q -c pyproject.toml ../tests/engine/unit/test_cli.py`
 Expected: FAIL, `No module named 'tc.cli'`.
 
 - [ ] **Step 3: Implement `engine/tc/cli.py`**
@@ -2804,7 +2808,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 4: Run tests, mypy, ruff, and the whole suite**
 
-Run: `cd engine && pytest ../tests/engine -q && mypy && ruff check .`
+Run: `cd engine && pytest -q && mypy && ruff check . ../tests/engine`
 Expected: everything green. If ruff flags `E702` on the semicolon lines in `build_parser`, split them onto separate lines.
 
 - [ ] **Step 5: Compare the two consistency checkers on the real repo**
@@ -2828,7 +2832,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ---
 ## Done criteria for this plan
 
-- `cd engine && pytest ../tests/engine -q && mypy && ruff check .` green on macOS (arm64) and on the Pi (`python3.12` in a venv; the Docker image comes in Phase 0b).
+- `cd engine && pytest -q && mypy && ruff check . ../tests/engine` green on macOS (arm64) and on the Pi (`python3.12` in a venv; the Docker image comes in Phase 0b).
 - `tc check-consistency --repo ..` and `scripts/check-consistency.sh` both report `CONSISTENT` on `main`.
 - `tc token-status` against an empty `data_dir` reports `state=absent` and exits 3.
 - No file under `engine/` contains a rule number, an account identifier, or the ungated flag (the checker and the fixture contract test prove it).

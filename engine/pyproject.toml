@@ -44,15 +44,23 @@ ignore = ["S101"]  # asserts in tests
 # deliberate; some exceed the line-length limit. Scoped here rather than a
 # global ignore so line length still enforces everywhere else.
 "tc/rules/model.py" = ["E501"]
+# Tests: wide fixture literals and keyword-heavy model constructions read
+# better on one line than wrapped. Only E501 is relaxed — every real lint
+# (unused imports, shadowing, async hazards, hard-coded temp paths) still
+# applies to the test suite exactly as it does to tc/.
+"../tests/engine/**/*.py" = ["E501"]
 
 [tool.mypy]
 strict = true
+# The tests are checked too: they are the only executable statement of what
+# the engine promises, and an untyped test can assert a shape that mypy would
+# have rejected in tc/.
+files = ["tc", "../tests/engine"]
 # BaseSettings fields are populated from the environment, so mypy must not
 # demand them as __init__ arguments; the plugin knows that and also types
 # _env_file, which is why no call-arg ignore is needed at the call site.
 plugins = ["pydantic.mypy"]
 python_version = "3.12"
-packages = ["tc"]
 ignore_missing_imports = true  # schwab-py ships no stubs
 
 [tool.pytest.ini_options]

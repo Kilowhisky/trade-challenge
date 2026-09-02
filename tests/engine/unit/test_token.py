@@ -111,7 +111,11 @@ def test_begin_auth_persists_context_and_returns_url(tmp_path: Path, monkeypatch
         authorization_url = "https://api.schwabapi.com/v1/oauth/authorize?x=1&state=S"
         state = "S"
 
-    monkeypatch.setattr(tok.schwab_auth, "get_auth_context", lambda api_key, callback_url: Ctx())
+    # String target, not tok.schwab_auth: the module re-exports nothing, and
+    # reaching through it is what mypy --strict flags on the test suite.
+    monkeypatch.setattr(
+        "tc.broker.token.schwab_auth.get_auth_context", lambda api_key, callback_url: Ctx()
+    )
     s = _store(tmp_path, 1.0)
     url = s.begin_auth()
     assert url.startswith("https://api.schwabapi.com")
@@ -132,7 +136,9 @@ def test_complete_auth_writes_token_via_callback(tmp_path: Path, monkeypatch: py
         token_write_func({"creation_timestamp": 42, "token": {"access_token": "new"}})
         return object()
 
-    monkeypatch.setattr(tok.schwab_auth, "client_from_received_url", fake_client_from_received_url)
+    monkeypatch.setattr(
+        "tc.broker.token.schwab_auth.client_from_received_url", fake_client_from_received_url
+    )
     s = _store(tmp_path, 1.0)
     s.complete_auth("https://x/cb?code=abc&state=S")
     assert seen == {"state": "S", "url": "https://x/cb?code=abc&state=S"}

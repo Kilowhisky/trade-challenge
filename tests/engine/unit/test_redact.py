@@ -8,6 +8,7 @@ raw, unredacted payload.
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,16 @@ def test_redact_strips_identifiers_recursively() -> None:
 
     # Non-identifier keys/values pass through unchanged.
     assert acct["type"] == "CASH"
+
+
+def _json_files(d: Path) -> list[Path]:
+    """Filesystem reads live in sync helpers: ASYNC240 (rightly) objects to
+    blocking pathlib calls inside an async test body."""
+    return sorted(d.glob("*.json"))
+
+
+def _read(p: Path) -> str:
+    return p.read_text()
 
 
 class _StubResp:
@@ -127,11 +138,11 @@ async def test_recorder_writes_only_redacted_payloads(tmp_path: Path) -> None:
     stub: Any = _StubBroker()
     await Recorder(stub, tmp_path).record(["AMH"], date(2026, 9, 2))
 
-    written = list(tmp_path.glob("*.json"))
+    written = _json_files(tmp_path)
     assert len(written) == 5  # account, orders, quotes, hours, bars-AMH
 
     for p in written:
-        text = p.read_text()
+        text = _read(p)
         assert "12345678" not in text, f"{p} carries the raw account number"
         assert HEX32 not in text, f"{p} carries the raw hash"
         assert "REDACTED" in text, f"{p} was not redacted at all"
@@ -155,7 +166,7 @@ async def test_recorder_refuses_error_body(tmp_path: Path) -> None:
     stub: Any = _ErrorBroker()
     with pytest.raises(BrokerError):
         await Recorder(stub, tmp_path).record(["AMH"], date(2026, 9, 2))
-    assert list(tmp_path.glob("*.json")) == []
+    assert _json_files(tmp_path) == []
 
 
 async def test_recorder_refuses_wrong_shape(tmp_path: Path) -> None:
@@ -169,6 +180,6 @@ async def test_recorder_refuses_wrong_shape(tmp_path: Path) -> None:
             self._client = _ShapeClient("12345678", self._hash)
 
     stub: Any = _ShapeBroker()
-    with pytest.raises(BrokerError, match="unexpected account.json payload"):
+    with pytest.raises(BrokerError, match=re.escape("unexpected account.json payload")):
         await Recorder(stub, tmp_path).record(["AMH"], date(2026, 9, 2))
-    assert list(tmp_path.glob("*.json")) == []
+    assert _json_files(tmp_path) == []

@@ -34,14 +34,14 @@ def test_token_status_absent(tmp_path: Path, capsys: pytest.CaptureFixture[str])
 
 
 def test_auth_url_prints_url(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-    from tc.broker import token as tok
-
     class Ctx:
         callback_url = "https://pi.example.ts.net/oauth/callback"
         authorization_url = "https://api.schwabapi.com/v1/oauth/authorize?state=S"
         state = "S"
 
-    monkeypatch.setattr(tok.schwab_auth, "get_auth_context", lambda api_key, callback_url: Ctx())
+    monkeypatch.setattr(
+        "tc.broker.token.schwab_auth.get_auth_context", lambda api_key, callback_url: Ctx()
+    )
     rc = cli.main([*_cfg(tmp_path), "auth-url"])
     out = capsys.readouterr().out
     assert rc == 0 and out.strip() == Ctx.authorization_url

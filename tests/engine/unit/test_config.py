@@ -8,7 +8,7 @@ from tc.config import Settings, load_settings
 CONFIG = """
 engine:
   timezone: America/New_York
-  data_dir: /tmp/tc-test-data
+  data_dir: /opt/tc/data
   http_bind: 127.0.0.1:8080
   reserve_usd: "900.00"
 token:
@@ -36,7 +36,7 @@ def test_loads_yaml_and_env(tmp_path: Path) -> None:
     c, e = _write(tmp_path)
     s = load_settings(c, e)
     assert isinstance(s, Settings)
-    assert s.engine.data_dir == Path("/tmp/tc-test-data")
+    assert s.engine.data_dir == Path("/opt/tc/data")
     assert s.token.reauth_after_days == 5
     assert s.schwab_app_key == "k"
     assert str(s.discord_webhook_url).startswith("https://discord.example")
@@ -78,7 +78,7 @@ def test_unrelated_tc_env_var_is_ignored(
     c, e = _write(tmp_path)
     s = load_settings(c, e)
     assert s.token.reauth_after_days == 5
-    assert s.engine.data_dir == Path("/tmp/tc-test-data")
+    assert s.engine.data_dir == Path("/opt/tc/data")
     assert s.schwab_app_key == "k"
 
 

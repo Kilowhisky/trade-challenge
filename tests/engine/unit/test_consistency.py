@@ -65,10 +65,10 @@ def test_ungated_flag_in_engine_is_found(tmp_path: Path) -> None:
 
 def test_ungated_flag_in_extensionless_file_is_found(tmp_path: Path) -> None:
     # Built by concatenation so this test file never carries the literal.
-    FLAG = "--jesus-" + "take-the-wheel"
+    flag = "--jesus-" + "take-the-wheel"
     root = _mini_repo(tmp_path)
     (root / "docker").mkdir()
-    (root / "docker" / "Dockerfile").write_text(f"RUN schwab-mcp server {FLAG}\n")
+    (root / "docker" / "Dockerfile").write_text(f"RUN schwab-mcp server {flag}\n")
     rep = run_checks(root)
     assert any(
         f.check == "ungated_broker" and f.path and f.path.endswith("docker/Dockerfile")

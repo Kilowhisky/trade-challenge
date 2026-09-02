@@ -371,6 +371,14 @@ engine stays up, monitoring loops report `BLIND`, protective logic that needs
 the broker is suspended and says so, and only the re-auth path is active.
 `option_max_blind_days` in `rules.yml` already prices this.
 
+**Implementation notes (2026-09-02, from Phase 0a).** schwab-py 1.5.1's
+`AuthContext` is the namedtuple `(callback_url, authorization_url, state)`,
+and `client_from_received_url` validates that the `state` in the returned URL
+matches the one it was handed. Persisting `callback_url` and `state` across
+the phone round trip and rebuilding the context on the way back therefore
+gives the CSRF check this section assumes — the `authorization_url` field is
+not needed at exchange time and is stored as `""`.
+
 ---
 
 ## 9. Config, secrets, deploy, repository layout
@@ -380,6 +388,15 @@ the broker is suspended and says so, and only the re-auth path is active.
   and secret, Discord bot token, channel, approver id and webhook, Claude
   OAuth token, MCP role bearer tokens) via pydantic-settings. Startup fails
   fast on any missing key.
+
+  **Implementation note (2026-09-02, from Phase 0a).** Secrets and file config
+  are two models, not one. pydantic-settings parses every field DECLARED on a
+  `BaseSettings` from the environment even when an init kwarg already supplies
+  it, so a single `Settings(BaseSettings)` carrying `engine`/`token` under
+  `env_prefix="TC_"` turned any unrelated `TC_TOKEN=...` in the operator's
+  shell into a startup `SettingsError`. `Secrets(BaseSettings)` holds only the
+  four environment keys; `Settings(BaseModel)` composes it with the parsed
+  `config.yml`, and exposes the secrets as read-only properties.
 - **One public repo, no store symlinks, no laptop writer.** Code, `rules.yml`,
   `strategy.md`, `CLAUDE.md`, `.claude/`, docs, docker and host scripts live
   in `Kilowhisky/trade-challenge`. Data lives in `/srv/tc/data` on the Pi,
