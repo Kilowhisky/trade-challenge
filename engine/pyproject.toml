@@ -1,0 +1,50 @@
+[project]
+name = "tc"
+version = "0.1.0"
+description = "trade-challenge v3 engine"
+requires-python = ">=3.12"
+dependencies = [
+  "schwab-py==1.5.1",
+  "pydantic>=2.10,<3",
+  "pydantic-settings>=2.3,<3",
+  "PyYAML>=6.0",
+  "aiosqlite>=0.20",
+  "httpx>=0.28",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8", "pytest-asyncio>=0.23", "hypothesis>=6.100",
+  "mypy>=1.10", "ruff>=0.5", "types-PyYAML",
+]
+
+[project.scripts]
+tc = "tc.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["tc*"]
+
+[tool.setuptools.package-data]
+tc = ["store/schema.sql"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "ASYNC", "S", "RUF"]
+ignore = ["S101"]  # asserts in tests
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+packages = ["tc"]
+ignore_missing_imports = true  # schwab-py ships no stubs
+
+[tool.pytest.ini_options]
+testpaths = ["../tests/engine"]
+asyncio_mode = "auto"

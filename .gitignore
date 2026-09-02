@@ -37,3 +37,6 @@ docker/.deployed-digest
 
 # subagent-driven-development scratch (ledgers, briefs, review packages)
 .superpowers/
+
+# v3 engine virtualenv — not source, recreated by `python3.12 -m venv .venv`
+engine/.venv/

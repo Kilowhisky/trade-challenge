@@ -1,0 +1,11 @@
+# config.yml — non-secret engine configuration (spec §9). Secrets live in .env
+# as TC_* variables and are never written here.
+engine:
+  timezone: America/New_York
+  data_dir: /data
+  http_bind: 127.0.0.1:8080
+  reserve_usd: "900.00"        # CLAUDE.md header: the one fixed dollar quantity
+token:
+  reauth_after_days: 5         # engine posts the auth URL to Discord at this age
+  hard_expiry_days: 7          # Schwab's absolute refresh-token lifetime (verified 2026-09-02)
+  callback_url: https://REPLACE-ME.ts.net/oauth/callback   # set after Tailscale is up
