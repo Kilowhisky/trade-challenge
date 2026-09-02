@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from importlib import resources
@@ -108,65 +110,83 @@ class Store:
             await self._c().execute(sql, params)
 
     async def fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
-        cur = await self._c().execute(sql, params)
-        return list(await cur.fetchall())
+        async with self._lock:
+            cur = await self._c().execute(sql, params)
+            return list(await cur.fetchall())
 
     async def fetchone(self, sql: str, params: tuple[Any, ...] = ()) -> sqlite3.Row | None:
-        cur = await self._c().execute(sql, params)
-        row = await cur.fetchone()
-        return row
+        async with self._lock:
+            cur = await self._c().execute(sql, params)
+            row = await cur.fetchone()
+            return row
 
-    # --- typed helpers -----------------------------------------------------
-    async def record_account(self, s: AccountSnapshot) -> int:
+    @asynccontextmanager
+    async def _transaction(self) -> AsyncIterator[aiosqlite.Connection]:
+        """BEGIN/COMMIT (or ROLLBACK on exception) around the block.
+
+        Acquires ``self._lock`` itself — there is one connection and one
+        writer queue, so callers must NOT already hold the lock when they
+        enter this context manager (doing so would deadlock).
+        """
         async with self._lock:
             c = self._c()
             await c.execute("BEGIN")
             try:
-                cur = await c.execute(
-                    "INSERT INTO account_snapshots(account_hash, read_at, liquidation_value,"
-                    " cash_available_for_trading, unsettled_cash, cash_balance, cash_call,"
-                    " is_closing_only_restricted) VALUES (?,?,?,?,?,?,?,?)",
-                    (
-                        s.account_hash,
-                        s.read_at.isoformat(),
-                        _s(s.liquidation_value),
-                        _s(s.cash_available_for_trading),
-                        _s(s.unsettled_cash),
-                        _s(s.cash_balance),
-                        _s(s.cash_call),
-                        int(s.is_closing_only_restricted),
-                    ),
-                )
-                sid = int(cur.lastrowid or 0)
-                await c.executemany(
-                    "INSERT INTO position_snapshots(snapshot_id, symbol, asset_type, quantity,"
-                    " average_price, market_value, day_pl, settled_quantity)"
-                    " VALUES (?,?,?,?,?,?,?,?)",
-                    [
-                        (
-                            sid,
-                            p.symbol,
-                            p.asset_type,
-                            p.quantity,
-                            _s(p.average_price),
-                            _s(p.market_value),
-                            _s(p.day_pl),
-                            p.settled_quantity,
-                        )
-                        for p in s.positions
-                    ],
-                )
+                yield c
                 await c.execute("COMMIT")
             except Exception:
                 await c.execute("ROLLBACK")
                 raise
-            return sid
+
+    # --- typed helpers -----------------------------------------------------
+    async def record_account(self, s: AccountSnapshot) -> int:
+        async with self._transaction() as c:
+            cur = await c.execute(
+                "INSERT INTO account_snapshots(account_hash, read_at, liquidation_value,"
+                " cash_available_for_trading, unsettled_cash, cash_balance, cash_call,"
+                " is_closing_only_restricted) VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    s.account_hash,
+                    s.read_at.isoformat(),
+                    _s(s.liquidation_value),
+                    _s(s.cash_available_for_trading),
+                    _s(s.unsettled_cash),
+                    _s(s.cash_balance),
+                    _s(s.cash_call),
+                    int(s.is_closing_only_restricted),
+                ),
+            )
+            sid = int(cur.lastrowid or 0)
+            # Yield point inside the held lock: a concurrent reader gets
+            # queued on self._lock and cannot observe the account_snapshots
+            # row without its position_snapshots rows, no matter where the
+            # writer yields between BEGIN and COMMIT.
+            await asyncio.sleep(0)
+            await c.executemany(
+                "INSERT INTO position_snapshots(snapshot_id, symbol, asset_type, quantity,"
+                " average_price, market_value, day_pl, settled_quantity)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                [
+                    (
+                        sid,
+                        p.symbol,
+                        p.asset_type,
+                        p.quantity,
+                        _s(p.average_price),
+                        _s(p.market_value),
+                        _s(p.day_pl),
+                        p.settled_quantity,
+                    )
+                    for p in s.positions
+                ],
+            )
+        return sid
 
     async def record_orders(
         self, account_hash: str, rows: list[OrderRow], read_at: datetime
     ) -> None:
-        async with self._lock:
-            await self._c().executemany(
+        async with self._transaction() as c:
+            await c.executemany(
                 "INSERT INTO order_snapshots(account_hash, read_at, order_id, status, order_type,"
                 " duration, entered_at, symbol, quantity, filled_quantity, price, stop_price,"
                 " legs_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",

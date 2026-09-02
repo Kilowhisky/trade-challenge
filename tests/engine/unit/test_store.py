@@ -1,10 +1,11 @@
+import asyncio
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-from tc.broker.models import AccountSnapshot, Position
+from tc.broker.models import AccountSnapshot, OrderLeg, OrderRow, Position
 from tc.store.db import SessionStatusRow, Store, TickRow
 
 
@@ -16,6 +17,21 @@ def _snap() -> AccountSnapshot:
         is_closing_only_restricted=False,
         positions=[Position(symbol="AMH", asset_type="EQUITY", quantity=29, average_price=Decimal("34.79"),
                             market_value=Decimal("990.64"), day_pl=Decimal("-11.60"), settled_quantity=29)],
+    )
+
+
+def _snap_two_positions() -> AccountSnapshot:
+    base = _snap()
+    second = base.positions[0].model_copy(update={"symbol": "BMH"})
+    return base.model_copy(update={"positions": [base.positions[0], second]})
+
+
+def _order_row(order_id: int = 1) -> OrderRow:
+    return OrderRow(
+        order_id=order_id, status="WORKING", order_type="LIMIT", duration="DAY",
+        entered_at=datetime(2026, 9, 2, 14, 0, tzinfo=UTC), quantity=10, filled_quantity=0,
+        price=Decimal("34.79"), stop_price=None,
+        legs=[OrderLeg(instruction="BUY", quantity=10, symbol="AMH", asset_type="EQUITY")],
     )
 
 
@@ -83,4 +99,47 @@ async def test_alerts_and_job_runs(tmp_path: Path) -> None:
     assert row is not None and row[0] == "content_failed"
     with pytest.raises(ValueError):
         await s.record_job_run("tick", t, t, "ok", {})  # 'ok' is not a verdict; the old deadman's mistake
+    await s.close()
+
+
+async def test_concurrent_read_never_sees_half_written_snapshot(tmp_path: Path) -> None:
+    s = Store(tmp_path / "e.db")
+    await s.open()
+
+    async def reader() -> list[tuple[int, int]]:
+        rows = await s.fetchall(
+            "SELECT a.id, COUNT(p.snapshot_id) FROM account_snapshots a"
+            " LEFT JOIN position_snapshots p ON p.snapshot_id = a.id"
+            " GROUP BY a.id"
+        )
+        return [(r[0], r[1]) for r in rows]
+
+    results = await asyncio.gather(
+        s.record_account(_snap_two_positions()), *[reader() for _ in range(5)]
+    )
+    for reader_rows in results[1:]:
+        assert isinstance(reader_rows, list)
+        for _snapshot_id, position_count in reader_rows:
+            assert position_count == 2
+    await s.close()
+
+
+async def test_record_orders_is_atomic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    s = Store(tmp_path / "e.db")
+    await s.open()
+    assert s._conn is not None
+
+    def failing(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(s._conn, "executemany", failing)
+    with pytest.raises(RuntimeError, match="boom"):
+        await s.record_orders("H", [_order_row()], datetime(2026, 9, 2, 14, 0, tzinfo=UTC))
+    row = await s.fetchone("SELECT COUNT(*) FROM order_snapshots")
+    assert row is not None and row[0] == 0
+
+    monkeypatch.undo()
+    await s.record_orders("H", [_order_row()], datetime(2026, 9, 2, 14, 0, tzinfo=UTC))
+    row = await s.fetchone("SELECT COUNT(*) FROM order_snapshots")
+    assert row is not None and row[0] == 1
     await s.close()
