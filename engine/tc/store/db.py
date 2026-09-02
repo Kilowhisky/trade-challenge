@@ -81,6 +81,11 @@ class Store:
         self._lock = asyncio.Lock()
 
     async def open(self) -> None:
+        # Idempotent: a second open() used to build a second connection and
+        # drop the first on the floor, leaking it (and its WAL file handle)
+        # for the life of the process.
+        if self._conn is not None:
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # autocommit; we BEGIN explicitly where a transaction is needed
         self._conn = await aiosqlite.connect(self.path, isolation_level=None)

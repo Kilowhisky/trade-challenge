@@ -26,9 +26,10 @@ def _dec(v: Any, default: str = "0") -> Decimal:
     return D(default) if v is None else cents(D(str(v)))
 
 
-def _dec_raw(v: Any) -> Decimal:
-    """Like _dec but keeps full precision (no cents rounding)."""
-    return D("0") if v is None else D(str(v))
+def _dec_raw_opt(v: Any) -> Decimal | None:
+    """Like _dec but keeps full precision (no cents rounding), and preserves
+    the difference between "no value" and zero."""
+    return None if v is None else D(str(v))
 
 
 def _int(v: Any) -> int:
@@ -47,13 +48,21 @@ class Position(BaseModel):
     symbol: str
     asset_type: str
     quantity: int
-    average_price: Decimal
+    average_price: Decimal | None
     market_value: Decimal
     day_pl: Decimal
     settled_quantity: int
 
     @property
-    def lifetime_pl(self) -> Decimal:
+    def lifetime_pl(self) -> Decimal | None:
+        """None when Schwab reports no cost basis.
+
+        A null basis must not be read as zero — that would report the entire
+        market value as lifetime gain. Callers render None as "n/a";
+        tc.rules.arith.lifetime_pl takes a real Decimal and is not called at
+        all for a position whose basis is unknown."""
+        if self.average_price is None:
+            return None
         return cents(self.market_value - self.average_price * abs(self.quantity))
 
 
@@ -84,7 +93,7 @@ class AccountSnapshot(BaseModel):
                 symbol=p["instrument"]["symbol"],
                 asset_type=p["instrument"].get("assetType", ""),
                 quantity=_int(p.get("longQuantity")) - _int(p.get("shortQuantity")),
-                average_price=_dec_raw(p.get("averagePrice")),
+                average_price=_dec_raw_opt(p.get("averagePrice")),
                 market_value=_dec(p.get("marketValue")),
                 day_pl=_dec(p.get("currentDayProfitLoss")),
                 settled_quantity=_int(p.get("settledLongQuantity")),

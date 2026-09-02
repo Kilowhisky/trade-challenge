@@ -395,11 +395,24 @@ the broker is suspended and says so, and only the re-auth path is active.
 - The engine reloads rules and prompts on content-hash change or `SIGHUP`,
   runs the consistency checker, and adopts only on PASS, otherwise keeping
   `/data/rules-lastgood/`. No code path deploys mid-session.
-- `tc/rules/consistency.py` ports every check in `scripts/check-consistency.sh`
-  and adds: markers in **all** `*.md` including `.claude/`; the derived-DTE
-  identity; dead-key tombstones; the capital-basis cross check; schedule-vs-doc
-  agreement; and "no tool matching `place|cancel|replace|order` in any MCP
-  role registry".
+- `tc/rules/consistency.py` ports the **rule** checks in
+  `scripts/check-consistency.sh` — annotations (1), strategy-vs-manual
+  tightness (2), the derived-DTE and delta-band identities (2b), hard-coded
+  rule percentages (3), the ungated-broker flag (4), the capital-basis cross
+  check (N) and surviving endgame dates (N+1) — and adds: markers in **all**
+  `*.md` including `.claude/`; dead-key tombstones in `rules.yml`; the same
+  greps over `engine/` itself; and "no tool matching
+  `place|cancel|replace|order` in any MCP role registry".
+
+  The script's checks 5–8 are **retired with the old runtime, not ported**:
+  schedule-vs-doc agreement, the sidecar gitignore guard, the
+  documented-command/compose-flag check and the deploy.sh-in-crontab check all
+  describe crontab + `docker compose` + the store symlinks, none of which
+  exist here. The bash checker keeps running beside the Python one until Phase
+  3 retires that runtime, so nothing is unguarded in the meantime; the sidecar
+  guard becomes moot once the §9 layout above removes the store symlinks, and
+  schedule-vs-doc becomes a Phase 0b concern for `config.yml`, where the
+  schedule is data rather than a crontab line to grep.
 
 Section numbers inside the tree are `CLAUDE.md` rules.
 

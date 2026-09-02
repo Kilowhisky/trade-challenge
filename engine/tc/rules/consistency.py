@@ -1,10 +1,25 @@
 """Verify that no document or script contradicts rules.yml.
 
-Python port of scripts/check-consistency.sh, extended to the two places the
-shell version could not reach and which produced real defects: .claude/ (the
-files that execute the rules; the 2026-08-31 cross-basis halt shipped through a
-CONSISTENT report) and engine/ (this code). Exit semantics match the script:
-ok == no findings.
+This is a PARTIAL port of scripts/check-consistency.sh, not a replacement.
+
+Ported here, because they check the rules themselves: annotations (the
+script's check 1), strategy-vs-manual tightness (2), the derived-DTE and
+delta-band identities (2b), hard-coded rule percentages (3), the
+ungated-broker flag (4), the capital-basis cross check (N) and surviving
+endgame dates (N+1). Added on top: dead §8 keys in rules.yml, markers in
+.claude/ (the files that EXECUTE the rules — the 2026-08-31 cross-basis halt
+shipped through a CONSISTENT report), and the same greps over engine/ (this
+code). Exit semantics match the script: ok == no findings.
+
+Deliberately NOT ported: the script's checks 5-8 — schedule-vs-doc agreement,
+the sidecar gitignore guard, the documented-command/compose-flag check and
+the deploy.sh-in-crontab check. Every one of them describes the OLD runtime
+(crontab + docker compose + the store symlinks), not the v3 engine. The bash
+checker keeps running beside this one until Phase 3 retires that runtime, so
+those checks are not lost in the meantime; the sidecar guard becomes moot
+when spec §9's layout removes the store symlinks, and schedule-vs-doc becomes
+a Phase 0b concern for config.yml, where the schedule is data rather than a
+crontab line to grep.
 """
 
 from __future__ import annotations
@@ -19,13 +34,24 @@ from types import MappingProxyType
 from tc.rules import arith
 from tc.rules.model import Rules
 
-SKIP_DIRS = {".git", ".venv", "node_modules", "archive", ".playwright-mcp", "__pycache__"}
+SKIP_DIRS = {
+    ".git", ".venv", "node_modules", "archive", ".playwright-mcp", "__pycache__",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache", ".hypothesis",
+}
+# *.egg-info varies by project name, so it needs a suffix test rather than a
+# set membership one. Tool caches and build metadata are generated files: a
+# rule percentage or a flag "found" inside one is noise, and reading them is
+# pure cost.
+SKIP_DIR_SUFFIXES = (".egg-info",)
 
 ANNOTATION = re.compile(r"(?P<num>[0-9][0-9.]*)%?\*\*<!--rule:(?P<key>[a-zA-Z0-9_]+)-->")
 HARDCODE = re.compile(r"\*\s*(35|30|20|15|10|50)\s*/\s*100")
 UNGATED = "--jesus-take-the-wheel"
 CROSS_BASIS = re.compile(
     r"comp_capital[^|]*(<=|≤|>=|≥)[^|]*(halt|hwm)|(halt|hwm)[^|]*(<=|≤|>=|≥)[^|]*comp_capital"
+)
+CROSS_BASIS_PY = re.compile(
+    r"comp_capital\s*(<=|>=|<|>)\s*(halt|hwm)|(halt|hwm)\s*(<=|>=|<|>)\s*comp_capital"
 )
 ENDGAME = re.compile(r"(lockout|flat by|END_DATE)[^|]*(9/|2026-09)")
 ENDGAME_OK = re.compile(r"removed|deleted|no longer|was ", re.IGNORECASE)
@@ -76,7 +102,10 @@ def _walk(
         for p in sorted(base.rglob("*")):
             if p.is_dir() or (suffixes is not None and p.suffix not in suffixes):
                 continue
-            if any(part in SKIP_DIRS for part in p.relative_to(root).parts):
+            parts = p.relative_to(root).parts
+            if any(part in SKIP_DIRS for part in parts):
+                continue
+            if any(part.endswith(SKIP_DIR_SUFFIXES) for part in parts[:-1]):
                 continue
             yield p
 
@@ -89,13 +118,28 @@ def _is_comment(line: str) -> bool:
     return line.lstrip().startswith("#")
 
 
+def _lines(root: Path, p: Path, check: str, out: list[Finding]) -> list[str]:
+    """Read a file for checking, or report it unreadable and carry on.
+
+    An OSError on one file must not abort the whole report: a single
+    permission-denied file would otherwise turn every other finding invisible,
+    which is exactly the "degrade into no caps applied" failure this checker
+    exists to prevent. The unreadable file becomes its own finding instead.
+    """
+    try:
+        return p.read_text(errors="replace").splitlines()
+    except OSError as e:
+        out.append(Finding(check, _rel(root, p), None, f"unreadable: {e}"))
+        return []
+
+
 def check_annotations(root: Path, rules: Rules) -> tuple[list[Finding], int]:
     out: list[Finding] = []
     n = 0
     table = {f"manual_{k}": v for k, v in rules.manual.items()}
     table |= {f"strategy_{k}": v for k, v in rules.strategy.items()}
     for p in _walk(root, (".md",)):
-        for i, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
+        for i, line in enumerate(_lines(root, p, "annotations", out), 1):
             for m in ANNOTATION.finditer(line):
                 n += 1
                 key, stated = m["key"], Decimal(m["num"])
@@ -140,7 +184,11 @@ def check_derived(root: Path, rules: Rules) -> tuple[list[Finding], int]:
 
 def check_dead_keys(root: Path, rules: Rules) -> tuple[list[Finding], int]:
     out: list[Finding] = []
-    text = (root / "rules.yml").read_text()
+    rules_yml = root / "rules.yml"
+    try:
+        text = rules_yml.read_text()
+    except OSError as e:
+        return [Finding("dead_keys", "rules.yml", None, f"unreadable: {e}")], 0
     for k in DEAD_KEYS:
         if re.search(rf"^\s+{k}:", text, re.MULTILINE):
             out.append(Finding(
@@ -158,7 +206,7 @@ def check_hardcoded(root: Path, rules: Rules) -> tuple[list[Finding], int]:
         if p.name in {"lib-rules.sh", "check-consistency.sh", "consistency.py"}:
             continue
         n += 1
-        for i, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
+        for i, line in enumerate(_lines(root, p, "hardcoded", out), 1):
             if not _is_comment(line) and HARDCODE.search(line):
                 out.append(Finding(
                     "hardcoded", _rel(root, p), i,
@@ -178,7 +226,7 @@ def check_ungated(root: Path, rules: Rules) -> tuple[list[Finding], int]:
         if p.name in {"check-consistency.sh", "consistency.py"}:
             continue
         n += 1
-        for i, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
+        for i, line in enumerate(_lines(root, p, "ungated_broker", out), 1):
             if UNGATED in line and not _is_comment(line):
                 out.append(Finding(
                     "ungated_broker", _rel(root, p), i, "bypasses the Discord approval gate"
@@ -191,8 +239,22 @@ def check_cross_basis(root: Path, rules: Rules) -> tuple[list[Finding], int]:
     n = 0
     for p in _walk(root, (".md",), [".claude"]):
         n += 1
-        for i, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
+        for i, line in enumerate(_lines(root, p, "cross_basis", out), 1):
             if CROSS_BASIS.search(line):
+                out.append(Finding(
+                    "cross_basis", _rel(root, p), i,
+                    "compares comp_capital against halt/HWM — false halt",
+                ))
+    # The markdown pattern is table-shaped ([^|] between the operands) and
+    # never matches code. The same defect in Python is a plain comparison, so
+    # it needs its own pattern -- the 2026-08-31 cross-basis halt was a
+    # document defect, and nothing stops the next one being a line of engine.
+    for p in _walk(root, (".py",), ["engine"]):
+        if p.name == "consistency.py":
+            continue
+        n += 1
+        for i, line in enumerate(_lines(root, p, "cross_basis", out), 1):
+            if not _is_comment(line) and CROSS_BASIS_PY.search(line):
                 out.append(Finding(
                     "cross_basis", _rel(root, p), i,
                     "compares comp_capital against halt/HWM — false halt",
@@ -207,7 +269,7 @@ def check_endgame(root: Path, rules: Rules) -> tuple[list[Finding], int]:
     if sr.exists():
         files.append(sr)
     for p in files:
-        for i, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
+        for i, line in enumerate(_lines(root, p, "endgame", out), 1):
             if ENDGAME.search(line) and not ENDGAME_OK.search(line):
                 out.append(Finding(
                     "endgame", _rel(root, p), i, "live endgame date from the deleted §8"

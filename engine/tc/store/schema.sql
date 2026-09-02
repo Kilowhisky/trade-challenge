@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS account_snapshots (
 CREATE TABLE IF NOT EXISTS position_snapshots (
   snapshot_id INTEGER NOT NULL REFERENCES account_snapshots(id),
   symbol TEXT NOT NULL, asset_type TEXT NOT NULL, quantity INTEGER NOT NULL,
-  average_price TEXT NOT NULL, market_value TEXT NOT NULL, day_pl TEXT NOT NULL,
+  -- average_price is nullable: Schwab reports no cost basis for some
+  -- positions, and NULL is the honest record of that (see Position.lifetime_pl).
+  average_price TEXT, market_value TEXT NOT NULL, day_pl TEXT NOT NULL,
   settled_quantity INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS order_snapshots (

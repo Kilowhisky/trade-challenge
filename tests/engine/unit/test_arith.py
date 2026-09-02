@@ -47,6 +47,24 @@ def test_legacy_hwm_conversion_is_dated() -> None:
     ) == Decimal("3800.00")
 
 
+def test_legacy_conversion_is_date_guarded_not_idempotent() -> None:
+    """Re-applying the conversion with the ORIGINAL pre-amendment date adds the
+    reserve a second time. That is not a bug to fix -- the recorded date IS the
+    guard, and this test exists so a caller cannot mistake the function for
+    something safe to run twice over the same (mark, date) pair. §3.6's
+    migration note is explicit that a bare max() across bases is itself the
+    defect; so is a double conversion."""
+    pre = date(2026, 8, 26)
+    once = arith.legacy_hwm_to_account_basis(Decimal("2900.00"), pre, Decimal("900.00"))
+    assert once == Decimal("3800.00")
+    twice = arith.legacy_hwm_to_account_basis(once, pre, Decimal("900.00"))
+    assert twice == Decimal("4700.00")  # the reserve added again -- $900 of phantom high-water
+    # Converted with the date the migration actually uses, it is a no-op.
+    assert arith.legacy_hwm_to_account_basis(
+        once, date(2026, 8, 31), Decimal("900.00")
+    ) == once
+
+
 def test_ratchet_never_lowers() -> None:
     assert arith.ratchet_hwm(Decimal("2900"), Decimal("2881.06")) == Decimal("2900")
     assert arith.ratchet_hwm(Decimal("2900"), Decimal("2950")) == Decimal("2950")

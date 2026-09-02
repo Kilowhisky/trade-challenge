@@ -70,6 +70,70 @@ async def test_ticks_are_append_only(tmp_path: Path) -> None:
     await s.close()
 
 
+# One minimal INSERT per append-only ledger, by raw SQL so the test asserts the
+# TRIGGER rather than whatever the typed helper happens to do. Every ledger in
+# schema.sql that carries the no_update/no_delete pair belongs in this table:
+# a ledger added later without triggers is only caught if it is listed here.
+LEDGER_INSERTS: dict[str, str] = {
+    "ticks": (
+        "INSERT INTO ticks(at_et, state, account_value, comp_capital, hwm, drawdown_pct, level,"
+        " positions, stops, orders, settled, unsettled, reserve, flags, note)"
+        " VALUES ('t','RTH','1','1','1','0','OK',0,0,0,'0','0','0','-','')"
+    ),
+    "job_runs": (
+        "INSERT INTO job_runs(job, started_at, ended_at, verdict, detail_json)"
+        " VALUES ('tick','a','b','done','{}')"
+    ),
+    "order_snapshots": (
+        "INSERT INTO order_snapshots(account_hash, read_at, order_id, status, order_type,"
+        " duration, entered_at, symbol, quantity, filled_quantity, legs_json)"
+        " VALUES ('H','a',1,'WORKING','LIMIT','DAY','a','AMH',1,0,'[]')"
+    ),
+    "token_events": "INSERT INTO token_events(at, kind, detail) VALUES ('a','refresh','ok')",
+    "trade_log": (
+        "INSERT INTO trade_log(at_et, symbol, action, quantity, price, pretrade_json, note)"
+        " VALUES ('a','AMH','BUY',1,'1.00','{}','')"
+    ),
+}
+
+
+@pytest.mark.parametrize("ledger", sorted(LEDGER_INSERTS))
+async def test_every_ledger_is_append_only(tmp_path: Path, ledger: str) -> None:
+    s = Store(tmp_path / "e.db")
+    await s.open()
+    await s.execute(LEDGER_INSERTS[ledger])
+    with pytest.raises(Exception, match="append-only"):
+        await s.execute(f"UPDATE {ledger} SET id = id")  # noqa: S608 -- name from the table above
+    with pytest.raises(Exception, match="append-only"):
+        await s.execute(f"DELETE FROM {ledger}")  # noqa: S608 -- name from the table above
+    await s.close()
+
+
+async def test_open_twice_is_idempotent(tmp_path: Path) -> None:
+    """A second open() used to replace the connection and leak the first."""
+    s = Store(tmp_path / "e.db")
+    await s.open()
+    first = s._conn
+    await s.open()
+    assert s._conn is first
+    await s.close()
+    assert s._conn is None
+
+
+async def test_position_with_no_cost_basis_round_trips_as_null(tmp_path: Path) -> None:
+    """average_price is nullable end to end: None must reach SQL as NULL, not '0'."""
+    s = Store(tmp_path / "e.db")
+    await s.open()
+    snap = _snap()
+    unknown = snap.positions[0].model_copy(update={"average_price": None})
+    sid = await s.record_account(snap.model_copy(update={"positions": [unknown]}))
+    row = await s.fetchone(
+        "SELECT average_price FROM position_snapshots WHERE snapshot_id=?", (sid,)
+    )
+    assert row is not None and row[0] is None
+    await s.close()
+
+
 async def test_session_status_roundtrip_and_latest(tmp_path: Path) -> None:
     s = Store(tmp_path / "e.db")
     await s.open()

@@ -43,9 +43,19 @@ def test_hwm_ratchet_monotone(prior: Decimal, close: Decimal) -> None:
 
 
 @given(money, st.dates(min_value=date(2026, 8, 1), max_value=date(2026, 12, 31)))
-def test_basis_conversion_idempotent(hwm: Decimal, d: date) -> None:
+def test_basis_conversion_is_idempotent_under_a_post_amendment_date(
+    hwm: Decimal, d: date
+) -> None:
+    """The real hazard is a mark converted twice.
+
+    Convert once with the mark's own recorded date -- pre- or post-amendment,
+    hypothesis picks both -- then convert the RESULT again with a
+    post-amendment date, which is what a caller re-running the migration over
+    already-migrated data does. The second pass must be a no-op. The date, not
+    the value, is what makes that true: see
+    test_legacy_conversion_is_date_guarded_not_idempotent.
+    """
     once = arith.legacy_hwm_to_account_basis(hwm, d, Decimal("900.00"))
-    # applying the conversion to an already-converted (post-amendment) mark changes nothing
     assert arith.legacy_hwm_to_account_basis(once, date(2026, 8, 31), Decimal("900.00")) == once
 
 

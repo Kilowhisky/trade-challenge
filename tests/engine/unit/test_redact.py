@@ -12,6 +12,9 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from tc.broker.client import BrokerError
 from tc.broker.fake import Recorder, redact
 
 # Built by concatenation so this file never contains a 32-hex literal (the
@@ -46,8 +49,12 @@ def test_redact_strips_identifiers_recursively() -> None:
 
 
 class _StubResp:
-    def __init__(self, payload: Any) -> None:
+    """Enough of httpx.Response for _raise_for: status, text, json()."""
+
+    def __init__(self, payload: Any, status_code: int = 200, text: str = "") -> None:
         self._payload = payload
+        self.status_code = status_code
+        self.text = text
 
     def json(self) -> Any:
         return self._payload
@@ -128,3 +135,40 @@ async def test_recorder_writes_only_redacted_payloads(tmp_path: Path) -> None:
         assert "12345678" not in text, f"{p} carries the raw account number"
         assert HEX32 not in text, f"{p} carries the raw hash"
         assert "REDACTED" in text, f"{p} was not redacted at all"
+
+
+class _ErrorClient(_StubClient):
+    async def get_account(self, account_hash: str, fields: Any = None) -> _StubResp:
+        return _StubResp({"errors": ["bad request"]}, status_code=400, text="bad request")
+
+
+class _ErrorBroker(_StubBroker):
+    def __init__(self) -> None:
+        super().__init__()
+        self._client = _ErrorClient("12345678", self._hash)
+
+
+async def test_recorder_refuses_error_body(tmp_path: Path) -> None:
+    """A 400 body is valid JSON. Recording it produces a fixture that replays
+    an error page as if it were reality — so the recorder must refuse it, and
+    must leave nothing behind."""
+    stub: Any = _ErrorBroker()
+    with pytest.raises(BrokerError):
+        await Recorder(stub, tmp_path).record(["AMH"], date(2026, 9, 2))
+    assert list(tmp_path.glob("*.json")) == []
+
+
+async def test_recorder_refuses_wrong_shape(tmp_path: Path) -> None:
+    class _ShapeClient(_StubClient):
+        async def get_account(self, account_hash: str, fields: Any = None) -> _StubResp:
+            return _StubResp({"unexpected": "shape"})
+
+    class _ShapeBroker(_StubBroker):
+        def __init__(self) -> None:
+            super().__init__()
+            self._client = _ShapeClient("12345678", self._hash)
+
+    stub: Any = _ShapeBroker()
+    with pytest.raises(BrokerError, match="unexpected account.json payload"):
+        await Recorder(stub, tmp_path).record(["AMH"], date(2026, 9, 2))
+    assert list(tmp_path.glob("*.json")) == []

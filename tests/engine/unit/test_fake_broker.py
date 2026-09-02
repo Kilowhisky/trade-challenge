@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -41,3 +42,24 @@ async def test_daily_bars_rejects_non_positive_days() -> None:
         await b.daily_bars("AMH", 0)
     with pytest.raises(ValueError, match="days must be positive"):
         await b.daily_bars("AMH", -1)
+
+
+async def test_quotes_skips_entries_without_a_quote_block(tmp_path: Path) -> None:
+    """Schwab returns an entry with no "quote" for an unknown or halted symbol.
+
+    The real client filters those out; the fake used to hand them to
+    Quote.from_payload and raise, so a fixture recorded on a day with a halted
+    name would fail replay where production would not.
+    """
+    (tmp_path / "quotes.json").write_text(
+        json.dumps(
+            {
+                "AMH": {"quote": {"lastPrice": 34.16}, "reference": {"description": "AMH"}},
+                "HALTED": {"invalidSymbols": ["HALTED"]},
+            }
+        )
+    )
+    b = FakeBroker(tmp_path, NOW)
+    q = await b.quotes(["AMH", "HALTED", "MISSING"])
+    assert list(q) == ["AMH"]
+    assert q["AMH"].last == Decimal("34.16")

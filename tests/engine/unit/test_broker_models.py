@@ -73,7 +73,7 @@ def test_market_window_open_and_closed_shapes() -> None:
     assert not c.is_trading_day and c.rth_start is None
 
 
-def test_null_average_price_defaults_to_zero() -> None:
+def test_null_average_price_is_unknown() -> None:
     now = datetime(2026, 9, 2, 16, 5, tzinfo=UTC)
     payload = {
         "securitiesAccount": {
@@ -92,9 +92,12 @@ def test_null_average_price_defaults_to_zero() -> None:
             },
         }
     }
+    # A missing cost basis is unknown, not zero: zero would report the whole
+    # market value as lifetime gain, which is a fabricated number in exactly
+    # the field a §7.3 honest report reads from.
     a = AccountSnapshot.from_payload("HASH", payload, now)
-    assert a.positions[0].average_price == Decimal("0")
-    assert a.positions[0].lifetime_pl == a.positions[0].market_value
+    assert a.positions[0].average_price is None
+    assert a.positions[0].lifetime_pl is None
 
 
 def test_quote_without_quote_block_raises() -> None:

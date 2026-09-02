@@ -1,5 +1,8 @@
+import os
 import shutil
 from pathlib import Path
+
+import pytest
 
 from tc.rules.consistency import run_checks
 
@@ -94,3 +97,47 @@ def test_cross_basis_is_found(tmp_path: Path) -> None:
     (root / ".claude" / "commands" / "bad.md").write_text("halt if comp_capital <= halt\n")
     rep = run_checks(root)
     assert any(f.check == "cross_basis" for f in rep.findings)
+
+
+def test_cross_basis_in_python_is_found(tmp_path: Path) -> None:
+    """The 2026-08-31 cross-basis halt shipped once already. It can ship again
+    in Python, where the markdown-shaped pattern never looked."""
+    root = _mini_repo(tmp_path)
+    (root / "engine" / "tc" / "y.py").write_text(
+        'level = "HALT" if comp_capital <= halt else "OK"\n'
+    )
+    rep = run_checks(root)
+    assert any(
+        f.check == "cross_basis" and f.path and f.path.endswith("y.py") for f in rep.findings
+    )
+
+
+def test_cross_basis_in_python_ignores_comments(tmp_path: Path) -> None:
+    root = _mini_repo(tmp_path)
+    (root / "engine" / "tc" / "y.py").write_text("# never write comp_capital <= halt\n")
+    rep = run_checks(root)
+    assert not any(f.check == "cross_basis" for f in rep.findings)
+
+
+def test_missing_rules_yml_is_a_finding(tmp_path: Path) -> None:
+    """A repo with no rules.yml must report, not raise: an unreadable input to
+    the checker is the checker's loudest finding, never a crash."""
+    root = tmp_path / "bare"
+    (root / "engine" / "tc").mkdir(parents=True)
+    (root / "engine" / "tc" / "y.py").write_text("x = 1\n")
+    rep = run_checks(root)
+    assert not rep.ok
+    assert any(f.check in {"rules_load", "dead_keys"} for f in rep.findings)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file mode bits")
+def test_unreadable_file_is_a_finding_not_a_crash(tmp_path: Path) -> None:
+    root = _mini_repo(tmp_path)
+    bad = root / "engine" / "tc" / "y.py"
+    bad.write_text("x = 1\n")
+    bad.chmod(0o000)
+    try:
+        rep = run_checks(root)
+    finally:
+        bad.chmod(0o644)
+    assert any("unreadable" in f.message for f in rep.findings)

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import httpx
 from schwab import auth as schwab_auth
@@ -125,3 +125,11 @@ class SchwabBroker:
         assert isinstance(data, dict)
         bars = [DailyBar.from_payload(c) for c in data.get("candles", [])]
         return bars[-days:]
+
+
+if TYPE_CHECKING:
+    # Static conformance. Broker is a plain Protocol, so nothing at runtime
+    # ties SchwabBroker to it — rename or re-signature a method and every
+    # caller keeps type-checking against the protocol while the real object no
+    # longer satisfies it. This assignment makes mypy --strict fail instead.
+    _schwab_conforms: Broker = cast(SchwabBroker, None)
