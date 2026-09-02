@@ -10,9 +10,12 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from tc.broker.client import SchwabBroker
+from authlib.common.errors import AuthlibBaseError
+from pydantic import ValidationError
+
+from tc.broker.client import BrokerError, SchwabBroker
 from tc.broker.fake import Recorder
-from tc.broker.token import TokenStore
+from tc.broker.token import NoAuthInProgress, TokenStore
 from tc.config import Settings, load_settings
 from tc.rules.consistency import run_checks
 
@@ -82,8 +85,8 @@ def cmd_auth_complete(ns: argparse.Namespace) -> int:
 
 async def _record(s: Settings, out: Path, symbols: list[str]) -> None:
     broker = SchwabBroker(_token_store(s), s.schwab_app_key, s.schwab_app_secret)
-    await broker.open()
     try:
+        await broker.open()
         await Recorder(broker, out).record(symbols, datetime.now(UTC).date())
     finally:
         await broker.close()
@@ -120,10 +123,26 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _validation_summary(exc: ValidationError) -> str:
+    """Field names and error kinds only -- never the offending value."""
+    parts = []
+    for err in exc.errors():
+        loc = ".".join(str(x) for x in err["loc"])
+        parts.append(f"{loc} ({err['type']})")
+    return ", ".join(parts)
+
+
 def main(argv: list[str] | None = None) -> int:
     ns = build_parser().parse_args(argv)
-    rc: int = ns.fn(ns)
-    return rc
+    try:
+        rc: int = ns.fn(ns)
+        return rc
+    except ValidationError as e:
+        print(f"tc: settings invalid: {_validation_summary(e)}", file=sys.stderr)
+        return 4
+    except (FileNotFoundError, NoAuthInProgress, BrokerError, AuthlibBaseError) as e:
+        print(f"tc: {e}", file=sys.stderr)
+        return 4
 
 
 if __name__ == "__main__":

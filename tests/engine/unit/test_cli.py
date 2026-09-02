@@ -50,3 +50,36 @@ def test_unknown_command_is_usage_error(capsys: pytest.CaptureFixture[str]) -> N
     with pytest.raises(SystemExit) as e:
         cli.main(["bogus"])
     assert e.value.code == 2
+
+
+def test_missing_config_is_one_line_exit_4(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = cli.main(["--config", str(tmp_path / "nope.yml"), "token-status"])
+    err = capsys.readouterr().err
+    assert rc == 4
+    assert err.startswith("tc: ")
+    assert "Traceback" not in err
+
+
+def test_missing_secret_is_one_line_exit_4(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "config.yml").write_text(CONFIG % tmp_path)
+    (tmp_path / ".env").write_text("TC_SCHWAB_APP_KEY=k\nTC_DISCORD_WEBHOOK_URL=https://d.example/h\n")
+    rc = cli.main([
+        "--config", str(tmp_path / "config.yml"), "--env", str(tmp_path / ".env"), "token-status",
+    ])
+    err = capsys.readouterr().err
+    assert rc == 4
+    assert "schwab_app_secret" in err
+    assert "k" not in err
+
+
+def test_auth_complete_without_context_exit_4(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = cli.main([*_cfg(tmp_path), "auth-complete", "https://x/cb?code=abc"])
+    err = capsys.readouterr().err
+    assert rc == 4
+    assert "auth-context" in err or "begin_auth" in err
