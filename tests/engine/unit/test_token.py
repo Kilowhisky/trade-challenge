@@ -1,4 +1,5 @@
 import json
+import os
 import stat
 from pathlib import Path
 from typing import Any
@@ -53,7 +54,23 @@ def test_corrupt_file_reads_as_absent_and_is_quarantined(tmp_path: Path) -> None
     p.write_text("{not json")
     s = _store(tmp_path, 1.0)
     assert s.read() is None and s.state() == "absent"
-    assert (tmp_path / "token.json.corrupt").exists()
+    assert list(tmp_path.glob("token.json.corrupt-*"))
+
+
+def test_second_corruption_keeps_first_quarantine(tmp_path: Path) -> None:
+    p = tmp_path / "token.json"
+    p.write_text("{first corrupt")
+    s = _store(tmp_path, 1.0)
+    assert s.read() is None
+
+    p.write_text("{second corrupt")
+    s2 = _store(tmp_path, 2.0)
+    assert s2.read() is None
+
+    quarantined = sorted(tmp_path.glob("token.json.corrupt-*"))
+    assert len(quarantined) == 2
+    assert quarantined[0].read_text() == "{first corrupt"
+    assert quarantined[1].read_text() == "{second corrupt"
 
 
 def test_begin_auth_persists_context_and_returns_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -66,8 +83,10 @@ def test_begin_auth_persists_context_and_returns_url(tmp_path: Path, monkeypatch
     s = _store(tmp_path, 1.0)
     url = s.begin_auth()
     assert url.startswith("https://api.schwabapi.com")
-    ctx = json.loads((tmp_path / "auth-context.json").read_text())
+    ctx_path = tmp_path / "auth-context.json"
+    ctx = json.loads(ctx_path.read_text())
     assert ctx == {"callback_url": str(CFG.callback_url), "state": "S"}
+    assert stat.S_IMODE(ctx_path.stat().st_mode) == 0o600
 
 
 def test_complete_auth_writes_token_via_callback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,3 +112,16 @@ def test_complete_auth_without_context_raises(tmp_path: Path) -> None:
     s = _store(tmp_path, 1.0)
     with pytest.raises(tok.NoAuthInProgress):
         s.complete_auth("https://x/cb?code=abc")
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file mode bits")
+def test_unreadable_file_reads_absent_without_quarantine(tmp_path: Path) -> None:
+    s = _store(tmp_path, 1.0)
+    s.write(_wrapped(1.0))
+    p = tmp_path / "token.json"
+    p.chmod(0o000)
+    try:
+        assert s.read() is None
+        assert not list(tmp_path.glob("*.corrupt*"))
+    finally:
+        p.chmod(0o600)

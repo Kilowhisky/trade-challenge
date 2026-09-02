@@ -57,21 +57,44 @@ class TokenStore:
                 raise ValueError("token file missing schwab-py metadata")
             data: dict[str, Any] = raw
             return data
-        except (ValueError, OSError):
+        except ValueError:
             # A corrupt token is worse than no token: it would crash every read.
-            # Quarantine it (never delete evidence) and report absent.
-            self.path.replace(self.path.with_name(self.path.name + ".corrupt"))
+            # Quarantine it (never delete evidence -- and never clobber a prior
+            # quarantine, so each corruption event stays individually
+            # inspectable) and report absent.
+            self._quarantine()
+            return None
+        except OSError:
+            # Unreadable is not the same failure as corrupt: a permission
+            # error or a file that vanished mid-read is an OS-level problem,
+            # not evidence of a bad write. Nothing here was proven malformed,
+            # so nothing gets quarantined -- report absent and stay in blind
+            # mode rather than destroying an intact file.
             return None
 
+    def _quarantine(self) -> None:
+        dest = self.path.with_name(f"{self.path.name}.corrupt-{int(self._clock())}")
+        try:
+            self.path.replace(dest)
+        except OSError:
+            # The file vanished (or became unreadable) between the read that
+            # detected corruption and this replace -- nothing to quarantine,
+            # and this must not raise out of read()'s "reads as absent"
+            # contract.
+            pass
+
     def write(self, wrapped: dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_name(self.path.name + ".tmp")
+        self._write_private(self.path, json.dumps(wrapped))
+
+    def _write_private(self, path: Path, text: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as fh:
-            json.dump(wrapped, fh)
+            fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, self.path)
+        os.replace(tmp, path)
 
     def read_func(self) -> Callable[[], dict[str, Any]]:
         def _read() -> dict[str, Any]:
@@ -111,9 +134,10 @@ class TokenStore:
     # --- re-auth ----------------------------------------------------------
     def begin_auth(self) -> str:
         ctx = schwab_auth.get_auth_context(self._app_key, str(self.cfg.callback_url))
-        self._ctx_path.parent.mkdir(parents=True, exist_ok=True)
-        self._ctx_path.write_text(
-            json.dumps({"callback_url": ctx.callback_url, "state": ctx.state})
+        # The context file carries the OAuth state nonce and callback URL for
+        # an in-flight re-auth -- same secrecy bar as the token itself.
+        self._write_private(
+            self._ctx_path, json.dumps({"callback_url": ctx.callback_url, "state": ctx.state})
         )
         return str(ctx.authorization_url)
 
