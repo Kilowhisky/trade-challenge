@@ -49,9 +49,37 @@ def test_missing_secret_fails_fast(tmp_path: Path) -> None:
 
 
 def test_unknown_yaml_key_rejected(tmp_path: Path) -> None:
+    # Zero indent: a top-level key, so this exercises FileConfig's own forbid.
+    c, e = _write(tmp_path, cfg=CONFIG + "bogus: 1\n")
+    with pytest.raises(ValidationError):
+        load_settings(c, e)
+
+
+def test_unknown_nested_yaml_key_rejected(tmp_path: Path) -> None:
+    # Two-space indent: a key inside token:, so this exercises TokenConfig's.
     c, e = _write(tmp_path, cfg=CONFIG + "  bogus: 1\n")
     with pytest.raises(ValidationError):
         load_settings(c, e)
+
+
+def test_unrelated_tc_env_var_is_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TC_TOKEN / TC_ENGINE in the environment must not reach config parsing.
+
+    pydantic-settings parses every DECLARED field from the environment even
+    when an init kwarg overrides it, so declaring engine/token on a
+    BaseSettings under env_prefix="TC_" made any TC_TOKEN=... in the operator's
+    shell raise SettingsError (not ValidationError) before the yaml was ever
+    consulted. Secrets and file config are separate models for this reason.
+    """
+    monkeypatch.setenv("TC_TOKEN", "abc")
+    monkeypatch.setenv("TC_ENGINE", "x")
+    c, e = _write(tmp_path)
+    s = load_settings(c, e)
+    assert s.token.reauth_after_days == 5
+    assert s.engine.data_dir == Path("/tmp/tc-test-data")
+    assert s.schwab_app_key == "k"
 
 
 def test_reauth_must_precede_hard_expiry(tmp_path: Path) -> None:

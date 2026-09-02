@@ -44,7 +44,7 @@ class FileConfig(BaseModel):
     token: TokenConfig
 
 
-class Settings(BaseSettings):
+class Secrets(BaseSettings):
     """Secrets come only from the environment / .env, prefixed TC_."""
 
     model_config = SettingsConfigDict(env_prefix="TC_", extra="ignore")
@@ -54,9 +54,40 @@ class Settings(BaseSettings):
     discord_webhook_url: AnyHttpUrl
     healthchecks_base_url: AnyHttpUrl | None = None
 
-    # populated from config.yml, not env
+
+class Settings(BaseModel):
+    """Secrets plus file config — composed, never merged.
+
+    engine/token deliberately do NOT live on the BaseSettings above.
+    pydantic-settings parses every declared field from the environment even
+    when an init kwarg already supplies it, so declaring them under
+    env_prefix="TC_" made an unrelated ``TC_TOKEN=...`` in the operator's shell
+    raise SettingsError before config.yml was ever read. Splitting the models
+    means the environment can only reach the four keys that belong to it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    secrets: Secrets
     engine: EngineConfig
     token: TokenConfig
+
+    # Read-only passthroughs so callers say s.schwab_app_key, not
+    # s.secrets.schwab_app_key -- the split above is an internal concern.
+    @property
+    def schwab_app_key(self) -> str:
+        return self.secrets.schwab_app_key
+
+    @property
+    def schwab_app_secret(self) -> str:
+        return self.secrets.schwab_app_secret
+
+    @property
+    def discord_webhook_url(self) -> AnyHttpUrl:
+        return self.secrets.discord_webhook_url
+
+    @property
+    def healthchecks_base_url(self) -> AnyHttpUrl | None:
+        return self.secrets.healthchecks_base_url
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -69,7 +100,5 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 
 def load_settings(config_path: Path, env_file: Path | None = None) -> Settings:
     file_cfg = FileConfig.model_validate(_read_yaml(config_path))
-    kwargs: dict[str, Any] = {"engine": file_cfg.engine, "token": file_cfg.token}
-    if env_file is not None:
-        return Settings(_env_file=str(env_file), **kwargs)  # type: ignore[call-arg]
-    return Settings(**kwargs)
+    secrets = Secrets(_env_file=str(env_file)) if env_file is not None else Secrets()
+    return Settings(secrets=secrets, engine=file_cfg.engine, token=file_cfg.token)

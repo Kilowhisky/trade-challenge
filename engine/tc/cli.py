@@ -10,8 +10,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+import yaml
 from authlib.common.errors import AuthlibBaseError
 from pydantic import ValidationError
+from pydantic_settings import SettingsError
 
 from tc.broker.client import BrokerError, SchwabBroker
 from tc.broker.fake import Recorder
@@ -21,8 +23,16 @@ from tc.rules.consistency import run_checks
 
 
 def _settings(ns: argparse.Namespace) -> Settings:
-    env = Path(ns.env) if ns.env else (Path(".env") if Path(".env").exists() else None)
-    return load_settings(Path(ns.config), env)
+    # The default .env lives beside config.yml, not in whatever directory the
+    # operator (or a cron line, or systemd) happened to start us from. An
+    # explicit --env still wins.
+    config = Path(ns.config)
+    if ns.env:
+        env: Path | None = Path(ns.env)
+    else:
+        beside = config.resolve().parent / ".env"
+        env = beside if beside.exists() else None
+    return load_settings(config, env)
 
 
 def _token_store(s: Settings) -> TokenStore:
@@ -132,16 +142,32 @@ def _validation_summary(exc: ValidationError) -> str:
     return ", ".join(parts)
 
 
+def _one_line(exc: Exception) -> str:
+    """Collapse a multi-line exception (yaml points at the offending token on
+    three lines) into the single `tc: ...` line the operator contract promises."""
+    return " ".join(str(exc).split())
+
+
 def main(argv: list[str] | None = None) -> int:
     ns = build_parser().parse_args(argv)
     try:
         rc: int = ns.fn(ns)
         return rc
+    # ValidationError first: it is a ValueError subclass, and it is the one
+    # case that must NOT print the offending value.
     except ValidationError as e:
         print(f"tc: settings invalid: {_validation_summary(e)}", file=sys.stderr)
         return 4
-    except (FileNotFoundError, NoAuthInProgress, BrokerError, AuthlibBaseError) as e:
-        print(f"tc: {e}", file=sys.stderr)
+    except (
+        FileNotFoundError,
+        NoAuthInProgress,
+        BrokerError,
+        AuthlibBaseError,
+        yaml.YAMLError,
+        SettingsError,
+        ValueError,
+    ) as e:
+        print(f"tc: {_one_line(e)}", file=sys.stderr)
         return 4
 
 

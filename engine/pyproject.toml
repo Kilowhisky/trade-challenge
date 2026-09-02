@@ -47,6 +47,10 @@ ignore = ["S101"]  # asserts in tests
 
 [tool.mypy]
 strict = true
+# BaseSettings fields are populated from the environment, so mypy must not
+# demand them as __init__ arguments; the plugin knows that and also types
+# _env_file, which is why no call-arg ignore is needed at the call site.
+plugins = ["pydantic.mypy"]
 python_version = "3.12"
 packages = ["tc"]
 ignore_missing_imports = true  # schwab-py ships no stubs
