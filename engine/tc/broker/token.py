@@ -55,6 +55,13 @@ class TokenStore:
             has_meta = isinstance(raw, dict) and "creation_timestamp" in raw and "token" in raw
             if not has_meta:
                 raise ValueError("token file missing schwab-py metadata")
+            ts = raw["creation_timestamp"]
+            if isinstance(ts, bool) or not isinstance(ts, int | float):
+                # A non-numeric creation_timestamp is corruption, not a value:
+                # age_days() would raise out of token-status and take the
+                # whole operator path down with it. Catch it at the one place
+                # that already knows how to quarantine.
+                raise ValueError("creation_timestamp is not a number")
             data: dict[str, Any] = raw
             return data
         except ValueError:
@@ -73,7 +80,15 @@ class TokenStore:
             return None
 
     def _quarantine(self) -> None:
-        dest = self.path.with_name(f"{self.path.name}.corrupt-{int(self._clock())}")
+        # Two corruptions inside the same second would collide on the epoch
+        # suffix and the second would clobber the first -- the exact evidence
+        # loss the "never delete evidence" rule above exists to prevent.
+        base = self.path.with_name(f"{self.path.name}.corrupt-{int(self._clock())}")
+        dest = base
+        n = 0
+        while dest.exists():
+            n += 1
+            dest = base.with_name(f"{base.name}-{n}")
         try:
             self.path.replace(dest)
         except OSError:
@@ -90,11 +105,25 @@ class TokenStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        # The mode argument to os.open applies ONLY on creation. A leftover
+        # .tmp from a crash between open and replace is reused with whatever
+        # mode it already had (0644 if it predates this code), and os.replace
+        # then renames that permissive file into place as the token. fchmod
+        # is unconditional, so the mode is a property of the write and not of
+        # the file's history.
+        os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w") as fh:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, path)
+        # fsync the file's data, then the DIRECTORY, or the rename itself can
+        # be lost on power loss and leave the old token (or no token) behind.
+        dir_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
 
     def read_func(self) -> Callable[[], dict[str, Any]]:
         def _read() -> dict[str, Any]:

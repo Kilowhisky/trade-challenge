@@ -49,6 +49,36 @@ def test_write_is_atomic_and_private(tmp_path: Path) -> None:
     assert json.loads(p.read_text())["creation_timestamp"] == 1
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file mode bits")
+def test_write_restores_private_mode_over_stale_tmp(tmp_path: Path) -> None:
+    """A crash between os.open and os.replace can leave a 0644 token.json.tmp.
+
+    os.open's mode argument applies only on creation, so without an explicit
+    fchmod that stale file is reused and renamed into place world-readable.
+    """
+    stale = tmp_path / "token.json.tmp"
+    stale.write_text("junk from a crashed write")
+    stale.chmod(0o644)
+    assert stat.S_IMODE(stale.stat().st_mode) == 0o644
+
+    s = _store(tmp_path, 1.0)
+    s.write(_wrapped(7.0))
+
+    p = tmp_path / "token.json"
+    assert stat.S_IMODE(p.stat().st_mode) == 0o600
+    assert json.loads(p.read_text())["creation_timestamp"] == 7
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_non_numeric_timestamp_is_corruption(tmp_path: Path) -> None:
+    """A string creation_timestamp used to raise straight out of token-status."""
+    (tmp_path / "token.json").write_text(json.dumps({"creation_timestamp": "soon", "token": {}}))
+    s = _store(tmp_path, 1.0)
+    assert s.state() == "absent"
+    assert s.age_days() is None
+    assert list(tmp_path.glob("token.json.corrupt-*"))
+
+
 def test_corrupt_file_reads_as_absent_and_is_quarantined(tmp_path: Path) -> None:
     p = tmp_path / "token.json"
     p.write_text("{not json")
@@ -63,8 +93,10 @@ def test_second_corruption_keeps_first_quarantine(tmp_path: Path) -> None:
     s = _store(tmp_path, 1.0)
     assert s.read() is None
 
+    # SAME clock value: two corruptions inside one second must not collide on
+    # the epoch-suffixed quarantine name.
     p.write_text("{second corrupt")
-    s2 = _store(tmp_path, 2.0)
+    s2 = _store(tmp_path, 1.0)
     assert s2.read() is None
 
     quarantined = sorted(tmp_path.glob("token.json.corrupt-*"))
