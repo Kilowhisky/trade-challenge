@@ -60,14 +60,21 @@ class Report:
 
 
 def _walk(
-    root: Path, suffixes: tuple[str, ...], under: Iterable[str] | None = None
+    root: Path, suffixes: tuple[str, ...] | None, under: Iterable[str] | None = None
 ) -> Iterable[Path]:
+    """Yield files under `under` (or `root`), skipping SKIP_DIRS.
+
+    `suffixes=None` means every regular file, regardless of extension —
+    needed by check_ungated, whose bash original greps with no --include
+    filter at all (an extensionless Dockerfile or a dotfile like .env is as
+    much a place the broker flag can hide as any .py or .md).
+    """
     bases = [root / u for u in under] if under else [root]
     for base in bases:
         if not base.exists():
             continue
         for p in sorted(base.rglob("*")):
-            if p.is_dir() or p.suffix not in suffixes:
+            if p.is_dir() or (suffixes is not None and p.suffix not in suffixes):
                 continue
             if any(part in SKIP_DIRS for part in p.relative_to(root).parts):
                 continue
@@ -163,8 +170,11 @@ def check_hardcoded(root: Path, rules: Rules) -> tuple[list[Finding], int]:
 def check_ungated(root: Path, rules: Rules) -> tuple[list[Finding], int]:
     out: list[Finding] = []
     n = 0
-    suffixes = (".sh", ".py", ".yml", ".yaml", ".md", ".json")
-    for p in _walk(root, suffixes, ["docker", "scripts", ".claude", "engine"]):
+    # No suffix filter: the bash original greps docker/ scripts/ .claude/ with
+    # no --include, so an extensionless Dockerfile or a dotfile is exactly as
+    # exposed as a .py file — the flag is "one copy-pasted line away at all
+    # times" regardless of what the file is named.
+    for p in _walk(root, None, ["docker", "scripts", ".claude", "engine"]):
         if p.name in {"check-consistency.sh", "consistency.py"}:
             continue
         n += 1
