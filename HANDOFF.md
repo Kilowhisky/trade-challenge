@@ -2,7 +2,8 @@
 
 **Nothing needs you before the open.** The book is stopped, the token is
 young, the server is on the latest commit, and today's close record exists.
-Three items need you this week (§3), one of them by the weekend.
+One item needs you this week (§3): the token re-auth by the weekend. The CSX stop
+and the §3.8 correlation were resolved overnight on your instruction.
 
 ---
 
@@ -50,14 +51,23 @@ build sessions stay outside market hours.
    Tuesday 2026-09-08 ~10:50 ET. Re-auth Saturday or Sunday, before Monday's
    open, with the standing runbook (`ssh -L 8182:127.0.0.1:8182 brewmaster`,
    `docker compose run --rm schwab-auth`). No restart needed afterwards.
-2. **The CSX stop-price discrepancy** persists: the resting stop reads
-   45.20/42.93 live versus 45.34/43.07 recorded at placement, with no
-   cancel/replace in the order history. The executor has correctly refused to
-   touch it under §6. Only you can say which figure is right; until then no
-   agent will re-price it.
-3. **§3.8 correlation** has not been recomputed since 2026-08-24, so every
-   tick flags watch 8 and adds are blocked. A live session must recompute and
-   record it before any new position.
+
+Resolved overnight on your instruction ("Fix #2 and #3", 21:14 PDT), no order
+placed:
+
+2. **CSX stop discrepancy — explained and closed.** The resting stop is the
+   same order since 2026-08-14, never replaced; trigger and limit are each
+   exactly $0.14 below placement, and CSX went ex-dividend 2026-08-31 at
+   $0.14. Schwab reduces open GTC sell stops by the cash dividend on the
+   ex-date unless the order is marked Do-Not-Reduce. The live 45.20 / 42.93 is
+   authoritative; a §7.1 correction row is in `trade-log.csv` and the ruling
+   is in `status/2026-09-02.md`. Override available: order a re-raise to
+   45.34 / 43.07 in a live session (one replace, needs ✅).
+3. **§3.8 correlation — recorded.** 60-day log-return correlations to the
+   2026-09-01 close: AMH–CSX 0.204, AMH–USB 0.267, CSX–USB 0.102; none
+   index-correlated (max USB–SPY 0.214). Recorded in `status/2026-09-02.md`
+   and `research/candidates.md`; adds are unblocked on correlation grounds.
+   Next weekly check: first tick of the week of 2026-09-07.
 
 Also open, no deadline: the v3 prerequisites — a second Schwab app with the
 tailnet callback URL, Tailscale on the Pi and your phone, and a healthchecks.io
@@ -68,7 +78,8 @@ project (or a no). Phase 0b cannot run live without the first two.
 Scheduled jobs fire as normal from 07:05 ET; the first `scheduled-run` job
 finds the server already on `2cf4957`. Ticks resolve the high-water mark from
 `status/2026-09-02.md` ($3,800.00, account-value basis). No earnings, no
-options, no leveraged clocks on the book.
+options, no leveraged clocks on the book. The laptop's broker tunnel had dropped
+during the evening and was restarted at 00:15 ET; the server was never affected.
 
 ## 5. v3 status
 
