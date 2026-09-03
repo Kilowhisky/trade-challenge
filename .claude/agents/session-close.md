@@ -124,6 +124,26 @@ the permission gate, and on an unattended box that refusal is silent). Add
 `--replace` only if the file already exists and you are deliberately correcting
 it; say in your output that you did.
 
+**The invocation shape is not optional — the container's permission gate
+accepts exactly one form.** Put the heredoc directly on the script:
+
+```
+scripts/status-write.sh YYYY-MM-DD <<'EOF'
+# Session close — YYYY-MM-DD
+...the whole file...
+EOF
+```
+
+Every other way of feeding it is refused by the harness, silently and with
+no approver present: `cat <<'EOF' | scripts/status-write.sh …` ("pipeline
+that cannot be statically analyzed"), `printf '%s\n' '…' | …`, any `>` or
+`>>` redirection ("output redirection blocked"), and a quoted argument that
+contains a newline followed by `#` ("can hide arguments from path
+validation"). On 2026-09-03 the 16:04 run tried all four, never reached the
+form above, and was killed at the 720 s timeout — no close file, and the
+next session's high-water mark resolved from the day before. Do not
+experiment with shapes; use the heredoc form on the first attempt.
+
 The writer enforces the shape the rest of the system greps for and will refuse
 the write if you miss one. Required: the H1 `# Session close — YYYY-MM-DD`,
 **exactly one** `### State recorded — current` heading, and the lines
