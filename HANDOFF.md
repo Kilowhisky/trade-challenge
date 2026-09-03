@@ -1,134 +1,82 @@
-# Handoff — 2026-09-01, overnight
+# Handoff — 2026-09-02, overnight
 
-**Read this first. Two things need you, and the account cannot trade until the
-first one is done.**
-
----
-
-## 1. THE SCHWAB TOKEN IS DEAD — the account is blind
-
-The broker container has been refusing to start since Saturday night:
-
-```
-broker-entrypoint: NOT STARTING: token is 6d old, past the 5-day forced re-auth
-```
-
-Token created 2026-08-24 22:34, now ~7 days old. The 5-day forced re-auth
-passed **Saturday 2026-08-29**; the 7-day hard expiry passed **22:34 Monday**.
-
-The account went blind mid-session Monday. Ticks returned `BLIND` and the
-executor refused every pass — `REFUSE §1.7 — broker unreadable`. **That is the
-system working**: it detected the failure and declined to act on unknown state
-rather than guessing. Nothing was traded blind, and the three positions
-(AMH/CSX/USB) still have their GTC stops resting at Schwab, which live there
-and are unaffected by our token.
-
-**Fix — about two minutes, needs your browser. Do it before 09:30 ET.**
-
-```bash
-ssh -L 8182:127.0.0.1:8182 brewmaster
-cd trade-challenge/docker
-docker compose run --rm schwab-auth
-# paste the printed URL into your laptop browser, accept the cert warning
-```
-
-**No restart needed.** The broker polls every five minutes and starts itself
-once a good token appears.
-
-### My part in this
-
-On 2026-08-27 I computed the token's age correctly and then told you it was
-"healthy — no action needed", when what the same numbers meant was **"re-auth
-by Saturday or the system goes dark."** `token-watchdog.sh` then warned in
-Discord three days running (8/29 "1d until", 8/30 "0d until", 8/31 "-1d"), and
-I had already primed you to read those as routine. The watchdog did its job;
-my framing undid it.
+**Nothing needs you before the open.** The book is stopped, the token is
+young, the server is on the latest commit, and today's close record exists.
+Three items need you this week (§3), one of them by the weekend.
 
 ---
 
-## 2. THE DEPLOY FAST-FORWARD NEEDS YOUR APPROVAL
+## 1. What happened today, stated plainly (§7.3)
 
-`main` is pushed and verified at `b364c3c`. The push of `main` → `deploy` was
-**blocked by the permission gate**, which is correct: the server auto-adopts
-`origin/deploy` at every job fire, so that push IS the deployment.
+**The server lost its Claude session from 15:17 to 17:10 ET.** Every job in
+that window failed in five seconds with `You've hit your session limit ·
+resets 5:10pm` — three ticks (15:17, 15:32, 15:47), three execute passes
+(15:22, 15:37, 15:52), the 16:04 session close and the 16:22 postclose run.
+The cause was my build session on the laptop: it ran a long chain of
+subagents through the afternoon and consumed the subscription budget the
+server's `CLAUDE_CODE_OAUTH_TOKEN` shares. The 18:33 catalyst run succeeded
+after the reset.
 
-```bash
-cd trade-challenge
-git push origin main:deploy
-```
+Consequences, honestly: the book went **unwatched from 15:02 ET to the
+close** with three positions open. Their GTC stop-limits were resting at
+Schwab throughout (AMH, CSX, USB — all three re-verified live at 23:46 ET),
+nothing traded, and no watch had tripped at 15:02. The §7.2 close file was
+not written at 16:04; I wrote it at 23:46 ET with a forced session-close
+run (same practice as the 2026-08-26 late write). Ticks before 15:02 were
+normal all day.
 
-The server adopts it at the next job fire, gated on `check-consistency.sh` and
-`test-pre-order-check.sh`, and rolls back automatically if either fails.
+**Operating rule learned:** heavy Claude work on this subscription during
+09:30–16:30 ET starves the server. Until the server has its own account,
+build sessions stay outside market hours.
 
-**One manual step after that**, because supercronic reads the crontab only at
-container start and there are two new jobs:
+## 2. What I did tonight
 
-```bash
-ssh brewmaster 'cd trade-challenge && scripts/deploy.sh'
-```
+- **Forced session close** at 23:46 ET → `status/2026-09-02.md`, pushed to
+  the store. Close: account value $3,733.69, high-water mark $3,800.00
+  carried unchanged, drawdown −1.75%, level OK, 3 positions / 3 matching
+  stops, settled cash $2,393.57, no cash call, no restriction, no `ALERT.md`.
+- **Deployed `main` → `origin/deploy`** (25 commits: the v3 engine spec, the
+  Phase 0a plan, and the `engine/` foundation). The server adopted
+  `2cf4957` through its own gate at 23:49 ET (`check-consistency.sh` and
+  `test-pre-order-check.sh` passed; recorded in `status/cron/deployed.jsonl`).
+  Nothing under `engine/` runs on the server yet — it is inert until Phase 0b.
+- **No `deploy.sh` run was needed**: the image is unchanged and supercronic
+  already carries the scout and catalyst jobs (both fired today).
 
-`deploy.sh` refuses inside 09:15–16:15 ET, so run it before the open or after
-the close.
+## 3. Needs you
 
----
+1. **Token re-auth by the weekend.** The token was minted 2026-09-01 ~10:50
+   ET. The watchdog warns Saturday, pages Sunday, and the account goes blind
+   Tuesday 2026-09-08 ~10:50 ET. Re-auth Saturday or Sunday, before Monday's
+   open, with the standing runbook (`ssh -L 8182:127.0.0.1:8182 brewmaster`,
+   `docker compose run --rm schwab-auth`). No restart needed afterwards.
+2. **The CSX stop-price discrepancy** persists: the resting stop reads
+   45.20/42.93 live versus 45.34/43.07 recorded at placement, with no
+   cancel/replace in the order history. The executor has correctly refused to
+   touch it under §6. Only you can say which figure is right; until then no
+   agent will re-price it.
+3. **§3.8 correlation** has not been recomputed since 2026-08-24, so every
+   tick flags watch 8 and adds are blocked. A live session must recompute and
+   record it before any new position.
 
-## What shipped (11 commits)
+Also open, no deadline: the v3 prerequisites — a second Schwab app with the
+tailnet callback URL, Tailscale on the Pi and your phone, and a healthchecks.io
+project (or a no). Phase 0b cannot run live without the first two.
 
-| Area | What |
-|---|---|
-| Rules | §8 deleted, §3.7 reduced to the halt rule, delta floor → band 0.45–0.75, option single-position cap 20% → 10%, competition capital → account value throughout |
-| Data layer | `sector-write.sh`, `evidence-append.sh`, `escalation-log.sh`, `cohort.sh`, `universe-filter.sh --emit-qualified-set` |
-| Agents | `scout` (07:12 ET, calendar-driven) and `catalyst` (18:33 ET, source-driven) |
-| Safety | `check-consistency.sh` now fails on a crossed capital basis or a surviving endgame date; `repo-update.sh` refuses to detach a working checkout |
+## 4. Tomorrow (2026-09-03)
 
-**320 assertions across 11 suites, all green. `CONSISTENT`.**
+Scheduled jobs fire as normal from 07:05 ET; the first `scheduled-run` job
+finds the server already on `2cf4957`. Ticks resolve the high-water mark from
+`status/2026-09-02.md` ($3,800.00, account-value basis). No earnings, no
+options, no leveraged clocks on the book.
 
-## The bug that nearly shipped
+## 5. v3 status
 
-Re-anchoring §3.6 to account value while leaving its consumers alone **would
-have halted all trading, permanently.** `tick.md` computed
-`drawdown = (comp_capital − hwm)/hwm`, and `comp_capital` is account value
-minus $900. Against an account-value high-water mark that reports about
-**−24% on a completely flat book** — through the −20% halt, every session,
-with nothing having lost a cent. `session-close.md` had the mirror defect.
-
-Neither file carries a `<!--rule:-->` marker, so `check-consistency.sh`
-reported `CONSISTENT` through both. That gap — the safety net cannot reach
-`.claude/` — was the real defect; the individual bugs were symptoms. It is now
-closed by two direct checks, both mutation-verified.
-
-## What tomorrow looks like
-
-Until the 16:04 session close, ticks read the **old-basis** high-water mark
-($2,900) from the last status file. I traced the arithmetic: the halt test is
-`account_value ≤ 0.80 × hwm` → `$3,758 ≤ $2,320` → false. **It fails safe.**
-The drawdown *display* will read oddly positive until the close, then the
-conversion (+$900 → $3,800) happens once, correctly.
-
-The scout will no-op until `/weekly-universe` next runs (Saturday 07:40) and
-writes `research/universe-qualified.tsv`. An empty cohort exits 0 by design.
-
-## Two incidents on my side tonight, both recovered
-
-1. **Codex ran `scripts/repo-update.sh` during its review**, which detached my
-   branch onto `origin/deploy` and removed eleven files from the working tree.
-   The commits survived. It also wrote a **false deployment record** into
-   `status/cron/deployed.jsonl` claiming the server adopted `483a5e5` from
-   `e73ab1c` — the server was never on `e73ab1c`. I reverted that line; the
-   store is clean. `repo-update.sh` now refuses to run on a named branch, with
-   a regression test that fails if the suite itself moves HEAD.
-2. **I introduced a bug mid-session**: `$900` inside a double-quoted prompt
-   parsed as `$9` + `00`, and `set -u` made it fatal. `bash -n` could not see
-   it; the suite caught it.
-
-## Open, and yours to decide
-
-- **Your real hit rate is still unmeasured.** Design spec §8.1. Every thesis is
-  sized at 10% *because* of that, and it should not rise until the escalation
-  ledger has scored enough predictions to answer it.
-- **`event_date` in the past is currently accepted** by `escalation-log.sh`.
-  Arguably it contradicts "recorded before the outcome", but same-day catalysts
-  have legitimate raises. Flagged, not decided.
-- **The final Codex review did not finish.** I killed it after it ran that
-  destructive script — an unsupervised process that can move HEAD should not be
-  running during a deployment. Its first pass found nine defects, all fixed.
+Phase 0a is merged to `main`: `engine/` package `tc` with settings, rules,
+property-tested arithmetic, the consistency checker (reaching `.claude/` and
+`engine/`), the token store, the read-only broker with fake and redacting
+recorder, the SQLite store, the clock, and the `tc` CLI. 98 tests; mypy
+strict and ruff clean over code and tests. Next is the Phase 0b plan (loops,
+scheduler, Discord webhook, healthchecks, HTTP `/health` and
+`/oauth/callback`, shadow diff, docker, host probe). The spec is at
+`docs/superpowers/specs/2026-09-02-v3-engine-architecture-design.md`.
