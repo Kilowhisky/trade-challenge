@@ -305,6 +305,44 @@ async def test_stale_quote_is_refetched_once_then_marks_the_tick(
     assert res.row.level == "OK" and res.row.drawdown_pct == D("-5.47")
 
 
+class PartialQuoteBroker(FakeBroker):
+    """Answers for every held symbol but one — a halted name, an unknown
+    symbol, or half an outage. The dropped symbol's price is simply missing."""
+
+    def __init__(self, fixture_dir: Path, frozen_now: datetime, drop: str) -> None:
+        super().__init__(fixture_dir, frozen_now)
+        self.drop = drop
+
+    async def quotes(self, symbols: Sequence[str]) -> dict[str, Quote]:
+        got = await super().quotes(symbols)
+        got.pop(self.drop, None)
+        return got
+
+
+async def test_a_symbol_with_no_quote_makes_the_tick_stale(
+    store: Store, tmp_path: Path
+) -> None:
+    """Partial coverage is not freshness. `min(quote_time)` over the symbols
+    that DID answer reported a fresh tick on the strength of the names that
+    are not the problem — the §4.10 stale-quote gate answering about the wrong
+    instrument, on a book where one position has no price at all."""
+    account = json.loads((FIX / "account.json").read_text())
+    positions = account["securitiesAccount"]["positions"]
+    second = json.loads(json.dumps(positions[0]))
+    second["instrument"]["symbol"] = "CSX"
+    positions.append(second)
+    quotes = json.loads((FIX / "quotes.json").read_text())
+    quotes["CSX"] = quotes["AMH"]
+    d = _fx(tmp_path, {"account.json": json.dumps(account), "quotes.json": json.dumps(quotes)})
+    await _seed(store)
+
+    res = await _tick(store, PartialQuoteBroker(d, NOW, drop="CSX"), window=await _window())
+
+    assert res.row.state == "STALE" and "S" in res.row.flags
+    assert "STALE" in res.row.note
+    assert res.row.positions == 2
+
+
 async def test_stale_threshold_is_the_documented_few_minutes() -> None:
     assert STALE_QUOTE_AGE == timedelta(minutes=3)
 
@@ -449,3 +487,21 @@ async def test_option_on_a_leveraged_underlying_reaches_the_hold_clock(
     res = await _tick(store, FakeBroker(d, NOW), window=await _window(), leveraged={"TQQQ"})
     assert [t.name for t in res.trips if t.watch == 7] == ["leveraged_close"]
     assert "K" in res.row.flags
+
+
+async def test_duplicate_stops_trip_watch_6_and_are_both_counted(
+    store: Store, tmp_path: Path
+) -> None:
+    """Two resting SELL stops on one 29-share position. Only one of them is
+    covered; the other sells stock the account does not own the moment it
+    triggers (§1.5). The row's `stops` column counts both — a symbol whose
+    second stop is invisible reads as a perfectly matched book."""
+    d = _fx(tmp_path, {"orders.json": (FIX / "orders-duplicate-stop.json").read_text()})
+    await _seed(store)
+    res = await _tick(store, FakeBroker(d, NOW), window=await _window())
+
+    assert [(t.watch, t.name) for t in res.trips] == [(6, "duplicate_stop")]
+    assert "AMH" in res.trips[0].detail
+    assert "1000000000001" in res.trips[0].detail and "1000000000003" in res.trips[0].detail
+    assert res.row.flags == "X"
+    assert res.row.positions == 1 and res.row.stops == 2

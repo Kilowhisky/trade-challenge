@@ -55,3 +55,35 @@ async def test_orphaned_stop_without_position(store: Store, tmp_path: Path) -> N
     (d / "account.json").write_text(json.dumps(acct))
     v = await reconcile(FakeBroker(d, NOW), store, "HASH_REDACTED", NOW, date(2026, 8, 14))
     assert len(v.orphaned_stops) == len(v.resting_stops) and v.naked == []
+
+
+async def test_two_resting_stops_on_one_symbol_are_both_kept(
+    store: Store, tmp_path: Path
+) -> None:
+    """Last-in-wins on a `{symbol: order}` dict silently dropped the extra
+    stop: 29 shares carrying two GTC sell stops looked exactly like 29 shares
+    carrying one, and whichever filled second would sell shares the account no
+    longer owns — §1.5's accidental short, arriving through a protective
+    order.
+
+    `resting_stops` keeps the EARLIEST (the one the position was actually
+    entered with, and the one watch 5 compares the fill against); the extras
+    are named in `duplicate_stops`.
+    """
+    import shutil
+
+    d = tmp_path / "fx"
+    shutil.copytree(FIX, d)
+    (d / "orders.json").write_text((FIX / "orders-duplicate-stop.json").read_text())
+    v = await reconcile(FakeBroker(d, NOW), store, "HASH_REDACTED", NOW, date(2026, 8, 14))
+
+    assert v.resting_stops["AMH"].order_id == 1000000000001
+    assert [o.order_id for o in v.duplicate_stops["AMH"]] == [1000000000001, 1000000000003]
+    assert v.resting_stop_count == 2  # not 1: the ledger must not look tidy
+    assert v.naked == [] and v.partial == [] and v.orphaned_stops == []
+
+
+async def test_a_single_stop_leaves_duplicate_stops_empty(store: Store) -> None:
+    v = await reconcile(FakeBroker(FIX, NOW), store, "HASH_REDACTED", NOW, date(2026, 8, 14))
+    assert v.duplicate_stops == {}
+    assert v.resting_stop_count == len(v.resting_stops)

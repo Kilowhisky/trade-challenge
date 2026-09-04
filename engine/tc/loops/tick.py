@@ -97,9 +97,13 @@ async def _quotes_are_stale(broker: Broker, symbols: Sequence[str], now: datetim
             quotes = await broker.quotes(symbols)
         except (BrokerUnauthorized, BrokerError):
             return True
-        if not quotes:
-            # Every held symbol came back without a quote block — halted,
-            # unknown, or a partial outage. That is "no fresh price" too.
+        if set(quotes) != set(symbols):
+            # A symbol we hold came back without a quote block — halted,
+            # unknown, or a partial outage — and the empty answer is just the
+            # extreme case of that. `min()` over what DID arrive would call
+            # the tick fresh on the strength of the symbols that are not the
+            # problem, which is the §4.10 stale-quote gate answering about the
+            # wrong instrument.
             return True
         oldest = min(q.quote_time for q in quotes.values())
         if now - oldest <= STALE_QUOTE_AGE:
@@ -186,6 +190,25 @@ def evaluate_watches(
         if orphans:
             parts.append("orphaned stops: " + ", ".join(orphans))
         trips.append(Trip(watch=6, name="stop_fill", detail="; ".join(parts)))
+
+    # 6 (second shape) — two resting SELL stops on one symbol. Only one of
+    # them is covered by the position; whichever fills second sells shares
+    # the account does not have, which is §1.5's accidental short arriving
+    # through a protective order. It is reported separately from the orphan
+    # above because the operator action differs: cancel the extra, do not
+    # touch the one that matches the fill.
+    if view.duplicate_stops:
+        trips.append(
+            Trip(
+                watch=6,
+                name="duplicate_stop",
+                detail="; ".join(
+                    f"{sym}: {len(rows)} resting sell stops "
+                    f"({', '.join(str(o.order_id) for o in rows)})"
+                    for sym, rows in sorted(view.duplicate_stops.items())
+                ),
+            )
+        )
 
     # 7 — clocks (§3.3 / §3.5). One trip per alert: each names a different
     # position and a different forced action.
@@ -337,7 +360,7 @@ async def run_tick(
         drawdown_pct=drawdown,
         level=level,
         positions=len(positions),
-        stops=len(view.resting_stops),
+        stops=view.resting_stop_count,
         orders=len(view.open_entries),
         settled=account.cash_available_for_trading,
         unsettled=account.unsettled_cash,
