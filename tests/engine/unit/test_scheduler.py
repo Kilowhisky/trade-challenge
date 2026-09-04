@@ -60,3 +60,19 @@ def test_lock_is_per_job_and_stable() -> None:
     sched = Scheduler({}, trading_day=lambda d: True)
     assert sched.lock("a") is sched.lock("a")
     assert sched.lock("a") is not sched.lock("b")
+
+
+def test_prune_forgets_earlier_days_and_keeps_today() -> None:
+    """The fired/missed sets are consulted for today alone. Unpruned they grow
+    for the life of a process meant to run for months."""
+    s = ScheduleSpec.parse("every 15m 09:32-15:47 weekdays")
+    sched = Scheduler({"tick": s}, trading_day=lambda d: True)
+    thu, fri = date(2026, 9, 3), date(2026, 9, 4)
+    sched.due(et(thu, 9, 32))
+    sched.mark_missed(et(thu, 10, 20))
+    sched.due(et(fri, 9, 32))
+
+    assert sched.prune(fri) == 4  # Thursday's one fired + three missed
+    assert sched.prune(fri) == 0  # idempotent
+    # Today's mark survives: the 09:32 fire must not run a second time.
+    assert sched.due(et(fri, 9, 32)) == []

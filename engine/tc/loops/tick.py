@@ -170,15 +170,22 @@ def evaluate_watches(
                                   for s, held, stop in view.partial))
         )
 
-    # 6 — stop fill (§4.7): a position present last tick is gone now. The
-    # orphaned-stop half of the watch is already in view.orphaned_stops.
+    # 6 — stop fill (§4.7): a position present last tick is gone now, and/or a
+    # resting stop with no position behind it. The orphan half trips on its
+    # own: a stop can outlive its position across a restart, a re-seed, or a
+    # manual exit the engine never saw, and §1.5 makes an orphaned SELL stop
+    # an accidental short waiting to trigger — the loop must name it whether
+    # or not it also saw the position vanish this tick.
     held = {p.symbol for p in account.positions if p.quantity != 0}
     gone = sorted(s for s, q in prior_positions.items() if q != 0 and s not in held)
-    if gone:
-        trips.append(
-            Trip(watch=6, name="stop_fill",
-                 detail="position gone since last snapshot: " + ", ".join(gone))
-        )
+    orphans = sorted(f"{o.symbol}({o.quantity})" for o in view.orphaned_stops)
+    if gone or orphans:
+        parts = []
+        if gone:
+            parts.append("position gone since last snapshot: " + ", ".join(gone))
+        if orphans:
+            parts.append("orphaned stops: " + ", ".join(orphans))
+        trips.append(Trip(watch=6, name="stop_fill", detail="; ".join(parts)))
 
     # 7 — clocks (§3.3 / §3.5). One trip per alert: each names a different
     # position and a different forced action.
@@ -230,6 +237,14 @@ async def run_tick(
     leveraged: set[str],
     trading_days_between: Callable[[date, date], int],
 ) -> TickResult:
+    """One sweep: one appended ledger row and the trips for the caller to
+    escalate.
+
+    The ledger gets exactly one row on every path that returns — including the
+    BLIND and tripped paths. A non-401 `BrokerError` is the caller's to catch
+    and count: a broken upstream is a job failure to record, not a state of
+    the book to publish.
+    """
     now_et = now.astimezone(ET)
     at_et = now_et.strftime("%Y-%m-%d %H:%M")  # §D: Eastern, never the machine clock
     fallback = window is None

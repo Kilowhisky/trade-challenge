@@ -233,6 +233,23 @@ async def test_stop_fill_trips_watch_6(store: Store, tmp_path: Path) -> None:
     assert "CSX" in res.trips[0].detail and res.row.flags == "X"
 
 
+async def test_orphaned_stop_trips_watch_6_with_nothing_vanished(
+    store: Store, tmp_path: Path
+) -> None:
+    """A resting SELL stop with no position behind it is §1.5's accidental
+    short waiting to trigger — and it can outlive its position across a
+    restart or a manual exit the engine never saw, so watch 6 must name it
+    even on a tick where nothing vanished from the prior snapshot."""
+    payload = json.loads((FIX / "account.json").read_text())
+    payload["securitiesAccount"]["positions"] = []
+    d = _fx(tmp_path, {"account.json": json.dumps(payload)})
+    await _seed(store)
+    res = await _tick(store, FakeBroker(d, NOW), window=await _window())
+    assert [t.watch for t in res.trips] == [6]
+    assert res.trips[0].detail == "orphaned stops: AMH(29)"
+    assert res.row.flags == "X" and res.row.positions == 0
+
+
 async def test_clock_alert_trips_watch_7(store: Store, tmp_path: Path) -> None:
     """§3.5's leveraged hold clock, reached through run_clocks: the fixture
     position is renamed to a symbol the caller declares leveraged."""

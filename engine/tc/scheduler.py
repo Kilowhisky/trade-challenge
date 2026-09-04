@@ -108,5 +108,20 @@ class Scheduler:
                 out.append(f)
         return out
 
+    def prune(self, before: date) -> int:
+        """Forget the fired/missed marks for days already past, returning how
+        many were dropped.
+
+        The two sets are the engine's only memory of what has already run, and
+        they are consulted for *today* alone — `due` and `mark_missed` both
+        enumerate `self._fires(now.date())`. Unpruned they grow by roughly
+        thirty entries a day for the life of a process that is meant to run
+        for months.
+        """
+        before_n = len(self._fired) + len(self._missed)
+        self._fired = {f for f in self._fired if f.at.date() >= before}
+        self._missed = {f for f in self._missed if f.at.date() >= before}
+        return before_n - len(self._fired) - len(self._missed)
+
     def lock(self, job: str) -> asyncio.Lock:
         return self._locks.setdefault(job, asyncio.Lock())

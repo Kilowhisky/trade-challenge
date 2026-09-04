@@ -5,7 +5,7 @@ reads true at 23:20 ET)."""
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -57,3 +57,26 @@ def fallback_window(d: date) -> MarketWindow:
         rth_start=datetime.combine(d, time(9, 30), tzinfo=ET),
         rth_end=datetime.combine(d, time(16, 0), tzinfo=ET),
     )
+
+
+def trading_days_between(a: date, b: date) -> int:
+    """Weekday count in ``(a, b]`` — exclusive of `a`, inclusive of `b`.
+
+    Sessions, approximated as weekdays. **Holidays are unknown here by
+    design**: the only holiday oracle the engine has is `get_market_hours`,
+    one day per call, and a blind engine has none at all. The approximation
+    errs in the safe direction — a holiday inside the span makes this count
+    HIGH, so §3.5's five-session hold clock fires early rather than late.
+
+    One counter, shared by the §3.3/§3.5 clocks and (via the cached
+    `MarketWindow`) the scheduler's trading-day test, so the unknown lives in
+    exactly one place.
+    """
+    if b <= a:
+        return 0
+    n, d = 0, a
+    while d < b:
+        d += timedelta(days=1)
+        if d.weekday() < 5:
+            n += 1
+    return n

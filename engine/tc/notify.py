@@ -12,13 +12,24 @@ DISCORD_MAX = 1900
 
 
 class Notifier:
-    def __init__(self, webhook: str | None, client: httpx.AsyncClient) -> None:
+    """`prefix` tags every message the engine sends. Shadow mode already
+    routes to a different webhook, so the tag is belt-and-braces — but it is
+    the half a human reads, and it must apply to the loops that post for
+    themselves (the token loop) as well as to the ones the engine posts for.
+    Prefixing at the notifier rather than at each call site is what makes that
+    true by construction."""
+
+    def __init__(
+        self, webhook: str | None, client: httpx.AsyncClient, prefix: str = ""
+    ) -> None:
         self._url = webhook
         self._c = client
+        self._prefix = prefix
 
     async def post(self, text: str) -> bool:
         if not self._url:
             return False
+        text = f"{self._prefix}{text}"
         if len(text) > DISCORD_MAX:
             text = text[: DISCORD_MAX - 1] + "…"
         try:

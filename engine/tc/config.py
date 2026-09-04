@@ -25,6 +25,10 @@ class EngineConfig(BaseModel):
     reserve_usd: Decimal = Decimal("900.00")
     # the earliest date an order could still be resting — coverage, not a date (tick.md §B3)
     orders_from: date = date(2026, 8, 14)
+    # §3.5: the leveraged/inverse ETF symbols the clocks watch. A declared
+    # list, not a lookup: nothing in the broker payload says "3x". Plan 0c's
+    # universe table replaces it.
+    leveraged_symbols: list[str] = Field(default_factory=list)
 
 
 class ShadowConfig(BaseModel):

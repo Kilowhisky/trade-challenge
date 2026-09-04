@@ -305,6 +305,18 @@ class Store:
             (job, started.isoformat(), ended.isoformat(), verdict, json.dumps(detail, default=str)),
         )
 
+    async def backup_to(self, path: Path) -> None:
+        """`VACUUM INTO`: a consistent copy taken through the live connection.
+
+        Copying the file would race the WAL and could land a torn database on
+        disk; VACUUM INTO writes a fully checkpointed one. SQLite refuses to
+        overwrite an existing target, which is the behaviour we want — the
+        backup job checks for today's file and skips rather than clobbering.
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
+        async with self._lock:
+            await self._c().execute("VACUUM INTO ?", (str(path),))
+
     async def record_token_event(self, kind: str, detail: str) -> None:
         await self.execute(
             "INSERT INTO token_events(at, kind, detail) VALUES (?,?,?)", (_now(), kind, detail)
