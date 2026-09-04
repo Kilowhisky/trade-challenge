@@ -92,6 +92,10 @@ async def token_check(
 
     if state == "fresh":
         await store.record_token_event("checked", et_date)
+        # A working token answers the standing `token_dead` alert. Nothing
+        # else closes it, and an alert that can only ever open is one a human
+        # learns to scroll past — which is the alert we most need read.
+        await store.ack_alerts_of_kind("token_dead")
         return TokenReport(
             state=state, age_days=age, days_until_dead=left, action=action, auth_url=None
         )
@@ -141,6 +145,11 @@ async def token_check(
 
     await notifier.post(text)
     if url is not None:
-        await store.record_token_event(dedupe_kind, f"{et_date} {url}")
+        # The ET date and the state word, and nothing else. The authorization
+        # URL carries the app key as a query parameter, and token_events is
+        # read by /api, dumped in support, and copied into handoffs -- the
+        # dedupe only ever matches on the `{et_date}%` prefix, so the URL was
+        # storing a credential for no functional gain.
+        await store.record_token_event(dedupe_kind, f"{et_date} {state}")
 
     return TokenReport(state=state, age_days=age, days_until_dead=left, action=action, auth_url=url)

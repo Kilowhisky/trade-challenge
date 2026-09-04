@@ -208,3 +208,46 @@ async def test_begin_auth_failure_posts_without_url_and_records_auth_url_failed(
     assert len(posts.texts) == 1
     assert "healthy" not in posts.texts[0].lower()
     assert await _events(store, "auth_url_failed")
+
+
+async def test_a_fresh_token_acks_the_standing_dead_alert(
+    store: Store, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`token_dead` is opened on every dead check and nothing ever closed it:
+    a re-auth left the alert standing forever, `/health` kept counting it, and
+    an alert that can only open is one a human learns to scroll past."""
+    monkeypatch.setattr(TokenStore, "begin_auth", lambda self: AUTH_URL)
+    dead = _token(tmp_path, 8.0, NOW.timestamp())
+    await token_check(dead, store, _Posts().notifier(), NOW)
+    assert [a.kind for a in await store.open_alerts()] == ["token_dead"]
+
+    fresh = _token(tmp_path, 0.0, NOW.timestamp())  # the phone re-auth landed
+    report = await token_check(fresh, store, _Posts().notifier(), NEXT_DAY)
+
+    assert report.state == "fresh"
+    assert await store.open_alerts() == []
+
+
+async def test_the_dedupe_detail_never_carries_the_authorization_url(
+    store: Store, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The authorization URL carries the app key as a query parameter, and
+    `token_events` is read by /api, dumped into support threads and copied
+    into handoffs. The dedupe only ever matches on the `{et_date}%` prefix, so
+    storing the URL bought nothing and leaked a credential."""
+    url = "https://api.schwabapi.com/v1/oauth/authorize?client_id=SECRETAPPKEY&state=S"
+    monkeypatch.setattr(TokenStore, "begin_auth", lambda self: url)
+    token = _token(tmp_path, 5.5, NOW.timestamp())
+    posts = _Posts()
+
+    await token_check(token, store, posts.notifier(), NOW)
+
+    details = await _events(store, "auth_url_posted")
+    assert details == ["2026-09-02 reauth_due"]
+    assert "SECRETAPPKEY" not in " ".join(details)
+    # ...and the URL still reaches the human, which is the point of the post.
+    assert url in posts.texts[0]
+
+    # The dedupe still works off that detail: same ET day, no second post.
+    await token_check(token, store, posts.notifier(), NOW + timedelta(hours=2))
+    assert len(posts.texts) == 1
