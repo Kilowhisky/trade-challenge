@@ -378,3 +378,61 @@ def test_cli_shadow_diff_missing_ticks_file_exits_4(
     assert rc == 4
     assert err.startswith("tc: ")
     assert "ticks" in err
+
+
+PRE_AMENDMENT_DAY = date(2026, 8, 25)  # before the §3.6 re-anchor of 2026-08-31
+
+
+async def _seed_hwm_only(store: Store, d: date, hwm: Decimal) -> None:
+    await store.write_session_status(
+        SessionStatusRow(
+            date=d, close_value=hwm, hwm=hwm, halt=hwm * Decimal("0.80"),
+            drawdown_pct=Decimal("0.00"), level="OK", prior_hwm=hwm, ratcheted=False,
+            intraday_high=None,
+        )
+    )
+
+
+async def test_a_pre_amendment_legacy_hwm_is_converted_before_it_is_compared(
+    tmp_path: Path,
+) -> None:
+    """CLAUDE.md §3.6 migration note: a High-water mark written to a status
+    file dated before 2026-08-31 is a COMPETITION-CAPITAL figure — account
+    value minus the $900 reserve. The engine's mark is on the account basis.
+
+    Comparing them raw reports a $900 mismatch on a day that agreed perfectly,
+    which fails the Phase 0 exit criterion for a reason that is not a defect —
+    the same cross-basis error the migration note exists to prevent, pointed
+    the other way.
+    """
+    store = Store(tmp_path / "e.db")
+    await store.open()
+    # The legacy file says $3,800.00 on the old basis; the engine's mark for
+    # the same day is $4,700.00 on the account basis. Same mark.
+    await _seed_hwm_only(store, PRE_AMENDMENT_DAY, Decimal("3800.00") + RESERVE)
+    result = await diff_day(store, PRE_AMENDMENT_DAY, STATUS_PATH, TICKS_PATH, RESERVE)
+    await store.close()
+    assert result.hwm_match is True
+
+
+async def test_an_unconverted_pre_amendment_hwm_is_a_diff(tmp_path: Path) -> None:
+    """The other side of it: an engine mark that really does equal the legacy
+    number on a pre-amendment day is $900 low, and must still report."""
+    store = Store(tmp_path / "e.db")
+    await store.open()
+    await _seed_hwm_only(store, PRE_AMENDMENT_DAY, Decimal("3800.00"))
+    result = await diff_day(store, PRE_AMENDMENT_DAY, STATUS_PATH, TICKS_PATH, RESERVE)
+    await store.close()
+    assert result.hwm_match is False
+
+
+async def test_a_post_amendment_legacy_hwm_is_compared_unchanged(tmp_path: Path) -> None:
+    """On or after 2026-08-31 both sides are account-basis figures and the
+    conversion must NOT fire — adding the reserve there would invent a $900
+    diff of its own."""
+    store = Store(tmp_path / "e.db")
+    await store.open()
+    await _seed_hwm_only(store, DAY, Decimal("3800.00"))
+    result = await diff_day(store, DAY, STATUS_PATH, TICKS_PATH, RESERVE)
+    await store.close()
+    assert result.hwm_match is True

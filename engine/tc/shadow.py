@@ -20,6 +20,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
+from tc.rules import arith
 from tc.store.db import Store
 
 # §7.2 rule: `$1,234.56`-shaped money tokens only -- exactly two decimal digits.
@@ -192,7 +193,14 @@ async def diff_day(
 
     session = await store.session_status_for(d)
     missing_engine_session = session is None
-    hwm_match = session is not None and session.hwm == status.hwm
+    # CLAUDE.md §3.6 migration note: a High-water mark written to a status
+    # file dated before the 2026-08-31 re-anchor is a COMPETITION-CAPITAL
+    # figure — account value minus the reserve. The engine's mark is on the
+    # account basis. Comparing them raw reports a $900 diff on a day that
+    # matched perfectly, which is the shadow exit criterion failing for a
+    # reason that is not a defect.
+    legacy_hwm = arith.legacy_hwm_to_account_basis(status.hwm, d, reserve)
+    hwm_match = session is not None and session.hwm == legacy_hwm
 
     engine_ticks = await store.ticks_for(d.isoformat())
     engine_by_time = {t.at_et[11:16]: t for t in engine_ticks}

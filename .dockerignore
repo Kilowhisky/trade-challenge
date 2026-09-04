@@ -1,0 +1,12 @@
+# Build context is the repo root (docker/docker-compose.yml: `context: ..`).
+# Everything here is either enormous, machine-specific, or private — and a
+# public repo's build context is one COPY away from being baked into a
+# published image layer.
+.git
+engine/.venv
+**/__pycache__
+status
+research
+trade-log.csv
+.superpowers
+*.egg-info

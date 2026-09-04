@@ -8,7 +8,7 @@ import asyncio
 import sys
 from collections.abc import Callable
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import yaml
@@ -118,9 +118,27 @@ async def _seed_hwm(s: Settings, value: Decimal, recorded_on: date) -> Decimal:
         await store.close()
 
 
+def _money_arg(raw: str) -> Decimal:
+    """`3800.00`, `$3800.00` and `$3,800.00` all name the same mark.
+
+    The operator copies this figure straight out of a `status/*.md`
+    High-water mark line, where it is written `$3,800.00` (§7.2). `Decimal`
+    raises `InvalidOperation` on that — an ArithmeticError, which `main()`'s
+    handler does not catch, so the smoke test for a fresh deploy ended in a
+    traceback instead of the one-line `tc: ...` the operator contract
+    promises.
+    """
+    try:
+        return Decimal(raw.replace("$", "").replace(",", "").strip())
+    except InvalidOperation as e:
+        raise ValueError(
+            "--value must be a dollar amount, e.g. 3800.00 or $3,800.00"
+        ) from e
+
+
 def cmd_seed_hwm(ns: argparse.Namespace) -> int:
     recorded_on = date.fromisoformat(ns.recorded_on)
-    hwm = asyncio.run(_seed_hwm(_settings(ns), Decimal(ns.value), recorded_on))
+    hwm = asyncio.run(_seed_hwm(_settings(ns), _money_arg(ns.value), recorded_on))
     print(f"hwm={hwm} basis=account")
     return 0
 

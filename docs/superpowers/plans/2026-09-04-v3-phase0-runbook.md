@@ -17,11 +17,12 @@ or `logs` in this document; there is no supported `--network` flag on
 
 Server facts assumed throughout: Raspberry Pi 4, Debian 12, Docker 29, user
 `knome`, checkout at `/home/knome/trade-challenge`. Tailscale is **not**
-installed yet as of this writing — §3 below installs it.
+installed yet as of this writing — §3 below installs it, before the first
+token is ever minted.
 
-## 0. Before starting — Chris's three prerequisites
+## 0. Before starting — Chris's four prerequisites
 
-These are spec §11's Phase 0 prerequisites; do not proceed past §3 without
+These are spec §11's Phase 0 prerequisites; do not proceed past §2 without
 1 and 2 (§11: "If Schwab refuses a second app, Phase 0 runs on fixtures and
 paper mode without live reads").
 
@@ -32,8 +33,14 @@ paper mode without live reads").
 2. **Tailscale on the Pi and on the phone**, MagicDNS and HTTPS certificates
    enabled in the admin console.
 3. **A healthchecks.io project**, or an explicit decision to decline it and
-   rely on spec §7 layers 2 (the host probe, §5 below) and 3 (expectations)
+   rely on spec §7 layers 2 (the host probe, §6 below) and 3 (expectations)
    alone.
+4. **Keep the current system alive meanwhile: weekly re-auth per
+   `HANDOFF.md`.** (Spec §11 prerequisite 4, quoted.) Phase 0 is shadow and
+   read-only — it watches, it does not trade. The old stack is what is
+   actually running the account for the whole of Phase 0, and its Schwab
+   token still dies every seven days. A lapsed re-auth there is a blind
+   *account*, not a blind experiment.
 
 ## 1. Host layout
 
@@ -89,7 +96,31 @@ If it does not come up: `docker compose -f docker/docker-compose.yml logs
 engine`. `tc-broker` and `tc-scheduler` are untouched by any of this — they
 are a different compose service and this brings up `engine` only.
 
-## 3. Seed the high-water mark
+## 3. Tailscale and the callback URL
+
+**Before the first token, not after it.** The callback URL is fixed at the
+moment Schwab issues the authorization request, and it must already be
+registered on the app: a re-auth against a URL Schwab does not have on file
+is rejected before it ever reaches the engine, and the hostname it needs
+does not exist until `tailscale up` has run.
+
+```
+sudo tailscale up
+# in the Tailscale admin console: enable MagicDNS and HTTPS certificates
+sudo tailscale serve --bg --https=443 http://127.0.0.1:8080
+```
+
+Note the resulting hostname (`https://<pi>.<tailnet>.ts.net`). Set
+`config.yml`'s `token.callback_url` to
+`https://<pi>.<tailnet>.ts.net/oauth/callback` (replacing the
+`https://REPLACE-ME.ts.net/oauth/callback` placeholder), redeploy the
+`engine` service so it picks the edit up (`docker compose -f
+docker/docker-compose.yml up -d engine`), and register that **exact** URL on
+the new Schwab app from §0.1. Schwab's app approval takes one to three days
+(§0.1), so this is the step to reach early — §5's re-auth cannot be
+attempted until the registered callback matches this hostname exactly.
+
+## 4. Seed the high-water mark
 
 Read the **`### State recorded — current`** block (never a `— superseded`
 block above it) of the most recent `status/YYYY-MM-DD.md` the old stack
@@ -112,15 +143,16 @@ be run once — it refuses if `session_status` already has a row (the store
 is empty on a first deploy, so this is only ever an issue on a re-seed
 attempt).
 
-## 4. First token
+## 5. First token
 
 ```
 docker compose -f docker/docker-compose.yml exec engine \
   tc --config /app/repo/config.yml --env /srv/tc/.env auth-url
 ```
 
-prints a Schwab login URL. Open it on the phone with Tailscale connected —
-the callback lands on `https://<pi>.<tailnet>.ts.net/oauth/callback`, which
+prints a Schwab login URL. Open it on the phone with Tailscale connected
+(§3 above put that hostname on the app and in `config.yml`) — the callback
+lands on `https://<pi>.<tailnet>.ts.net/oauth/callback`, which
 the `engine` container's HTTP app serves directly (no SSH tunnel needed,
 unlike the old `tc-schwab-auth` flow). Confirm:
 
@@ -130,25 +162,6 @@ docker compose -f docker/docker-compose.yml exec engine \
 ```
 
 should read `state=fresh`.
-
-## 5. Tailscale and the callback URL
-
-```
-sudo tailscale up
-# in the Tailscale admin console: enable MagicDNS and HTTPS certificates
-sudo tailscale serve --bg --https=443 http://127.0.0.1:8080
-```
-
-Note the resulting hostname (`https://<pi>.<tailnet>.ts.net`). Set
-`config.yml`'s `token.callback_url` to
-`https://<pi>.<tailnet>.ts.net/oauth/callback` (replacing the
-`https://REPLACE-ME.ts.net/oauth/callback` placeholder) and register that
-**exact** URL on the new Schwab app from §0.1 — a mismatched callback is
-rejected by Schwab before it ever reaches the engine. This edit to
-`config.yml` and the redeploy that picks it up happen once, ahead of §4 in
-practice if the tailnet hostname is already known; §4 above is written
-assuming it is, since the callback has to exist before the phone can land
-on it.
 
 ## 6. Host probe
 
@@ -243,7 +256,7 @@ Quoted verbatim from spec §11 ("Exit criteria. Phase 0: …"):
       healthchecks — §6's probe and §0.3's healthchecks.io are independent
       layers per spec §7, and each must be shown to fire on its own).
 - [ ] **One complete phone re-auth drill**, with wall time recorded (repeat
-      §4 end-to-end from a cold token and time it).
+      §5 end-to-end from a cold token and time it).
 
 Only after every box above is checked does Phase 1 (spec §11: the engine
 takes the Discord bot, stops go live, the old scheduler and broker stop)

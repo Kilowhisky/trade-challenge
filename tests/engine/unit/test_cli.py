@@ -183,3 +183,26 @@ def test_default_env_is_resolved_next_to_the_config(
     monkeypatch.chdir(elsewhere)
     rc = cli.main(["--config", str(cfgdir / "config.yml"), "token-status"])
     assert rc == 3 and "state=absent" in capsys.readouterr().out
+
+
+def test_seed_hwm_accepts_a_dollar_formatted_value(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The operator copies this figure straight out of a status file's
+    High-water mark line, where §7.2 writes it as `$3,800.00`. `Decimal`
+    raises `InvalidOperation` on that — an ArithmeticError `main()` does not
+    catch — so the first command of a fresh deploy ended in a traceback."""
+    rc = cli.main(
+        [*_cfg(tmp_path), "seed-hwm", "--value", "$3,800.00", "--recorded-on", "2026-09-03"]
+    )
+    assert rc == 0 and capsys.readouterr().out.strip() == "hwm=3800.00 basis=account"
+
+
+def test_seed_hwm_rejects_a_non_numeric_value_in_one_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = cli.main([*_cfg(tmp_path), "seed-hwm", "--value", "three thousand", "--recorded-on", "2026-09-03"])
+    err = capsys.readouterr().err
+    assert rc == 4
+    assert err.startswith("tc: ") and len(err.strip().splitlines()) == 1
+    assert "dollar amount" in err
