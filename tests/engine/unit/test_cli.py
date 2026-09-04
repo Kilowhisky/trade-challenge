@@ -9,14 +9,14 @@ from tc import cli
 REPO = Path(__file__).resolve().parents[3]
 
 CONFIG = """
-engine: {timezone: America/New_York, data_dir: "%s", http_bind: 127.0.0.1:8080, reserve_usd: "900.00"}
+engine: {timezone: America/New_York, data_dir: "%s", repo_dir: "%s", http_bind: 127.0.0.1:8080, reserve_usd: "900.00"}
 token: {reauth_after_days: 5, hard_expiry_days: 7, callback_url: https://pi.example.ts.net/oauth/callback}
 """
 ENV = "TC_SCHWAB_APP_KEY=k\nTC_SCHWAB_APP_SECRET=s\nTC_DISCORD_WEBHOOK_URL=https://d.example/h\n"
 
 
 def _cfg(tmp_path: Path) -> list[str]:
-    (tmp_path / "config.yml").write_text(CONFIG % tmp_path)
+    (tmp_path / "config.yml").write_text(CONFIG % (tmp_path, tmp_path))
     (tmp_path / ".env").write_text(ENV)
     return ["--config", str(tmp_path / "config.yml"), "--env", str(tmp_path / ".env")]
 
@@ -67,7 +67,7 @@ def test_missing_config_is_one_line_exit_4(
 def test_missing_secret_is_one_line_exit_4(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    (tmp_path / "config.yml").write_text(CONFIG % tmp_path)
+    (tmp_path / "config.yml").write_text(CONFIG % (tmp_path, tmp_path))
     (tmp_path / ".env").write_text("TC_SCHWAB_APP_KEY=k\nTC_DISCORD_WEBHOOK_URL=https://d.example/h\n")
     rc = cli.main([
         "--config", str(tmp_path / "config.yml"), "--env", str(tmp_path / ".env"), "token-status",
@@ -157,7 +157,7 @@ def test_default_env_is_resolved_next_to_the_config(
     """`tc --config /etc/tc/config.yml` from any CWD must find /etc/tc/.env."""
     cfgdir = tmp_path / "etc"
     cfgdir.mkdir()
-    (cfgdir / "config.yml").write_text(CONFIG % tmp_path)
+    (cfgdir / "config.yml").write_text(CONFIG % (tmp_path, tmp_path))
     (cfgdir / ".env").write_text(ENV)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()

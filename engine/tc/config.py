@@ -19,8 +19,14 @@ class EngineConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     timezone: str = "America/New_York"
     data_dir: Path
+    repo_dir: Path                      # rules.yml, prompts, the manual (read-only mount)
     http_bind: str = "127.0.0.1:8080"
     reserve_usd: Decimal = Decimal("900.00")
+
+
+class ShadowConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = True
 
 
 class TokenConfig(BaseModel):
@@ -42,6 +48,8 @@ class FileConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     engine: EngineConfig
     token: TokenConfig
+    schedule: dict[str, str] = Field(default_factory=dict)
+    shadow: ShadowConfig = Field(default_factory=ShadowConfig)
 
 
 class Secrets(BaseSettings):
@@ -52,6 +60,7 @@ class Secrets(BaseSettings):
     schwab_app_key: str
     schwab_app_secret: str
     discord_webhook_url: AnyHttpUrl
+    discord_shadow_webhook_url: AnyHttpUrl | None = None
     healthchecks_base_url: AnyHttpUrl | None = None
 
 
@@ -70,6 +79,8 @@ class Settings(BaseModel):
     secrets: Secrets
     engine: EngineConfig
     token: TokenConfig
+    schedule: dict[str, str]
+    shadow: ShadowConfig
 
     # Read-only passthroughs so callers say s.schwab_app_key, not
     # s.secrets.schwab_app_key -- the split above is an internal concern.
@@ -84,6 +95,10 @@ class Settings(BaseModel):
     @property
     def discord_webhook_url(self) -> AnyHttpUrl:
         return self.secrets.discord_webhook_url
+
+    @property
+    def discord_shadow_webhook_url(self) -> AnyHttpUrl | None:
+        return self.secrets.discord_shadow_webhook_url
 
     @property
     def healthchecks_base_url(self) -> AnyHttpUrl | None:
@@ -101,4 +116,10 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 def load_settings(config_path: Path, env_file: Path | None = None) -> Settings:
     file_cfg = FileConfig.model_validate(_read_yaml(config_path))
     secrets = Secrets(_env_file=str(env_file)) if env_file is not None else Secrets()
-    return Settings(secrets=secrets, engine=file_cfg.engine, token=file_cfg.token)
+    return Settings(
+        secrets=secrets,
+        engine=file_cfg.engine,
+        token=file_cfg.token,
+        schedule=file_cfg.schedule,
+        shadow=file_cfg.shadow,
+    )

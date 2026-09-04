@@ -9,6 +9,7 @@ CONFIG = """
 engine:
   timezone: America/New_York
   data_dir: /opt/tc/data
+  repo_dir: /opt/tc/repo
   http_bind: 127.0.0.1:8080
   reserve_usd: "900.00"
 token:
@@ -86,3 +87,25 @@ def test_reauth_must_precede_hard_expiry(tmp_path: Path) -> None:
     c, e = _write(tmp_path, cfg=CONFIG.replace("reauth_after_days: 5", "reauth_after_days: 8"))
     with pytest.raises(ValidationError):
         load_settings(c, e)
+
+
+def test_schedule_and_shadow_sections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "engine: {data_dir: /d, repo_dir: /r}\n"
+        "token: {reauth_after_days: 5, hard_expiry_days: 7, callback_url: https://x.ts.net/oauth/callback}\n"
+        "schedule: {tick: 'every 15m 09:32-15:47 weekdays', session_close: 'at 16:04 weekdays'}\n"
+        "shadow: {enabled: true}\n"
+    )
+    monkeypatch.setenv("TC_SCHWAB_APP_KEY", "k")
+    monkeypatch.setenv("TC_SCHWAB_APP_SECRET", "s")
+    monkeypatch.setenv("TC_DISCORD_WEBHOOK_URL", "https://discord.test/hook")
+    monkeypatch.setenv("TC_DISCORD_SHADOW_WEBHOOK_URL", "https://discord.test/shadow")
+    from tc.config import load_settings
+    s = load_settings(cfg)
+    assert s.schedule["tick"] == "every 15m 09:32-15:47 weekdays"
+    assert s.shadow.enabled is True
+    assert s.engine.repo_dir == Path("/r")
+    assert str(s.discord_shadow_webhook_url) == "https://discord.test/shadow"
