@@ -1,5 +1,47 @@
 # Handoff — 2026-09-04, afternoon
 
+## v3 engine — Phase 0b built, not yet deployed
+
+**What exists.** Phase 0b of the v3 engine is complete on
+`feat/v3-engine-0b`: an asyncio `tc run` service — scheduler, §4.5
+reconciliation, the tick watches, session close and the §3.6 high-water
+mark, the §3.3/§3.5 clocks, the token lifecycle with the phone re-auth
+callback, expectations checks — with outbound Discord and healthchecks
+pings, an HTTP `/health` + `/oauth/callback` + `/api/status` + `/api/ticks`
+surface on `127.0.0.1:8080`, a `shadow-diff` tool that compares its view
+against the old `status/`/`status/ticks/` ledgers, a docker service
+(`docker/Dockerfile.engine`, the `engine:` entry in
+`docker/docker-compose.yml`), and a host probe outside docker
+(`host/healthprobe.py` on a systemd timer). It is **built and reviewed, not
+running anywhere yet** — nothing has deployed it to the Pi.
+
+**What it does NOT do.** No orders — `Broker` is read-only by construction
+(`grep -rn "place_order\|replace_order\|cancel_order" engine/` is empty);
+there is no runner and no scheduled Claude job (that is Plan 0c); and in
+shadow mode (`config.yml`'s `shadow.enabled: true`) it posts only to a
+separate `#engine-shadow` webhook, never to `#llm-yolo` — the old broker's
+Discord bot and approval gate are completely undisturbed. It does not write
+to the old stack's sidecar store, and it coexists beside `tc-broker` /
+`tc-scheduler`, which keep running exactly as before.
+
+**Three prerequisites Chris owns, none satisfied yet:**
+
+1. A **second Schwab app**, registered in the developer portal with
+   callback `https://<pi>.<tailnet>.ts.net/oauth/callback` (approval takes
+   one to three days) — a second app gives the engine its own refresh
+   token so shadow mode cannot split-brain the live broker's.
+2. **Tailscale on the Pi and on the phone**, with MagicDNS and HTTPS
+   certificates enabled in the admin console.
+3. **A healthchecks.io project**, or an explicit decision to decline it and
+   rely on the host probe and expectations checks alone.
+
+Full deploy sequence — host layout, bring-up beside the old stack, seeding
+the high-water mark, the first token, Tailscale, the nightly shadow diff,
+and the Phase 0 exit checklist — is
+`docs/superpowers/plans/2026-09-04-v3-phase0-runbook.md`.
+
+---
+
 **Why no trades: fixed at the root, live from Friday's open.** You asked why
 the system places nothing. The answer was structural: the executor enters
 only from a HOT candidate, HOT can only be written by the intraday research

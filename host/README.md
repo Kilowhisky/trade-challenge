@@ -8,6 +8,11 @@ It is stdlib-only (`urllib.request`, `json`, `hashlib`, `datetime`,
 `zoneinfo`, `pathlib`, `os`) so it needs nothing beyond the python3 already
 on the box: no venv, no `pip install`, no dependency to go stale.
 
+This file covers the probe on its own. For the full Phase 0 deploy sequence
+it is one step of — host layout, bring-up, seeding the high-water mark, the
+first token, Tailscale, and the nightly shadow diff — see
+`docs/superpowers/plans/2026-09-04-v3-phase0-runbook.md`.
+
 It polls `http://127.0.0.1:8080/health` — the `engine` container's own
 health endpoint, bound to loopback by `network_mode: host` — once every two
 minutes, evaluates the rules in `evaluate()`, and posts to a Discord webhook
@@ -20,7 +25,9 @@ alerting path is what died.
 Run as root on the Pi (or via `sudo`):
 
 ```
-sudo cp host/tc-healthprobe.service host/tc-healthprobe.timer /etc/systemd/system/
+sudo mkdir -p /opt/tc
+sudo cp -r host /opt/tc/host
+sudo cp /opt/tc/host/tc-healthprobe.service /opt/tc/host/tc-healthprobe.timer /etc/systemd/system/
 sudo mkdir -p /var/lib/tc /etc/tc
 sudo $EDITOR /etc/tc/probe.env      # see below — must contain PROBE_WEBHOOK
 sudo systemctl daemon-reload
