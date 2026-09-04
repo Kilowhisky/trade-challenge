@@ -20,6 +20,29 @@ Run chained after the monitoring tick (`/loop 5m "/tick then /research"`) —
 §A's cadence gate makes the chained call a no-op most cycles — or standalone
 when Chris asks for a research pass directly.
 
+## §Scheduled — the server runs this pass hourly
+
+**On the always-on server this pass is a cron job, not a chained call.**
+`docker/crontab` fires `scheduled-run.sh research` **hourly at :57, hours 9-14 ET**
+(09:57 through 14:57: six passes a session, weekdays only), inside a
+09:45–15:15 window guard. The `research-scout` agent runs it directly with no
+parent: the §A gates below become the scout's own first step (the dispatch
+prompt spells out how — the cadence gate is satisfied by the schedule, the
+halt check reads the day's tick ledger, an unacknowledged `ALERT.md`
+suppresses `HOT-FRESH:` lines), and the cached context a parent would supply
+is resolved read-only from `scripts/latest-status.sh` and
+`status/ticks/DATE.tsv`.
+
+**This is the only job that can promote a candidate to HOT** — §C requires a
+quote timestamped inside regular hours, which neither `/deep-research` run
+can supply. Until 2026-09-04 it was not scheduled at all: the last pass was
+2026-08-18, and every unattended execute pass since — 180 of them — correctly
+found nothing to enter from. The scheduled executor (`:07/:22/:37/:52`)
+reads `research/candidates.md` and may open the entry workflow from a HOT at
+its next firing, so on the server a HOT checklist is the direct input to an
+order request in `#llm-yolo`. §E's ping is replaced by the scheduler's relay
+of `HOT-FRESH:` lines to Discord; the ✅/❌ on the order is the decision.
+
 ## §Dispatch — run the pass in the `research-scout` subagent
 
 The parent does **not** execute §B–§D itself:

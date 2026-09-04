@@ -30,7 +30,12 @@ Procedure — no improvisation:
 3. The dispatch prompt from the parent supplies cached context: today's
    date/ET time, held symbols and their sectors, drawdown level, and any
    active calendar guard. Trust it; do not re-read the account — you have
-   no account tools, by design.
+   no account tools, by design. **On the scheduled server there is no
+   parent** (research.md §Scheduled): the prompt instead tells you to
+   resolve that context yourself, read-only, from `scripts/latest-status.sh`
+   (the latest §7.2 status file: held names, account value, high-water mark,
+   settled cash) and the last row of `status/ticks/DATE.tsv` (live drawdown
+   level). Do it first, before the sweep.
 4. You have exactly two write paths, both script-mediated, and nothing
    else, anywhere: `research/candidates.md` through
    `scripts/research-write.sh --expect-last-pass '<the Last pass: line

@@ -152,6 +152,67 @@ grep -q "wrote $qualified_n qualified symbol(s) to $Q" "$ERR" \
   || no "stderr names the qualified file and its untruncated count ($qualified_n)" "stderr was: $(cat "$ERR")"
 rm -rf "$QDIR"
 
+echo "== company names travel with the qualified set =="
+# Schwab exposes no sector field, so the weekly sector tagger classifies by
+# company NAME. The filter already parses reference.description out of every
+# payload; it writes those names beside the qualified set, same rows, same
+# order, so the tagger never has to guess what a ticker is. Asserted against
+# the LIVE fixture: the synthetic one carries no description at all.
+QDIR3=$(mktemp -d)
+TC_RESEARCH_DIR="$QDIR3" bash "$F" --payload "$LIVE" --out "$OUT" --qualified-only --emit-qualified-set >/dev/null 2>"$ERR"
+NAMES="$QDIR3/universe-names.tsv"
+[ -f "$NAMES" ] && ok "--emit-qualified-set also writes research/universe-names.tsv" \
+  || no "--emit-qualified-set also writes research/universe-names.tsv" "no file at $NAMES"
+[ "$(head -n1 "$NAMES" 2>/dev/null)" = "$(printf 'symbol\tdescription')" ] \
+  && ok "names file header is symbol/description" \
+  || no "names file header is symbol/description" "got: $(head -n1 "$NAMES" 2>/dev/null)"
+[ "$(awk -F'\t' '$1=="CSX"{print $2}' "$NAMES" 2>/dev/null)" = "CSX CORP" ] \
+  && ok "CSX carries its full multi-word description (CSX CORP)" \
+  || no "CSX carries its full multi-word description (CSX CORP)" "got '$(awk -F'\t' '$1=="CSX"{print $2}' "$NAMES" 2>/dev/null)'"
+# Same rows as the qualified file — a name list that disagrees with the set it
+# describes is worse than none.
+qsyms="$(tail -n +2 "$QDIR3/universe-qualified.tsv" | cut -f1)"; nsyms="$(tail -n +2 "$NAMES" | cut -f1)"
+[ -n "$qsyms" ] && [ "$qsyms" = "$nsyms" ] && ok "names file lists exactly the qualified symbols, in order" \
+  || no "names file lists exactly the qualified symbols, in order" "qualified: $(echo $qsyms) names: $(echo $nsyms)"
+grep -q "wrote .* name(s) to $NAMES" "$ERR" && ok "stderr names the names file" \
+  || no "stderr names the names file" "stderr was: $(cat "$ERR")"
+rm -rf "$QDIR3"
+# The synthetic fixture has no reference.description: the column must still be
+# present (as '-') so the tagger sees a two-column file, never a ragged one.
+QDIR4=$(mktemp -d)
+TC_RESEARCH_DIR="$QDIR4" bash "$F" --payload "$FIX" --out "$OUT" --qualified-only --emit-qualified-set >/dev/null 2>&1
+[ "$(awk -F'\t' '$1=="CSX"{print $2}' "$QDIR4/universe-names.tsv" 2>/dev/null)" = "-" ] \
+  && ok "a payload with no description yields '-' rather than a ragged row" \
+  || no "a payload with no description yields '-' rather than a ragged row" "got '$(awk -F'\t' '$1=="CSX"{print $2}' "$QDIR4/universe-names.tsv" 2>/dev/null)'"
+TC_RESEARCH_DIR="$QDIR4" bash "$F" --payload "$FIX" --out "$OUT" --qualified-only >/dev/null 2>&1
+rm -f "$QDIR4/universe-names.tsv"
+TC_RESEARCH_DIR="$QDIR4" bash "$F" --payload "$FIX" --out "$OUT" --qualified-only >/dev/null 2>&1
+[ ! -e "$QDIR4/universe-names.tsv" ] && ok "the daily --qualified-only run writes no names file" \
+  || no "the daily --qualified-only run writes no names file" "it was written"
+rm -rf "$QDIR4"
+
+echo "== --rank-top defaults to rules.yml working_universe_size =="
+# The weekly sweep read the rank size through `bash -c '. lib-rules.sh ...'`,
+# which the container's permission gate refuses, so the 2026-08-29 run typed
+# the number by hand. The filter already loads rules.yml; omitting the flag
+# must give exactly what passing the rule's value gives.
+RULE_N="$(bash -c '. scripts/lib-rules.sh && load_rules && rule_get strategy_working_universe_size')"
+OUT_DEF=$(mktemp); OUT_EXP=$(mktemp)
+bash "$F" --payload "$FIX" --out "$OUT_DEF" --qualified-only >/dev/null 2>"$ERR"
+bash "$F" --payload "$FIX" --out "$OUT_EXP" --qualified-only --rank-top "$RULE_N" >/dev/null 2>&1
+[ -n "$RULE_N" ] && cmp -s "$OUT_DEF" "$OUT_EXP" \
+  && ok "omitting --rank-top ranks to the rule value ($RULE_N)" \
+  || no "omitting --rank-top ranks to the rule value ($RULE_N)" "outputs differ or rule unreadable"
+bash "$F" --payload "$FIX" --out "$OUT_DEF" --qualified-only --rank-top 0 >/dev/null 2>"$ERR"
+bash "$F" --payload "$FIX" --out "$OUT_EXP" --qualified-only --rank-top 1 >/dev/null 2>&1
+n0=$(tail -n +2 "$OUT_DEF" | wc -l | tr -d ' '); n1=$(tail -n +2 "$OUT_EXP" | wc -l | tr -d ' ')
+[ "$n0" -gt "$n1" ] && ! grep -q "dropped" "$ERR" \
+  && ok "--rank-top 0 still means no truncation ($n0 rows, nothing dropped)" \
+  || no "--rank-top 0 still means no truncation" "rows: $n0 vs rank-top 1: $n1; stderr: $(cat "$ERR")"
+bash "$F" --payload "$FIX" --out "$OUT_DEF" --qualified-only --rank-top five >/dev/null 2>&1
+[ "$?" -eq 2 ] && ok "a non-numeric --rank-top exits 2" || no "a non-numeric --rank-top exits 2" "exit was $?"
+rm -f "$OUT_DEF" "$OUT_EXP"
+
 echo "== the qualified file is written ONLY on the explicit flag =="
 # An unfiltered pass has not applied the gates, so its rows are not a QUALIFIED
 # set. Writing the file anyway would silently replace the scout universe with

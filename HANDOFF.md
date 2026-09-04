@@ -1,13 +1,89 @@
-# Handoff — 2026-09-02, overnight
+# Handoff — 2026-09-04, afternoon
 
-**Nothing needs you before the open.** The book is stopped, the token is
-young, the server is on the latest commit, and today's close record exists.
-One item needs you this week (§3): the token re-auth by the weekend. The CSX stop
-and the §3.8 correlation were resolved overnight on your instruction.
+**Why no trades: fixed at the root, live from Friday's open.** You asked why
+the system places nothing. The answer was structural: the executor enters
+only from a HOT candidate, HOT can only be written by the intraday research
+pass, and that pass was never scheduled on the server (last run 2026-08-18,
+from a laptop). Separately, the scout's earnings cohort was empty because
+the weekly sweep never wrote the qualified set and nothing ever wrote the
+sector tags it joins against. Both are fixed in the commit below —
+your instruction, verbatim: *"Do 1 & 2. Your /goal is to be an autonomious
+trading engine"* (11:25 PDT).
+
+## 0. What changes, and when you will see it
+
+| When (ET) | Job | What it does now |
+|---|---|---|
+| **Fri 09-05 09:57, then hourly to 14:57** | `research` (new) | The intraday pass: quotes WATCH names live, promotes to HOT only with the full §C checklist, writes `research/candidates.md`. A HOT is relayed to `#llm-yolo`. |
+| every :07/:22/:37/:52 | `execute` (unchanged) | Reads the file. If a HOT exists it may open the entry workflow — **the order still waits for your ✅/❌**. React ❌ to decline; nothing happens without you. |
+| Sat 09-05 07:40 | `weekly-universe` | Now runs the filter without the refused `bash -c` wrapper, and **must** pass `--emit-qualified-set`: writes `universe-qualified.tsv` (~3,200 names) and the new `universe-names.tsv`. |
+| Sat 09-05 09:40 | `sector-tag` (new) | Classifies those names into the three scout sectors and writes `research/sectors.tsv` in batches. Reports `SECTORS … cohort N`. |
+| Tue 09-08 07:12 | `scout` (unchanged) | First pass with a non-empty cohort, if any qualified name reports 21–42 days out. |
+
+Expect the first research passes to produce **WATCH updates, not HOT**: last
+night's board had no name with a measured ATR, and a HOT needs the stop
+geometry written. If Friday ends with `HOT — none` again, that is the pass
+doing its job, not the old failure. What to watch for instead: the `PASS`
+line in `status/cron/2026-09-05-research.log` six times, each with a fresh
+`Last pass:` stamp in `research/candidates.md`.
+
+**Honest note on today's session limit.** This build ran on the laptop
+from 11:25 to ~12:30 PDT, inside market hours, against the rule learned on
+09-02. It was your instruction and I kept it small (no subagents), but the
+14:32/14:47 ticks and 14:37/14:52 executes should be checked in the heartbeat
+for session-limit failures before trusting the afternoon.
 
 ---
 
-## 1. What happened today, stated plainly (§7.3)
+## 1. Needs you
+
+1. **Token re-auth Saturday or Sunday** (unchanged). Minted 2026-09-01
+   ~10:50 ET; blind Tuesday 2026-09-08 ~10:50 ET. Runbook: `ssh -L
+   8182:127.0.0.1:8182 brewmaster`, `docker compose run --rm schwab-auth`.
+2. **Read the Discord relays this week.** A `📈 RESEARCH` message means a
+   HOT was written and the executor may request an order within 15 minutes.
+   A `✅ SECTORS` line Saturday should show `cohort N`; `names 0` means the
+   sweep did not emit the qualified set and the sweep log needs reading.
+3. **The 09-03 false deadman alarms are fixed** (NUL bytes in the heartbeat;
+   `grep -a`); nothing to do.
+
+## 2. What was wrong, precisely
+
+- **No writer for HOT.** `research.md` §C requires a quote timestamped inside
+  regular hours. The 08:17 preopen run is barred from promotions; the 16:22
+  postclose run quotes after the close. Only `/research` promotes, and it was
+  only ever chained after `/tick` in a laptop session. 180 execute passes
+  since 08-24 all reported `EXEC none` against `HOT — none` — correctly.
+- **Empty cohort by construction.** `cohort.sh` joins
+  `research/universe-qualified.tsv` against `research/sectors.tsv`. The 08-29
+  sweep dropped `--emit-qualified-set` while improvising around the
+  permission gate (`bash -c` is refused), so the first file never existed;
+  no job ever wrote the second. `scout` reported `cohort 0` daily and said so.
+- **Catalyst sleeve genuinely empty** — early September has no qualifying
+  reporters; unchanged and legitimate.
+
+## 3. What changed (all on `main` and `deploy`, adopted by the server)
+
+- `docker/crontab`: `research` hourly at :57, 09:57–14:57 weekdays;
+  `sector-tag` Saturday 09:40.
+- `scripts/scheduled-run.sh`: the two job cases (read-only allowlists, no
+  order tools — enforced by `test-scheduled-run.sh`, now 87 checks), and a
+  research-specific `HOT-FRESH` relay that says the executor may act.
+- `scripts/universe-filter.sh`: `--rank-top` defaults to `rules.yml`; on
+  `--emit-qualified-set` it also writes `universe-names.tsv`.
+- `scripts/sector-write.sh --batch DATE` (heredoc of `SYMBOL SECTOR`
+  lines; all-or-nothing validation).
+- `.claude/commands/sector-tag.md`, `.claude/agents/sector-tagger.md` (new);
+  `research.md` §Scheduled; `research-scout.md` server context;
+  `weekly-universe.md` §B.4 rewritten to the accepted invocation form.
+- `scripts/check-consistency.sh`: the crontab must carry `research` and
+  `sector-tag`, matching what their command files document.
+
+---
+
+## Earlier — 2026-09-02 overnight (kept for the record)
+
+### 1. What happened on 09-02, stated plainly (§7.3)
 
 **The server lost its Claude session from 15:17 to 17:10 ET.** Every job in
 that window failed in five seconds with `You've hit your session limit ·
@@ -30,7 +106,7 @@ normal all day.
 09:30–16:30 ET starves the server. Until the server has its own account,
 build sessions stay outside market hours.
 
-## 2. What I did tonight
+### 2. What I did on the night of 09-02
 
 - **Forced session close** at 23:46 ET → `status/2026-09-02.md`, pushed to
   the store. Close: account value $3,733.69, high-water mark $3,800.00
@@ -44,7 +120,7 @@ build sessions stay outside market hours.
 - **No `deploy.sh` run was needed**: the image is unchanged and supercronic
   already carries the scout and catalyst jobs (both fired today).
 
-## 3. Needs you
+### 3. Needs you
 
 1. **Token re-auth by the weekend.** The token was minted 2026-09-01 ~10:50
    ET. The watchdog warns Saturday, pages Sunday, and the account goes blind

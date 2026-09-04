@@ -17,6 +17,11 @@
 17 8  * * 1-5   /app/scripts/scheduled-run.sh preopen
 22 16 * * 1-5   /app/scripts/scheduled-run.sh postclose
 40 7  * * 6     /app/scripts/scheduled-run.sh weekly-universe
+# sector-tag classifies the sweep's qualified set into the three scout
+# sectors (research/sectors.tsv). Two hours behind the sweep it reads.
+# cohort.sh joins against that file; it was never written before 2026-09-05,
+# so every scout pass reported "cohort 0".
+40 9  * * 6     /app/scripts/scheduled-run.sh sector-tag
 
 # --- monitoring (tick.md §F) ---------------------------------------------
 # Every 15 minutes through the session, on the same off-the-herd minutes as
@@ -29,6 +34,15 @@
 # This is DETECTION ONLY. The sweep has no order tools, so a tripped watch is
 # relayed to Discord for a human to act on — it is not the live §E loop.
 2-59/15 9-15 * * 1-5   /app/scripts/scheduled-run.sh tick
+
+# --- intraday research (research.md §A/§C) ---------------------------------
+# The ONLY job that can promote a candidate to HOT: §C needs a quote stamped
+# inside regular hours, which neither deep run has. Hourly at :57 satisfies
+# §A.1's 45-minute cadence by construction and sits between the :47 tick and
+# the :07 execute — which is what acts on a HOT, after Chris's ✅. Absent from
+# this file until 2026-09-04; the executor idled through ten sessions of
+# "HOT — none" because nothing scheduled could write anything else.
+57 9-14 * * 1-5   /app/scripts/scheduled-run.sh research
 
 # --- information-edge research (design 2026-08-30) ------------------------
 # scout is calendar-driven: it works the earnings cohort 3-6 weeks ahead of a

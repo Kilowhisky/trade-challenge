@@ -61,20 +61,25 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.." || exit 2
 . scripts/lib-rules.sh
 load_rules || exit 7
 
-payloads=(); out=""; qualified=0; ranktop=0; emit_qset=0
+payloads=(); out=""; qualified=0; ranktop=0; emit_qset=0; ranktop_set=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --payload) shift; [ $# -gt 0 ] || { echo "universe-filter: --payload needs a path" >&2; exit 2; }; payloads+=("$1") ;;
     --out)     shift; [ $# -gt 0 ] || { echo "universe-filter: --out needs a path" >&2; exit 2; }; out="$1" ;;
     --qualified-only) qualified=1 ;;
     --emit-qualified-set) emit_qset=1 ;;
-    --rank-top) shift; [ $# -gt 0 ] || { echo "universe-filter: --rank-top needs a count" >&2; exit 2; }; ranktop="$1" ;;
+    --rank-top) shift; [ $# -gt 0 ] || { echo "universe-filter: --rank-top needs a count" >&2; exit 2; }; ranktop="$1"; ranktop_set=1 ;;
     *) echo "universe-filter: unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
 done
 [ "${#payloads[@]}" -gt 0 ] || { echo "universe-filter: at least one --payload is required" >&2; exit 2; }
 [ -n "$out" ] || { echo "universe-filter: --out is required" >&2; exit 2; }
+# --rank-top defaults to rules.yml's working_universe_size. The weekly sweep
+# used to read that number through `bash -c '. lib-rules.sh; ...'`, which the
+# container's permission gate refuses; the 2026-08-29 sweep improvised the
+# number by hand. The script already loads rules.yml, so the default belongs
+# here, and a caller that wants NO truncation says so with --rank-top 0.
 # An ungated pass has not applied the §1.4/§2 floors at all, so its rows are
 # not a qualified set. Writing them under that name would swap an ungated
 # universe in behind the scout's back — refuse rather than mislabel.
@@ -86,6 +91,10 @@ for p in "${payloads[@]}"; do
   [ -r "$p" ] || { echo "universe-filter: cannot read payload: $p" >&2; exit 2; }
 done
 
+if [ "$ranktop_set" -eq 0 ]; then
+  ranktop="$(rule_get strategy_working_universe_size)" || exit 7
+fi
+case "$ranktop" in *[!0-9]*|"") echo "universe-filter: --rank-top must be a whole number, got '$ranktop'" >&2; exit 2 ;; esac
 MIN_PRICE="$(rule_get manual_min_share_price_usd)"      || exit 7
 MIN_DOLLAR="$(rule_get manual_min_avg_daily_dollar_volume)" || exit 7
 MIN_SHARES="$(rule_get manual_min_avg_daily_volume)"    || exit 7
@@ -243,6 +252,7 @@ for path in paths:
             'optionable': 'true' if word(b, 'reference', 'optionable') == 'true' else 'false',
             'leverage': lev_raw / 100.0,
             'last_earnings': (word(b, 'fundamental', 'lastEarningsDate') or '')[:10],
+            'description': (word(b, 'reference', 'description') or '').strip(),
             'is_etf': 'true' if word(b, '', 'assetSubType') == 'ETF' else 'false',
             'range_pct': rng,
         })
@@ -295,6 +305,16 @@ if qualified and emit_qset:
     # regardless of the cwd the sweep was launched from.
     qpath = os.path.abspath(os.path.join(qdir, "universe-qualified.tsv"))
     write_tsv(qpath, rows)
+    # Company names for the SAME rows, in the same order. Schwab exposes no
+    # sector field, so the weekly sector tagger classifies by name; a bare
+    # ticker list would have it guessing. Kept out of the ten-column file so
+    # nothing that indexes it positionally (cohort.sh, the tests) moves.
+    npath = os.path.abspath(os.path.join(qdir, "universe-names.tsv"))
+    with open(npath, "w") as nf:
+        nf.write("symbol\tdescription\n")
+        for r in rows:
+            nf.write("%s\t%s\n" % (r['symbol'], r['description'].replace("\t", " ") or "-"))
+    sys.stderr.write("universe-filter: wrote %d name(s) to %s\n" % (len(rows), npath))
 
 rows.sort(key=lambda r: (r['gap'], -r['dollar_vol']))
 dropped = 0

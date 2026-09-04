@@ -418,6 +418,63 @@ You have no order tools and no Write/Edit. Output the canonical line, plus one
 ESCALATE: line per bar clear, and nothing else."
     ;;
 
+  research)
+    agent="research-scout"
+    # THE INTRADAY RESEARCH PASS — the only job that can promote a candidate
+    # to HOT. research.md §C requires a quote timestamped inside regular hours,
+    # which neither deep run can supply (preopen is barred from promotions,
+    # postclose quotes are post-close). Until 2026-09-04 this pass ran only when
+    # a laptop session chained it after /tick; the last one was 2026-08-18, and
+    # every execute pass since — 180 of them — correctly found nothing to enter
+    # from. Hourly at :57 satisfies §A.1's 45-minute cadence gate by
+    # construction; 14:57 is the last pass that leaves the executor two firings
+    # before its 15:30 entry cutoff.
+    window_open=$((9*60+45)); window_close=$((15*60+15))
+    days="1 2 3 4 5"
+    # Well under the hourly cadence: ~8 Schwab calls and ~4 web fetches.
+    job_timeout=1500
+    allowed="$common_tools $schwab_read mcp__schwab__get_movers Bash(scripts/research-write.sh:*) Bash(scripts/oi-append.sh:*) Bash(scripts/data-append.sh:*) Bash(scripts/latest-status.sh:*)"
+    prompt="Run /research for ${today}.
+
+You are the SCHEDULED, UNATTENDED intraday research pass, dispatched by the
+server scheduler with no parent session. Execute .claude/commands/research.md
+§B-§D exactly as written, in the research-scout role
+(.claude/agents/research-scout.md).
+
+§A is parent-side and there is no parent, so it is yours, in this order:
+- §A.1 cadence is satisfied by the schedule (this job fires hourly). Do NOT
+  skip on it, whatever the Last pass: stamp says.
+- §A.2: read the last row of status/ticks/${today}.tsv (tab-separated; the
+  sixth column is the drawdown level). If it reads HALT, or the account is
+  restricted or carries a cash call, output 'PASS skipped | halt' and stop.
+  If the file is missing, proceed — the 09:32 tick may not have run yet.
+- §A.3: if ALERT.md exists at the repo root, run the pass but emit NO
+  HOT-FRESH lines.
+
+The cached context a parent would hand you, you resolve yourself, read-only:
+scripts/latest-status.sh prints the path of the latest §7.2 status file — read
+it for held symbols, their sectors, account value, the high-water mark and
+settled cash; the tick ledger row above carries the live drawdown. You have
+no account tools, by design.
+
+**What happens next matters more than on a laptop.** The execute job fires
+every 15 minutes and reads research/candidates.md. A name you promote to HOT
+may be ENTERED at its next pass — after Chris's ✅ in Discord, under the full
+§4.9/§4.10 discipline, but from the checklist you wrote. So a HOT entry must
+carry the complete §C checklist line by line, the ATR-derived §3.4 stop
+geometry, the sleeve and size arithmetic against LIVE account value, and the
+quote timestamp. A WATCH name missing ATR or a ladder is not promotable; say
+what is missing instead. Zero HOT is a legitimate result — never lower a bar
+to produce one.
+
+Resolve date and time from get_datetime, never the machine clock. Stay under
+the §B call budget. You have roughly 20 minutes of wall clock.
+
+Return ONLY the lines .claude/agents/research-scout.md specifies: the PASS
+line, HOT-FRESH: lines for candidates newly verified HOT this pass, and
+FAIL: on failure. No narration."
+    ;;
+
   weekly-universe)
     agent="weekly-universe"
     window_open=$((6*60));  window_close=$((12*60))
@@ -437,6 +494,33 @@ written, and regenerate research/universe.md via scripts/research-replace.sh.
 
 §A.2 requires the market to be closed — confirm with get_market_hours before
 sweeping. Resolve the date from get_datetime, never the machine clock."
+    ;;
+
+  sector-tag)
+    agent="sector-tagger"
+    # Saturday 09:40 ET, two hours behind the 07:40 sweep that writes the
+    # universe-qualified.tsv and universe-names.tsv it classifies (a sweep
+    # takes ~20 minutes; the lock and the return line's 'names 0' cover a
+    # late one). Sunday allowed for a forced catch-up, like the sweep.
+    #
+    # Why this job exists: cohort.sh joins the qualified set against
+    # research/sectors.tsv, and nothing ever wrote that file. Every scout pass
+    # from 2026-09-01 reported 'cohort 0' — not because nothing reports in the
+    # window, but because the join had an empty right-hand side.
+    window_open=$((9*60)); window_close=$((13*60))
+    days="6 7"
+    # ~3,000 names read in chunks, classified, written in a handful of batches.
+    job_timeout=3000
+    allowed="Read Glob Grep ToolSearch WebSearch mcp__schwab__get_datetime Bash(scripts/sector-write.sh:*) Bash(scripts/cohort.sh:*)"
+    prompt="Run /sector-tag for ${today}.
+
+You are the scheduled weekend sector tagger, dispatched by the server
+scheduler. Execute .claude/commands/sector-tag.md §A-§D exactly as written.
+
+Resolve the date from get_datetime, never the machine clock. Write tags ONLY
+through scripts/sector-write.sh --batch, as heredocs — it is the one
+multi-line form the permission gate accepts, and one batch replaces hundreds
+of single calls."
     ;;
 
   *)
@@ -621,10 +705,20 @@ fi
 # until one opens anyway.
 hot="$(grep -E '^HOT-FRESH:' <<<"$output" || true)"
 if [ -n "$hot" ]; then
-  notify "📈 **$job $today** — deep-research surfaced HOT-FRESH candidates. Not a ping: no §E gate has run, and none can until a session opens.
+  if [ "$job" = "research" ]; then
+    # The scheduled research pass feeds the scheduled executor directly: the
+    # next execute firing (:07/:22/:37/:52) reads candidates.md and may open
+    # the entry workflow from this HOT — every order still blocks on ✅.
+    notify "📈 **RESEARCH — $today $(et '+%H:%M') ET** — a candidate was verified HOT with a live quote. **The executor may act on this at its next pass** (within 15 minutes, before the 15:30 entry cutoff); the order itself still waits for your ✅/❌ in this channel. React ❌ to decline.
 \`\`\`
 $hot
 \`\`\`"
+  else
+    notify "📈 **$job $today** — deep-research surfaced HOT-FRESH candidates. Not a ping: no §E gate has run, and none can until a session opens.
+\`\`\`
+$hot
+\`\`\`"
+  fi
 fi
 
 # --- relay a tripped watch ------------------------------------------------
@@ -683,7 +777,7 @@ if [ "$job" != "tick" ]; then
   first="$(head -1 <<<"$output")"
   if grep -qE '^FAIL\b' <<<"$first"; then
     notify "🚨 $first"
-  elif grep -qE '^(DEEP|UNIVERSE)' <<<"$first"; then
+  elif grep -qE '^(DEEP|UNIVERSE|SECTORS)' <<<"$first"; then
     notify "✅ $first"
   fi
 fi

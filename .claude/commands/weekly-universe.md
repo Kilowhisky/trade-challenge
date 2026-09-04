@@ -88,26 +88,29 @@ Fallback chain on a `FAIL:` about missing tools, same as tick.md/research.md
    (currently **500**<!--rule:strategy_working_universe_size-->) — never
    hard-coded; read it through `lib-rules.sh`:
 
-   **Run this through `bash -c`, not the bare shell.** `lib-rules.sh` uses
-   `${!name}` indirection, which zsh rejects with "bad substitution" — and
-   the session shell here is zsh. The 2026-08-18 first live run lost time to
-   exactly this. The scripts are correct; the invocation is the trap.
-
    ```bash
-   bash -c '
-     . scripts/lib-rules.sh && load_rules
-     N="$(rule_get strategy_working_universe_size)"
-     scripts/universe-filter.sh \
-       --payload PATH1 --payload PATH2 ... \
-       --qualified-only --emit-qualified-set --rank-top "$N" \
-       --out /tmp/universe-ranked.tsv
-   '
+   scripts/universe-filter.sh \
+     --payload PATH1 --payload PATH2 ... \
+     --qualified-only --emit-qualified-set \
+     --out /tmp/universe-ranked.tsv
    ```
 
-   `scripts/universe-filter.sh` guards itself the same way `pre-order-check.sh`
-   does — it refuses to run outside bash rather than failing obscurely — so a
-   direct call is safe; it is the `. scripts/lib-rules.sh` line above it that
-   needs the bash wrapper.
+   **No `bash -c`, no `lib-rules.sh` wrapper, no `--rank-top`.** The filter
+   reads `working_universe_size` from `rules.yml` itself when `--rank-top` is
+   omitted (added 2026-09-04). The earlier form wrapped the call in
+   `bash -c '. scripts/lib-rules.sh ...'`, which the container's permission
+   gate refuses; the 2026-08-29 sweep improvised the number by hand and, in
+   the same improvisation, **dropped `--emit-qualified-set`** — so no
+   qualified file was written and the scout had an empty universe for a week.
+   The bare call above is the only accepted form. Pass `--rank-top N` only to
+   override the rule deliberately, and say so in §D.
+
+   **Both flags are mandatory here.** Confirm on stderr, and record the two
+   counts in §D:
+   - `wrote N qualified symbol(s) to .../universe-qualified.tsv (untruncated)`
+   - `wrote N name(s) to .../universe-names.tsv`
+   A sweep that reports a ranked universe without those two lines has not
+   done its job for the scout, whatever `research/universe.md` looks like.
 
    **This one call now produces TWO files, for two tiers.**
 
@@ -119,6 +122,11 @@ Fallback chain on a `FAIL:` about missing tools, same as tick.md/research.md
      liquidity floors, untruncated, same ten columns. There is no separate
      write step and nothing to pipe; it needs no `research-replace.sh` because
      it is machine-read data, not a document.
+   - `research/universe-names.tsv` — written alongside it on the same flag:
+     `symbol`, `description`, the same rows in the same order. The Saturday
+     `/sector-tag` pass classifies by company name from this file (Schwab
+     exposes no sector field), and `cohort.sh` joins the result against the
+     qualified set. Without it the tagger would be guessing from tickers.
 
    **`--emit-qualified-set` belongs to THIS command and no other.** It is a
    second flag rather than a behaviour of `--qualified-only` because the daily

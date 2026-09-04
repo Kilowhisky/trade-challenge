@@ -176,6 +176,24 @@ if [ -f docker/crontab ]; then
   }
   check_slot preopen   "08:15" ".claude/commands/deep-research.md" "§Dispatch / §P"
   check_slot postclose "16:20" ".claude/commands/deep-research.md" "§Dispatch / §D"
+  check_slot sector-tag "09:40" ".claude/commands/sector-tag.md" "§Dispatch"
+
+  # research is RECURRING inside the session, like tick, but hourly. What must
+  # agree with research.md is that it is scheduled at all — the pass that
+  # promotes to HOT went unscheduled for two weeks while the executor idled —
+  # and the hour span the command file documents.
+  rline="$(grep -E 'scheduled-run\.sh[[:space:]]+research\b' docker/crontab | grep -vE '^[[:space:]]*#' | head -1)"
+  if [ -z "$rline" ]; then
+    bad "docker/crontab has no entry for 'research' — nothing can promote a candidate to HOT, so nothing can ever be entered"
+  else
+    rhours="$(awk '{print $2}' <<<"$rline")"; rmin="$(awk '{print $1}' <<<"$rline")"
+    if ! grep -qF "hourly at :$rmin" .claude/commands/research.md \
+       || ! grep -qF "hours $rhours" .claude/commands/research.md; then
+      bad "docker/crontab runs 'research' at :$rmin over hours $rhours but research.md §Scheduled documents something else"
+    else
+      sched=$((sched+1))
+    fi
+  fi
 
   # tick is a RECURRING slot, so the hour-match above does not apply: what must
   # agree with tick.md §F is the CADENCE. The baseline there is 15 minutes with

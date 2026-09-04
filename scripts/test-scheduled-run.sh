@@ -77,6 +77,29 @@ expect weekly-universe $((5*60+59)) 6 SKIP "before the window"
 expect weekly-universe $((12*60+1)) 6 SKIP "after the window"
 
 echo
+echo "== research (09:45-15:15 ET, weekdays) =="
+# The intraday pass is the ONLY writer of HOT. It went unscheduled for two weeks
+# (last pass 2026-08-18) while the executor reported EXEC none 180 times, so
+# this window is load-bearing: it must run through the session and stop early
+# enough that the executor can still act before its own 15:30 entry cutoff.
+expect research $((9*60+44))  3 SKIP "before the window — the 09:32 tick has not swept yet"
+expect research $((9*60+57))  3 RUN  "first scheduled pass"
+expect research $((12*60+57)) 3 RUN  "mid-session"
+expect research $((14*60+57)) 3 RUN  "last scheduled pass"
+expect research $((15*60+16)) 3 SKIP "too late for the executor to act before 15:30"
+expect research $((16*60+30)) 3 SKIP "after the close — postclose owns the POST pass (§A.4)"
+expect research $((12*60))    6 SKIP "Saturday"
+expect research $((12*60))    7 SKIP "Sunday"
+
+echo
+echo "== sector-tag (09:00-13:00 ET, weekend only) =="
+expect sector-tag $((9*60+40))  6 RUN  "Saturday at the fire time"
+expect sector-tag $((9*60+40))  7 RUN  "Sunday still allowed (forced catch-up)"
+expect sector-tag $((9*60+40))  2 SKIP "must never run on a session day"
+expect sector-tag $((8*60+59))  6 SKIP "before the window"
+expect sector-tag $((13*60+1))  6 SKIP "after the window"
+
+echo
 echo "== tick (09:30-16:00 ET, weekdays) =="
 # The monitoring loop became a scheduled service on 2026-08-26. Before that it
 # existed only inside a live session, so on every unattended day the resting
@@ -227,7 +250,8 @@ checked=0
 # tick matters most here: it is the only job that runs while the market is open,
 # and the one whose §E escalation would place orders if a live session ran it.
 for spec in "preopen $((8*60+30)) 2" "postclose $((16*60+30)) 2" "weekly-universe $((7*60+40)) 6" \
-            "tick $((12*60)) 3" "sessionclose $((16*60+5)) 2"; do
+            "tick $((12*60)) 3" "sessionclose $((16*60+5)) 2" "research $((12*60)) 3" \
+            "sector-tag $((9*60+40)) 6" "scout $((7*60+30)) 2" "catalyst $((18*60+30)) 2"; do
   set -- $spec; j="$1"; m="$2"; d="$3"
   rm -rf "$SCRATCH_CRON"
   TC_DRY_RUN=1 TC_NOW_ET_MIN="$m" TC_DOW="$d" ./scripts/scheduled-run.sh "$j" >/dev/null 2>&1
@@ -242,8 +266,8 @@ for spec in "preopen $((8*60+30)) 2" "postclose $((16*60+30)) 2" "weekly-univers
     order_leak=1
   fi
 done
-[ "$order_leak" -eq 0 ] && [ "$checked" -eq 5 ] \
-  && ok "no job allowlists place_previewed_order or cancel_order (5 of 5 dispatched and inspected)"
+[ "$order_leak" -eq 0 ] && [ "$checked" -eq 9 ] \
+  && ok "no job allowlists place_previewed_order or cancel_order (9 of 9 dispatched and inspected)"
 
 echo
 echo "== execute is the ONE job that carries order tools =="
@@ -334,6 +358,8 @@ contract_for() {
     execute)            echo .claude/agents/trader.md ;;
     scout)              echo .claude/commands/scout.md ;;
     catalyst)           echo .claude/commands/catalyst.md ;;
+    research)           echo .claude/commands/research.md ;;
+    sector-tag)         echo .claude/commands/sector-tag.md ;;
     *)                  echo "" ;;
   esac
 }
@@ -343,7 +369,8 @@ inspected=0
 for spec in "preopen $((8*60+30)) 2" "postclose $((16*60+30)) 2" \
             "weekly-universe $((7*60+40)) 6" "tick $((12*60)) 3" "execute $((12*60)) 3" \
             "sessionclose $((16*60+5)) 2" "scout $((7*60+30)) 2" \
-            "catalyst $((18*60+30)) 2"; do
+            "catalyst $((18*60+30)) 2" "research $((12*60)) 3" \
+            "sector-tag $((9*60+40)) 6"; do
   set -- $spec; j="$1"; m="$2"; d="$3"
   # execute dispatches an agent, not a command file; its contract is the
   # agent definition instead.
@@ -371,9 +398,9 @@ for spec in "preopen $((8*60+30)) 2" "postclose $((16*60+30)) 2" \
     fi
   done
 done
-[ "$missing" -eq 0 ] && [ "$inspected" -eq 8 ] \
+[ "$missing" -eq 0 ] && [ "$inspected" -eq 10 ] \
   && ok "all 8 job allowlists cover every script their contract file invokes" \
-  || bad "allowlist coverage: inspected $inspected of 8 jobs, missing=$missing"
+  || bad "allowlist coverage: inspected $inspected of 10 jobs, missing=$missing"
 
 # == verdict classification (content-level failure) ========================
 # rc=0 means "claude ran", NOT "the job did its work". Every dispatch prompt
@@ -468,8 +495,10 @@ grep -q 'get_accounts' <<<"$b2" \
 echo
 echo "== every script-granted job states the bare-relative rule =="
 
-for j in preopen postclose execute tick sessionclose weekly-universe scout catalyst; do
+for j in preopen postclose execute tick sessionclose weekly-universe scout catalyst research sector-tag; do
   case "$j" in
+    research)        min=720; dow=3 ;;
+    sector-tag)      min=580; dow=6 ;;
     preopen)         min=500; dow=3 ;;
     postclose)       min=982; dow=3 ;;
     execute)         min=600; dow=3 ;;
