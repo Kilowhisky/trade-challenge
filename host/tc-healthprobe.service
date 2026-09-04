@@ -1,0 +1,13 @@
+[Unit]
+Description=tc host health probe (spec §7 layer 2, outside docker)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Optional -- the '-' means a missing file is not a failure. PROBE_WEBHOOK
+# lives here, never baked into the unit or the repo (CLAUDE.md §7.4: this
+# repo is public).
+EnvironmentFile=-/etc/tc/probe.env
+Environment=PROBE_STATE_DIR=/var/lib/tc
+ExecStart=/usr/bin/python3 /opt/tc/host/healthprobe.py

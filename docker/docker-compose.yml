@@ -236,6 +236,26 @@ services:
     volumes:
       - schwab-token:/home/trader/.local/share/schwab-mcp
 
+  # --- v3 engine: Phase 0 shadow, running alongside the old stack ----------
+  # Binds 127.0.0.1:8080 only (network_mode: host); tailscale serve fronts it
+  # for Chris's phone (the /oauth/callback landing page). Coexists with
+  # broker/scheduler/claude above until Phase 3 — it reads and writes its own
+  # state independently and nothing above depends on it yet.
+  engine:
+    build: {context: .., dockerfile: docker/Dockerfile.engine}
+    image: ${TC_ENGINE_IMAGE:-ghcr.io/kilowhisky/trade-challenge-engine:latest}
+    container_name: tc-engine
+    restart: unless-stopped
+    environment: {TZ: America/New_York}
+    env_file: [/srv/tc/.env]
+    volumes:
+      - ..:/app/repo:ro
+      - /srv/tc/data:/data
+      - /srv/tc/.env:/srv/tc/.env:ro
+    network_mode: host
+    mem_limit: 512m
+    oom_score_adj: 300
+
 volumes:
   schwab-token:
   claude-home:

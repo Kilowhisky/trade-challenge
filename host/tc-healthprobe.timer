@@ -1,0 +1,10 @@
+[Unit]
+Description=Run tc-healthprobe every 2 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+Unit=tc-healthprobe.service
+
+[Install]
+WantedBy=timers.target
