@@ -39,17 +39,23 @@ fi
 # have told this watchdog the morning's jobs were fine while nothing had run.
 # The entries are tagged; ignore them here so a rehearsal can never stand in for
 # a real fire.
+# -a on every grep: a hard reset on 2026-08-31 left 315 NUL bytes in this
+# file, GNU grep then classed it as BINARY and printed nothing on stdout (the
+# "binary file matches" notice goes to stderr, which the 2>/dev/null below
+# swallowed), and this script reported every job as "never fired" for four
+# mornings while all of them had run. A watchdog that cries wolf daily is
+# worse than none. -a reads the file as text regardless.
 verdict_for() { # job date
-  grep "\"job\":\"$1\"" "$heartbeat" 2>/dev/null \
-    | grep "\"started\":\"$2" \
-    | grep -v '"dry_run":true' \
+  grep -a "\"job\":\"$1\"" "$heartbeat" 2>/dev/null \
+    | grep -a "\"started\":\"$2" \
+    | grep -av '"dry_run":true' \
     | tail -1 \
     | sed -n 's/.*"verdict":"\([a-z]*\)".*/\1/p'
 }
 detail_for() {   # same dry-run exclusion as verdict_for, or the two disagree
-  grep "\"job\":\"$1\"" "$heartbeat" 2>/dev/null \
-    | grep "\"started\":\"$2" \
-    | grep -v '"dry_run":true' | tail -1 \
+  grep -a "\"job\":\"$1\"" "$heartbeat" 2>/dev/null \
+    | grep -a "\"started\":\"$2" \
+    | grep -av '"dry_run":true' | tail -1 \
     | sed -n 's/.*"detail":"\([^"]*\)".*/\1/p'
 }
 
