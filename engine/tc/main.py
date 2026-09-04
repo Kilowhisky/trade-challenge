@@ -258,9 +258,7 @@ class Engine:
             # Skipped, not queued: the previous run is still sweeping, and a
             # second sweep behind it would report a moment that has passed.
             log.warning("%s still running; skipping the fire at %s", fire.job, fire.at)
-            await self._record(
-                fire.job, fire.at, self._clock(), "noop", {"skipped": "lock held"}
-            )
+            await self._record_fire(fire, self._clock(), "noop", {"skipped": "lock held"})
             return "noop"
         async with lock:
             return await self._dispatch(fire)
@@ -277,13 +275,32 @@ class Engine:
             # carry a URL, a token fragment or an account number.
             name = type(e).__name__
             log.exception("job %s failed", fire.job)
-            await self._record(fire.job, started, self._clock(), "failed", {"error": name})
+            await self._record_fire(fire, started, "failed", {"error": name})
             await self._pinger.fail(fire.job, "failed")
             await self.notifier.post(f"⚠️ {fire.job} failed: {name}")
             return "failed"
-        await self._record(fire.job, started, self._clock(), verdict, detail)
+        await self._record_fire(fire, started, verdict, detail)
         await self._pinger.ok(fire.job, verdict)
         return verdict
+
+    async def _record_fire(
+        self, fire: Fire, dispatched: datetime, verdict: Verdict, detail: dict[str, Any]
+    ) -> None:
+        """`started_at` is the SCHEDULED time, not the dispatch instant.
+
+        The fire is the ledger's identity: it is what `mark_missed` names on
+        the next restart, and it is the only key on which "this fire already
+        ran" can be answered. Keying on the dispatch instant instead made
+        `job_run_exists` unable to match any genuinely completed run, so every
+        restart re-recorded a finished day as missed. The real clock times are
+        kept — `ended_at` in its column, `dispatched_at` in the detail — so
+        the run's actual duration and lateness are still on the record.
+        """
+        ended = self._clock()
+        await self._record(
+            fire.job, fire.at, ended, verdict,
+            {**detail, "dispatched_at": dispatched.isoformat(), "ended_at": ended.isoformat()},
+        )
 
     async def _execute(self, job: str, now: datetime) -> tuple[Verdict, dict[str, Any]]:
         if job == "tick":

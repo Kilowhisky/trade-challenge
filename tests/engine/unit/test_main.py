@@ -326,7 +326,7 @@ async def test_a_broker_error_is_one_failed_row_and_one_discord_line(
         "SELECT verdict, detail_json FROM job_runs WHERE job='tick'"
     )
     assert [r["verdict"] for r in rows] == ["failed"]
-    assert json.loads(rows[0]["detail_json"]) == {"error": "BrokerError"}
+    assert json.loads(rows[0]["detail_json"])["error"] == "BrokerError"
     assert notifier.posts == ["⚠️ tick failed: BrokerError"]
     await eng.stop()
 
@@ -511,21 +511,58 @@ async def test_a_restart_does_not_bury_a_finished_day_in_missed_rows(
     tmp_path: Path, store: Store, client: httpx.AsyncClient
 ) -> None:
     """A restarted engine re-enumerates the whole day. The 09:32 sweep the
-    previous process ran is already in the ledger, and a `missed` row on top
-    of it would claim the day never happened."""
+    *previous process* ran is already in the ledger, and a `missed` row on top
+    of it would claim the day never happened.
+
+    The first engine really dispatches that fire — hand-inserting the row
+    would test the lookup against a key nothing in production writes.
+    """
     s = _settings(tmp_path)
     await _seed(store)
-    await store.record_job_run("tick", et(9, 32), et(9, 33), "done", {})
-    eng = _engine(s, store, FakeBroker(_fx(tmp_path), NOW), Clock(et(10, 20)), RecordingNotifier(client), client)
-    await eng.start()
+    # 09:32:07 — the loop wakes on a 1 s tick, so a real dispatch is never
+    # exactly on the scheduled second. Keying the row on the dispatch instant
+    # is precisely what those seven seconds used to break.
+    first = _engine(s, store, FakeBroker(_fx(tmp_path), NOW), Clock(et(9, 32).replace(second=7)), RecordingNotifier(client), client)
+    await first.start()
+    await asyncio.wait_for(first.run_for(1), 5)
+    await first.stop()
 
-    await asyncio.wait_for(eng.run_for(1), 5)
+    # A new process on the same store, started an hour later.
+    second = _engine(s, store, FakeBroker(_fx(tmp_path), NOW), Clock(et(10, 20)), RecordingNotifier(client), client)
+    await second.start()
+    await asyncio.wait_for(second.run_for(1), 5)
 
     runs = await _job_runs(store, "tick")
     assert [v for _, v, _ in runs] == ["done", "missed", "missed", "missed"]
     assert [datetime.fromisoformat(a).astimezone(ET).strftime("%H:%M") for _, v, a in runs] == [
         "09:32", "09:47", "10:02", "10:17",
     ]
+    assert len(await store.ticks_for("2026-09-04")) == 1  # not swept a second time
+    await second.stop()
+
+
+async def test_a_job_run_is_keyed_on_the_fire_not_the_dispatch_instant(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    """`started_at` is the scheduled time — the only key on which "this fire
+    already ran" can be answered across a restart. The real clock times ride
+    in `ended_at` and the detail, so lateness is still on the record."""
+    s = _settings(tmp_path)
+    await _seed(store)
+    late = et(9, 32).replace(second=41)  # a wake-up inside the scheduler's grace
+    eng = _engine(s, store, FakeBroker(_fx(tmp_path), NOW), Clock(late), RecordingNotifier(client), client)
+    await eng.start()
+
+    await asyncio.wait_for(eng.run_for(1), 5)
+
+    row = await store.fetchone(
+        "SELECT started_at, ended_at, detail_json FROM job_runs WHERE job='tick'"
+    )
+    assert row is not None
+    assert datetime.fromisoformat(row["started_at"]) == et(9, 32)
+    assert datetime.fromisoformat(row["ended_at"]) == late
+    assert json.loads(row["detail_json"])["dispatched_at"] == late.isoformat()
+    assert await store.job_run_exists("tick", et(9, 32)) is True
     await eng.stop()
 
 
