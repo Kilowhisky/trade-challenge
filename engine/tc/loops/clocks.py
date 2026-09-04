@@ -53,6 +53,18 @@ class OptionRef(BaseModel):
     strike: Decimal
 
 
+# Most urgent first. A `*_close` is a forced action today; a `*_warn` is
+# notice. Within a tier §3.3 outranks §3.5: missing the DTE close means an OCC
+# auto-exercise and a cash call, missing the hold limit means one more day of
+# decay. One position reports one alert, so this is the tie-break.
+_ALERT_PRECEDENCE = {
+    "option_close": 0,
+    "leveraged_close": 1,
+    "option_warn": 2,
+    "leveraged_warn": 3,
+}
+
+
 class ClockAlert(BaseModel):
     model_config = ConfigDict(extra="forbid")
     symbol: str
@@ -93,14 +105,20 @@ async def run_clocks(
     trading_days_between: Callable[[date, date], int],
     leveraged: frozenset[str] | set[str],
 ) -> list[ClockAlert]:
-    """One alert per position at most; a `*_close` always wins over the
-    matching `*_warn` (checked first, `elif` below).
+    """One alert per position at most.
 
-    An option position (OSI symbol parses) is checked against §3.3's DTE
-    clock and never against the §3.5 leveraged clock, even if its underlying
-    is in `leveraged` — options on leveraged ETFs are §3.5's explicit
-    carve-in, but wiring that up is left to the caller that owns the
-    per-underlying premium accounting, not this module.
+    A position can be on both clocks at once: §3.5 says its limits "also apply
+    to options on leveraged ETFs", so an option whose symbol the caller has
+    declared leveraged is checked against §3.3's DTE clock *and* the §3.5 hold
+    clock. Only the most urgent result is reported, ranked by
+    ``_ALERT_PRECEDENCE`` — every `*_close` outranks every `*_warn`, and within
+    a tier the option clock outranks the hold clock, because §3.3's deadline is
+    an OCC auto-exercise (a cash call) while §3.5's is a decay limit.
+
+    `leveraged` is matched against the position symbol as given, never against
+    a parsed OSI underlying: mapping an option to its underlying is the
+    caller's job (it owns the per-underlying accounting), and this module only
+    consumes the set it is handed.
     """
     close_dte = rules.option_close_at_dte
     warn_dte = close_dte + OPTION_WARN_DAYS_BEFORE_CLOSE
@@ -109,42 +127,48 @@ async def run_clocks(
 
     alerts: list[ClockAlert] = []
     for p in positions:
+        firing: list[ClockAlert] = []
+
         ref = parse_osi(p.symbol)
         if ref is not None:
             d = dte(ref.expiry, today)
             if d <= close_dte:
-                alerts.append(
+                firing.append(
                     ClockAlert(
                         symbol=p.symbol, kind="option_close",
                         detail=f"{d} DTE (close at {close_dte})",
                     )
                 )
             elif d <= warn_dte:
-                alerts.append(
+                firing.append(
                     ClockAlert(
                         symbol=p.symbol, kind="option_warn",
                         detail=f"{d} DTE (warn at {warn_dte}, close at {close_dte})",
                     )
                 )
-            continue
 
-        if p.symbol not in leveraged:
-            continue
-        first_seen = await store.first_seen(p.symbol)
-        first_date = first_seen.astimezone(ET).date() if first_seen is not None else today
-        sessions_held = trading_days_between(first_date, today) + 1
-        if sessions_held >= max_hold:
-            alerts.append(
-                ClockAlert(
-                    symbol=p.symbol, kind="leveraged_close",
-                    detail=f"held {sessions_held} sessions (max {max_hold})",
+        if p.symbol in leveraged:
+            first_seen = await store.first_seen(p.symbol)
+            first_date = first_seen.astimezone(ET).date() if first_seen is not None else today
+            sessions_held = trading_days_between(first_date, today) + 1
+            if sessions_held >= max_hold:
+                firing.append(
+                    ClockAlert(
+                        symbol=p.symbol, kind="leveraged_close",
+                        detail=f"held {sessions_held} sessions (max {max_hold})",
+                    )
                 )
-            )
-        elif sessions_held >= warn_hold:
-            alerts.append(
-                ClockAlert(
-                    symbol=p.symbol, kind="leveraged_warn",
-                    detail=f"held {sessions_held} sessions (warn at {warn_hold}, max {max_hold})",
+            elif sessions_held >= warn_hold:
+                firing.append(
+                    ClockAlert(
+                        symbol=p.symbol, kind="leveraged_warn",
+                        detail=(
+                            f"held {sessions_held} sessions "
+                            f"(warn at {warn_hold}, max {max_hold})"
+                        ),
+                    )
                 )
-            )
+
+        if firing:
+            alerts.append(min(firing, key=lambda a: _ALERT_PRECEDENCE[a.kind]))
     return alerts

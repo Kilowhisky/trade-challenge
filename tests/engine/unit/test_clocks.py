@@ -196,3 +196,44 @@ async def test_position_gets_at_most_one_alert_close_wins(store: Store) -> None:
         store, RULES, [_equity("TQQQ")], TODAY, _weekdays_between, frozenset({"TQQQ"})
     )
     assert [a.kind for a in alerts] == ["leveraged_close"]
+
+
+# --- options on leveraged ETFs (§3.5's explicit carve-in) --------------------
+
+async def test_option_on_a_leveraged_etf_gets_the_hold_clock_too(store: Store) -> None:
+    """§3.5: the leveraged limits "also apply to options on leveraged ETFs",
+    which are otherwise neither a leveraged ETF position nor covered by the
+    hold limit. The caller maps the OSI underlying and declares the option
+    symbol itself leveraged; here the DTE is comfortable, so the §3.5 hold
+    clock is the one that fires — and before this it fired for nothing,
+    because an OSI position never reached the leveraged branch."""
+    max_hold = RULES.leveraged_max_hold_sessions
+    far = RULES.option_close_at_dte + OPTION_WARN_DAYS_BEFORE_CLOSE + 30
+    sym = _osi("TQQQ", TODAY + timedelta(days=far), "C", D("60.000"))
+    first = date(2026, 8, 31)
+    assert _weekdays_between(first, TODAY) + 1 == max_hold
+    await store.record_account(_account(sym, first))
+    alerts = await run_clocks(
+        store, RULES, [_option(sym)], TODAY, _weekdays_between, frozenset({sym})
+    )
+    assert alerts == [
+        ClockAlert(symbol=sym, kind="leveraged_close",
+                   detail=f"held {max_hold} sessions (max {max_hold})")
+    ]
+
+
+async def test_option_on_a_leveraged_etf_still_gets_at_most_one_alert(store: Store) -> None:
+    """Both clocks firing on one position: still one alert, and a `*_close`
+    beats a warn. The DTE close and the hold warn overlap here — §3.3's
+    5-DTE close is the harder deadline (an OCC auto-exercise, not a decay
+    limit), so it is the one reported."""
+    close_dte = RULES.option_close_at_dte
+    warn_hold = RULES.leveraged_max_hold_sessions - LEVERAGED_WARN_SESSIONS_BEFORE_CLOSE
+    sym = _osi("TQQQ", TODAY + timedelta(days=close_dte), "C", D("60.000"))
+    first = date(2026, 9, 2)
+    assert _weekdays_between(first, TODAY) + 1 == warn_hold
+    await store.record_account(_account(sym, first))
+    alerts = await run_clocks(
+        store, RULES, [_option(sym)], TODAY, _weekdays_between, frozenset({sym})
+    )
+    assert [a.kind for a in alerts] == ["option_close"]

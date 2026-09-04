@@ -203,12 +203,11 @@ def _leveraged_effective(symbols: Sequence[str], leveraged: set[str]) -> set[str
     leveraged ETFs". An option whose OSI underlying is a declared leveraged
     symbol is therefore passed to the clocks as leveraged itself.
 
-    NOTE: `run_clocks` currently `continue`s after handling any position whose
-    symbol parses as OSI, so this set membership has no effect on an option
-    today — the §3.5 *hold* clock for options on leveraged ETFs is not yet
-    implemented (Task 5 left it to the caller that owns per-underlying
-    accounting). Computing it here keeps the caller's half of the contract and
-    makes the gap a one-line change in clocks.py rather than a missing input.
+    The mapping lives here rather than in `run_clocks` because it needs the
+    caller's declared universe: `clocks.py` matches `leveraged` against the
+    position symbol exactly as given and never parses an underlying out of it.
+    An option that lands in this set gets both clocks, with `run_clocks`
+    reporting whichever is more urgent.
     """
     out = set(leveraged)
     for s in symbols:

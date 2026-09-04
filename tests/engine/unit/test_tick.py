@@ -398,3 +398,37 @@ def test_evaluate_watches_skips_drawdown_when_the_mark_is_unseeded() -> None:
     """hwm 0 is "not recorded", not "a mark of zero" — testing against it
     would halt every tick on an account that has never closed a session."""
     assert evaluate_watches(_view(), {}, D("0"), RULES, RESERVE, []) == []
+
+
+async def test_option_on_a_leveraged_underlying_reaches_the_hold_clock(
+    store: Store, tmp_path: Path
+) -> None:
+    """End-to-end for the §3.5 carve-in: the caller declares TQQQ leveraged,
+    the book holds a TQQQ *option*, and run_tick maps the OSI underlying so
+    the hold clock sees the position at all."""
+    sym = "TQQQ  270115C00060000"  # far-dated: the DTE clock is silent
+    payload = json.loads((FIX / "account.json").read_text())
+    pos = payload["securitiesAccount"]["positions"][0]
+    pos["instrument"] = {"symbol": sym, "assetType": "OPTION"}
+    quotes = json.loads((FIX / "quotes.json").read_text())
+    quotes[sym] = quotes.pop("AMH")
+    d = _fx(tmp_path, {"account.json": json.dumps(payload), "orders.json": "[]",
+                       "quotes.json": json.dumps(quotes)})
+    await _seed(store)
+    await store.record_account(
+        AccountSnapshot(
+            account_hash="HASH_REDACTED",
+            read_at=datetime(2026, 8, 24, 16, 0, tzinfo=UTC),
+            liquidation_value=D("3781.06"), cash_available_for_trading=D("2393.57"),
+            unsettled_cash=D("0"), cash_balance=D("2393.57"), cash_call=D("0"),
+            is_closing_only_restricted=False,
+            positions=[
+                Position(symbol=sym, asset_type="OPTION", quantity=1,
+                         average_price=D("3.00"), market_value=D("300.00"),
+                         day_pl=D("0"), settled_quantity=1),
+            ],
+        )
+    )
+    res = await _tick(store, FakeBroker(d, NOW), window=await _window(), leveraged={"TQQQ"})
+    assert [t.name for t in res.trips if t.watch == 7] == ["leveraged_close"]
+    assert "K" in res.row.flags
