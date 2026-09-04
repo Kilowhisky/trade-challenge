@@ -277,6 +277,18 @@ class Store:
         )
         return {r["symbol"]: int(r["quantity"]) for r in rows}
 
+    async def first_seen(self, symbol: str) -> datetime | None:
+        """``read_at`` of the earliest account snapshot that carried `symbol`
+        — the §3.5 leveraged-ETF clock's entry point for a position's hold
+        count (tc.loops.clocks.run_clocks)."""
+        row = await self.fetchone(
+            "SELECT a.read_at FROM position_snapshots p"
+            " JOIN account_snapshots a ON a.id = p.snapshot_id"
+            " WHERE p.symbol = ? ORDER BY a.id LIMIT 1",
+            (symbol,),
+        )
+        return None if row is None else datetime.fromisoformat(row["read_at"])
+
     async def record_job_run(
         self,
         job: str,
