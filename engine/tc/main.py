@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
 import logging
 import os
 import signal
@@ -106,8 +107,13 @@ class Engine:
         self._rules = Rules.load(settings.engine.repo_dir / "rules.yml")
         self._leveraged = set(settings.engine.leveraged_symbols)
         self._window: MarketWindow | None = None
+        # A fallback window is a guess (every weekday trades, 09:30-16:00). It
+        # is held only until the broker will answer: an early close read as a
+        # full session would have session_close and the §3.3/§3.5 clocks
+        # working from a calendar the market does not share.
+        self._window_is_fallback = False
         self._account_hash: str | None = None
-        self._tasks: set[asyncio.Task[None]] = set()
+        self._tasks: set[asyncio.Task[Verdict | None]] = set()
         self._stopping = False
         self.notifier = notifier
         self.scheduler = Scheduler({}, self._trading_day)
@@ -138,8 +144,7 @@ class Engine:
         if unknown:
             raise ValueError(f"schedule names jobs that do not exist: {', '.join(unknown)}")
         await self._open_broker()
-        today = self._et(self._clock()).date()
-        self._window = await self._load_window(today)
+        await self._refresh_window(self._et(self._clock()).date())
         self._account_hash = await self._resolve_hash()
 
     async def stop(self) -> None:
@@ -149,8 +154,12 @@ class Engine:
             t.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        await self._close_broker()
-        await self._store.close()
+        try:
+            await self._close_broker()
+        finally:
+            # The store is the ledger: a broker that will not close cleanly
+            # must not cost us the WAL checkpoint on the way out.
+            await self._store.close()
 
     async def run_forever(self) -> None:
         await self.run_for(None)
@@ -178,48 +187,85 @@ class Engine:
         if iterations is not None:
             await self._drain()
 
-    async def run_job(self, job: str, at: datetime | None = None) -> None:
-        """One job, now, outside the schedule — `tc run --once` and tests."""
+    async def run_job(self, job: str, at: datetime | None = None) -> Verdict:
+        """One job, now, outside the schedule — `tc run --once` and tests.
+        Returns the recorded verdict so a caller can exit non-zero on
+        `failed`."""
         if job not in JOBS:
             raise ValueError(f"unknown job {job!r} (one of {', '.join(JOBS)})")
-        await self._dispatch(Fire(job, at or self._clock()))
+        return await self._dispatch(Fire(job, at or self._clock()))
 
     # --- the loop ----------------------------------------------------------
 
     async def _pass(self, now: datetime) -> None:
         today = self._et(now).date()
         if self._window is None or self._window.date != today:
-            self._window = await self._load_window(today)
+            await self._refresh_window(today)
             self.scheduler.prune(today)
+        elif self._window_is_fallback:
+            # One retry per pass until the real calendar answers, then never
+            # again for this day.
+            await self._refresh_window(today)
         for fire in self.scheduler.mark_missed(now):
+            # A restart re-enumerates the whole day, so most of what this
+            # process "missed" was run by the process before it. Recording a
+            # `missed` row over a `done` one would turn every restart into a
+            # ledger claiming the day never happened.
+            if await self._store.job_run_exists(fire.job, fire.at):
+                continue
             log.warning("missed %s scheduled for %s", fire.job, fire.at)
             await self._store.record_job_run(fire.job, fire.at, fire.at, "missed", {})
         for fire in self.scheduler.due(now):
             self._spawn(self._run_fire(fire))
 
-    def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
-        task: asyncio.Task[None] = asyncio.create_task(coro)
+    def _spawn(self, coro: Coroutine[Any, Any, Verdict | None]) -> None:
+        task: asyncio.Task[Verdict | None] = asyncio.create_task(coro)
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(self._task_finished)
+
+    def _task_finished(self, task: asyncio.Task[Verdict | None]) -> None:
+        """Nothing awaits a fire task, so without this an exception escaping
+        `_run_fire` itself would surface only as asyncio's "exception was
+        never retrieved" at garbage-collection time, hours later and
+        attributed to nothing."""
+        self._tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("fire task ended in an unhandled %s", type(exc).__name__, exc_info=exc)
 
     async def _drain(self) -> None:
         while self._tasks:
             await asyncio.gather(*list(self._tasks), return_exceptions=True)
 
-    async def _run_fire(self, fire: Fire) -> None:
+    async def _record(
+        self, job: str, started: datetime, ended: datetime, verdict: Verdict,
+        detail: dict[str, Any],
+    ) -> None:
+        """The ledger write, which must never be the thing that takes a job
+        down. A store that will not accept the row is a real failure — but it
+        is one the health check and the deadman report, not one worth losing
+        the sweep that already happened over."""
+        try:
+            await self._store.record_job_run(job, started, ended, verdict, detail)
+        except Exception:
+            log.exception("recording %s as %s failed", job, verdict)
+
+    async def _run_fire(self, fire: Fire) -> Verdict:
         lock = self.scheduler.lock(fire.job)
         if lock.locked():
             # Skipped, not queued: the previous run is still sweeping, and a
             # second sweep behind it would report a moment that has passed.
             log.warning("%s still running; skipping the fire at %s", fire.job, fire.at)
-            await self._store.record_job_run(
+            await self._record(
                 fire.job, fire.at, self._clock(), "noop", {"skipped": "lock held"}
             )
-            return
+            return "noop"
         async with lock:
-            await self._dispatch(fire)
+            return await self._dispatch(fire)
 
-    async def _dispatch(self, fire: Fire) -> None:
+    async def _dispatch(self, fire: Fire) -> Verdict:
         started = self._clock()
         await self._pinger.start(fire.job)
         try:
@@ -231,14 +277,13 @@ class Engine:
             # carry a URL, a token fragment or an account number.
             name = type(e).__name__
             log.exception("job %s failed", fire.job)
-            await self._store.record_job_run(
-                fire.job, started, self._clock(), "failed", {"error": name}
-            )
+            await self._record(fire.job, started, self._clock(), "failed", {"error": name})
             await self._pinger.fail(fire.job, "failed")
             await self.notifier.post(f"⚠️ {fire.job} failed: {name}")
-            return
-        await self._store.record_job_run(fire.job, started, self._clock(), verdict, detail)
+            return "failed"
+        await self._record(fire.job, started, self._clock(), verdict, detail)
         await self._pinger.ok(fire.job, verdict)
+        return verdict
 
     async def _execute(self, job: str, now: datetime) -> tuple[Verdict, dict[str, Any]]:
         if job == "tick":
@@ -339,6 +384,15 @@ class Engine:
 
     # --- broker/window helpers ---------------------------------------------
 
+    @property
+    def window(self) -> MarketWindow | None:
+        """Today's market window as the engine currently understands it."""
+        return self._window
+
+    @property
+    def window_is_fallback(self) -> bool:
+        return self._window_is_fallback
+
     def _et(self, dt: datetime) -> datetime:
         return dt.astimezone(ET)
 
@@ -351,9 +405,14 @@ class Engine:
             return w.is_trading_day
         return fallback_window(d).is_trading_day
 
-    async def _load_window(self, d: date) -> MarketWindow:
+    async def _refresh_window(self, d: date) -> None:
+        """The broker's calendar if it will answer, the weekday guess if it
+        will not — and the guess is retried on the next pass, because a
+        transient failure at 04:00 should not leave the whole session running
+        on an assumed holiday calendar."""
         try:
-            return await self._broker.market_window(d)
+            self._window = await self._broker.market_window(d)
+            self._window_is_fallback = False
         except (BrokerError, OSError) as e:
             # OSError covers the fixture broker in paper mode reading a day it
             # has no hours file for. Either way: no calendar, so assume the
@@ -361,7 +420,8 @@ class Engine:
             log.warning(
                 "market_window(%s) failed (%s); using the fallback window", d, type(e).__name__
             )
-            return fallback_window(d)
+            self._window = fallback_window(d)
+            self._window_is_fallback = True
 
     async def _resolve_hash(self) -> str | None:
         try:
@@ -414,17 +474,33 @@ def _prune_backups(directory: Path, keep: int) -> list[str]:
 # --- wiring -----------------------------------------------------------------
 
 
+def _is_loopback(host: str) -> bool:
+    """An allowlist, not a denylist. `127.0.0.0/8`, `::1` and the literal
+    `localhost` are the whole of it: a denylist naming the obvious offenders
+    would still have accepted a LAN address, which is the case that actually
+    exposes the callback."""
+    h = host.strip("[]")
+    if h == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(h).is_loopback
+    except ValueError:
+        # A hostname the engine cannot prove is loopback. Resolving it would
+        # make the answer depend on DNS at startup; refusing is the safe half.
+        return False
+
+
 def check_bind(bind: str) -> tuple[str, int]:
     """`host:port`, loopback only.
 
     The HTTP surface carries `/oauth/callback`, which installs a Schwab token
     from whatever hits it. It is reached over Tailscale, never over the LAN,
-    so binding every interface is refused here rather than left to a firewall.
+    so anything but loopback is refused here rather than left to a firewall.
     """
     host, sep, port = bind.rpartition(":")
     if not sep or not host or not port.isdigit():
         raise ValueError(f"engine.http_bind must be host:port, got {bind!r}")
-    if host.strip("[]") == "0.0.0.0":  # noqa: S104 -- refusing the literal, not binding it
+    if not _is_loopback(host):
         raise ValueError("engine must bind loopback")
     return host, int(port)
 
@@ -542,7 +618,10 @@ async def run_once(settings: Settings, job: str) -> int:
         engine = build_engine(settings, broker=broker, clock=_now, client=client)
         await engine.start()
         try:
-            await engine.run_job(job)
+            verdict = await engine.run_job(job)
         finally:
             await engine.stop()
-    return 0
+    # The operator smoke test is only a smoke test if a failed job fails the
+    # command: `tc run --once tick` in a deploy script must not print a
+    # traceback into the log and then exit 0.
+    return 1 if verdict == "failed" else 0

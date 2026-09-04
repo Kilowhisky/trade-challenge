@@ -345,6 +345,20 @@ class Store:
         async with self._lock:
             await self._c().execute("VACUUM INTO ?", (str(path),))
 
+    async def job_run_exists(self, job: str, started: datetime) -> bool:
+        """Is this exact fire already in the ledger, with any verdict?
+
+        A restarted engine re-enumerates the whole trading day, so most of
+        what its scheduler reports as "missed" was actually run — by the
+        process before it. Recording a `missed` row over a `done` one would
+        turn every restart into a ledger claiming the day never happened.
+        """
+        row = await self.fetchone(
+            "SELECT 1 FROM job_runs WHERE job=? AND started_at=? LIMIT 1",
+            (job, started.isoformat()),
+        )
+        return row is not None
+
     async def record_token_event(self, kind: str, detail: str) -> None:
         await self.execute(
             "INSERT INTO token_events(at, kind, detail) VALUES (?,?,?)", (_now(), kind, detail)

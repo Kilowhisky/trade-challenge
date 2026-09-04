@@ -32,16 +32,16 @@ from pathlib import Path
 import httpx
 import pytest
 
-from tc import cli
+from tc import cli, main
 from tc.broker.client import Broker, BrokerError
 from tc.broker.fake import FakeBroker
-from tc.broker.models import AccountSnapshot
+from tc.broker.models import AccountSnapshot, MarketWindow
 from tc.broker.token import TokenStore
 from tc.clock import ET, trading_days_between
 from tc.config import Settings, load_settings
 from tc.http.app import build_app
 from tc.loops.session import seed_hwm
-from tc.main import BACKUPS_KEPT, Engine, build_engine
+from tc.main import BACKUPS_KEPT, Engine, build_engine, check_bind
 from tc.notify import Notifier, Pinger
 from tc.store.db import Store
 
@@ -117,6 +117,28 @@ class BoomBroker(FakeBroker):
 
     async def account(self, account_hash: str) -> AccountSnapshot:
         raise BrokerError("500: upstream")
+
+
+class FlakyWindowBroker(FakeBroker):
+    """The market-hours read fails once, then works — a 30-second outage at
+    04:00 that used to pin the engine to a guessed calendar all day."""
+
+    def __init__(self, fixture_dir: Path, frozen_now: datetime) -> None:
+        super().__init__(fixture_dir, frozen_now)
+        self.window_calls = 0
+
+    async def market_window(self, d: date) -> MarketWindow:
+        self.window_calls += 1
+        if self.window_calls == 1:
+            raise BrokerError("503: hours unavailable")
+        return await super().market_window(d)
+
+
+class UnwritableStore(Store):
+    """Reads fine, refuses every ledger write."""
+
+    async def record_job_run(self, *a: object, **k: object) -> None:
+        raise OSError("disk full")
 
 
 @pytest.fixture
@@ -481,3 +503,108 @@ def test_run_refuses_to_bind_every_interface(
 def test_run_rejects_a_malformed_bind(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = cli.main([*_cli_args(tmp_path, bind="8080"), "run"])
     assert rc == 4 and "host:port" in capsys.readouterr().err
+
+
+# --- restart, retries and the ledger ----------------------------------------
+
+async def test_a_restart_does_not_bury_a_finished_day_in_missed_rows(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    """A restarted engine re-enumerates the whole day. The 09:32 sweep the
+    previous process ran is already in the ledger, and a `missed` row on top
+    of it would claim the day never happened."""
+    s = _settings(tmp_path)
+    await _seed(store)
+    await store.record_job_run("tick", et(9, 32), et(9, 33), "done", {})
+    eng = _engine(s, store, FakeBroker(_fx(tmp_path), NOW), Clock(et(10, 20)), RecordingNotifier(client), client)
+    await eng.start()
+
+    await asyncio.wait_for(eng.run_for(1), 5)
+
+    runs = await _job_runs(store, "tick")
+    assert [v for _, v, _ in runs] == ["done", "missed", "missed", "missed"]
+    assert [datetime.fromisoformat(a).astimezone(ET).strftime("%H:%M") for _, v, a in runs] == [
+        "09:32", "09:47", "10:02", "10:17",
+    ]
+    await eng.stop()
+
+
+async def test_a_fallback_window_is_retried_until_the_calendar_answers(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    """A guessed calendar says every weekday is a full 09:30-16:00 session.
+    Held for a day, that would run session_close and the §3.3/§3.5 clocks
+    against a market that closed at 13:00."""
+    s = _settings(tmp_path)
+    await _seed(store)
+    broker = FlakyWindowBroker(_fx(tmp_path), NOW)
+    eng = _engine(s, store, broker, Clock(et(9, 0)), RecordingNotifier(client), client)
+
+    await eng.start()
+    assert eng.window_is_fallback is True
+
+    await asyncio.wait_for(eng.run_for(1), 5)
+    assert eng.window_is_fallback is False
+    assert eng.window == await FakeBroker(FIX, NOW).market_window(TODAY)
+
+    await asyncio.wait_for(eng.run_for(1), 5)
+    assert broker.window_calls == 2  # retried until it answered, then never again
+    await eng.stop()
+
+
+async def test_a_ledger_write_failure_does_not_take_the_job_down(
+    tmp_path: Path, client: httpx.AsyncClient
+) -> None:
+    """The row is how a sweep is remembered, but losing the row must not also
+    lose the sweep — or raise into a task nothing awaits."""
+    s = _settings(tmp_path)
+    store = UnwritableStore(tmp_path / "engine.db")
+    await store.open()
+    eng = _engine(s, store, FakeBroker(_fx(tmp_path), NOW), Clock(et(9, 32)), RecordingNotifier(client), client)
+    await eng.start()
+
+    assert await eng.run_job("tick") == "done"
+    assert len(await store.ticks_for("2026-09-04")) == 1  # the sweep still happened
+    await eng.stop()
+
+
+# --- the bind allowlist -----------------------------------------------------
+
+@pytest.mark.parametrize(
+    "bind", ["127.0.0.1:8080", "127.0.0.7:8080", "localhost:8080", "[::1]:8080"]
+)
+def test_loopback_binds_are_accepted(bind: str) -> None:
+    assert check_bind(bind)[1] == 8080
+
+
+@pytest.mark.parametrize(
+    "bind",
+    [
+        "0.0.0.0:8080",
+        "192.168.1.20:8080",
+        "[::]:8080",
+        "10.0.0.4:8080",
+        "engine.local:8080",
+    ],
+)
+def test_everything_but_loopback_is_refused(bind: str) -> None:
+    """An allowlist: a denylist naming 0.0.0.0 still accepted the LAN address,
+    which is the case that actually exposes /oauth/callback."""
+    with pytest.raises(ValueError, match="must bind loopback"):
+        check_bind(bind)
+
+
+def test_run_once_exits_1_when_the_job_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A smoke test that exits 0 on a failed sweep is not a smoke test."""
+    fx = _fx(tmp_path)
+    today = datetime.now(UTC).astimezone(ET).date()
+    shutil.copy(FIX / f"hours-{TODAY.isoformat()}.json", fx / f"hours-{today.isoformat()}.json")
+    monkeypatch.setenv("TC_MODE", "paper")
+    monkeypatch.setenv("TC_FIXTURES", str(fx))
+    monkeypatch.setattr(main, "make_broker", lambda s, token: BoomBroker(fx, NOW))
+    args = _cli_args(tmp_path)
+    assert cli.main([*args, "seed-hwm", "--value", "3800.00", "--recorded-on", "2026-09-03"]) == 0
+
+    assert cli.main([*args, "run", "--once", "tick"]) == 1
