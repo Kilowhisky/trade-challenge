@@ -40,6 +40,18 @@ def action_for(state: TokenState) -> str:
     return _ACTIONS[state]
 
 
+def _state_for_age(age: float | None, cfg: TokenConfig) -> TokenState:
+    """Pure classification, no I/O -- the one place `state()` and `status()`
+    agree on what an age means, so the thresholds can't drift between them."""
+    if age is None:
+        return "absent"
+    if age >= cfg.hard_expiry_days:
+        return "dead"
+    if age >= cfg.reauth_after_days:
+        return "reauth_due"
+    return "fresh"
+
+
 class NoAuthInProgress(Exception):  # noqa: N818 -- name fixed by the task-6 interface contract
     """complete_auth was called with no persisted auth context."""
 
@@ -165,14 +177,20 @@ class TokenStore:
         return None if age is None else self.cfg.hard_expiry_days - age
 
     def state(self) -> TokenState:
+        return _state_for_age(self.age_days(), self.cfg)
+
+    def status(self) -> tuple[TokenState, float | None, float | None]:
+        """One read, one consistent ``(state, age_days, days_until_dead)``
+        snapshot. `state()`/`age_days()`/`days_until_dead()` each call
+        `read()` independently, so a caller combining them (the token loop)
+        can observe a torn read if the file changes between calls -- a
+        re-auth completing mid-check, say. This method reads exactly once
+        and derives the other two from that one age, so they can never
+        disagree with each other."""
         age = self.age_days()
-        if age is None:
-            return "absent"
-        if age >= self.cfg.hard_expiry_days:
-            return "dead"
-        if age >= self.cfg.reauth_after_days:
-            return "reauth_due"
-        return "fresh"
+        return _state_for_age(age, self.cfg), age, (
+            None if age is None else self.cfg.hard_expiry_days - age
+        )
 
     # --- re-auth ----------------------------------------------------------
     def begin_auth(self) -> str:

@@ -10,11 +10,13 @@ Three properties this module holds, deliberately mirroring tick.py:
 * **`token_check` never raises.** `begin_auth()` reaches the network; a
   network failure here must degrade to "post without a URL", never take the
   scheduler down with it (ruling 6).
-* **The daily post is deduped, the alert is not re-opened.** Chris does not
-  need the same Discord message every five minutes for eight hours -- but he
-  does need it again the next calendar day if the token is still dead. The
-  `token_dead` alert (open_alerts) is a *standing* condition and stays open
-  across days until he acks it or re-auths.
+* **The daily post is deduped; the `token_dead` alert is checked on every
+  call regardless.** Chris does not need the same Discord message every five
+  minutes for eight hours -- but the alert (`open_alerts`) tracks a
+  *standing* condition, not a daily event: if he acks it mid-day while the
+  token is still dead, the very next check reopens it rather than waiting
+  for tomorrow's post. Coupling the alert to the post dedupe would leave the
+  account un-alerted and blind for the rest of the day the moment he acks.
 * **The word "healthy" never appears.** `fresh` is silent by design (no
   post, no alert) -- there is no affirmative "all is well" message for a
   human to over-trust between checks.
@@ -69,12 +71,22 @@ async def _already_posted_today(store: Store, kind: str, et_date: str) -> bool:
     return len(rows) > 0
 
 
+def _dud_clause(left: float | None, *, fallback: str) -> str:
+    # `left` comes from the same `status()` snapshot as `state`, so a
+    # reauth_due/dead call always carries a finite age in practice -- but
+    # this stays a fallback string, never an assert, because "never raises"
+    # must hold even if that invariant is ever wrong.
+    return f"{left:.1f} days until dead" if left is not None else fallback
+
+
 async def token_check(
     token: TokenStore, store: Store, notifier: Notifier, now: datetime
 ) -> TokenReport:
-    state = token.state()
-    age = token.age_days()
-    left = token.days_until_dead()
+    # One read, one consistent snapshot -- state/age/left can never disagree
+    # with each other the way three independent state()/age_days()/
+    # days_until_dead() calls could if the token file changed mid-check
+    # (a re-auth completing concurrently, say).
+    state, age, left = token.status()
     action = action_for(state)
     et_date = now.astimezone(ET).date().isoformat()
 
@@ -84,9 +96,24 @@ async def token_check(
             state=state, age_days=age, days_until_dead=left, action=action, auth_url=None
         )
 
+    # The token_dead alert is a *standing* condition, not a once-a-day event:
+    # if Chris acks it mid-day while the token is still dead/absent, the very
+    # next check must reopen it rather than silently waiting for tomorrow's
+    # Discord post. So this runs on every dead/absent call, independent of
+    # the post dedupe below.
+    if state in ("dead", "absent"):
+        open_alerts = await store.open_alerts()
+        if not any(a.kind == "token_dead" for a in open_alerts):
+            msg = (
+                f"Schwab token {state}: the engine is BLIND. "
+                f"{_dud_clause(left, fallback='token absent')}. Run `tc auth-url`."
+            )
+            await store.open_alert("token_dead", msg)
+
     # reauth_due, dead and absent all carry a re-auth URL and a once-per-day
-    # post -- but dead/absent get their own dedupe key so a reauth_due post
-    # earlier the same day never silently swallows a later dead-state alert.
+    # Discord post -- but dead/absent get their own dedupe key so a
+    # reauth_due post earlier the same day never silently swallows a later
+    # dead-state post.
     dedupe_kind = "auth_url_posted" if state == "reauth_due" else "blind_posted"
     already = await _already_posted_today(store, dedupe_kind, et_date)
     if already:
@@ -100,13 +127,13 @@ async def token_check(
     url_text = url if url is not None else _URL_UNAVAILABLE
 
     if state == "reauth_due":
-        assert left is not None  # reauth_due implies a readable token, hence a finite age
+        left_str = _dud_clause(left, fallback="n/a")
         text = (
-            f"🔑 Schwab re-auth due — {left:.1f} days until dead. "
+            f"🔑 Schwab re-auth due — {left_str}. "
             f"Open on your phone (Tailscale on): {url_text}"
         )
     else:  # dead / absent
-        dud_clause = f"{left:.1f} days until dead" if left is not None else "token absent"
+        dud_clause = _dud_clause(left, fallback="token absent")
         text = (
             f"⛔ Schwab token {state}: the engine is BLIND — no reconciliation, no watches, "
             f"resting stops only. {dud_clause}. Re-auth: {url_text}"
@@ -115,10 +142,5 @@ async def token_check(
     await notifier.post(text)
     if url is not None:
         await store.record_token_event(dedupe_kind, f"{et_date} {url}")
-
-    if state in ("dead", "absent"):
-        open_alerts = await store.open_alerts()
-        if not any(a.kind == "token_dead" for a in open_alerts):
-            await store.open_alert("token_dead", text)
 
     return TokenReport(state=state, age_days=age, days_until_dead=left, action=action, auth_url=url)

@@ -136,11 +136,39 @@ async def test_dead_state_posts_and_opens_alert_once(
     dead_alerts = [a for a in alerts if a.kind == "token_dead"]
     assert len(dead_alerts) == 1
 
-    # Same day, second check: no new post, no second alert.
+    # Same day, second check: no new post, no second alert (the first is
+    # still open and unacked).
     await token_check(token, store, posts.notifier(), NOW + timedelta(hours=1))
     assert len(posts.texts) == 1
     alerts_again = await store.open_alerts()
     assert len([a for a in alerts_again if a.kind == "token_dead"]) == 1
+
+
+async def test_dead_alert_reopens_same_day_after_ack_even_without_a_new_post(
+    store: Store, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The token_dead alert is a standing condition, not a once-a-day event:
+    if Chris acks it mid-day while the token is still dead, the very next
+    check must reopen it -- it must not wait for tomorrow's Discord post,
+    or the account sits alert-less and blind for the rest of the day."""
+    token = _token(tmp_path, 8.0, NOW.timestamp())
+    monkeypatch.setattr(TokenStore, "begin_auth", lambda self: AUTH_URL)
+    posts = _Posts()
+
+    await token_check(token, store, posts.notifier(), NOW)
+    first_open = [a for a in await store.open_alerts() if a.kind == "token_dead"]
+    assert len(first_open) == 1
+    await store.ack_alert(first_open[0].id)
+    assert not [a for a in await store.open_alerts() if a.kind == "token_dead"]
+
+    # Same ET calendar day: no new Discord post (still deduped)...
+    await token_check(token, store, posts.notifier(), NOW + timedelta(hours=1))
+    assert len(posts.texts) == 1
+
+    # ...but a fresh alert, because the condition is still live.
+    second_open = [a for a in await store.open_alerts() if a.kind == "token_dead"]
+    assert len(second_open) == 1
+    assert second_open[0].id != first_open[0].id
 
 
 async def test_absent_state_writes_token_absent_not_a_number(

@@ -28,6 +28,20 @@ def test_absent_state(tmp_path: Path) -> None:
     assert s.read() is None and s.state() == "absent" and s.days_until_dead() is None
 
 
+def test_status_matches_the_separate_calls_from_one_read(tmp_path: Path) -> None:
+    """status() exists so a caller needing all three never risks a torn read
+    across independent state()/age_days()/days_until_dead() calls -- it must
+    always agree with what those calls would report for the same file."""
+    now = 1_000_000.0
+    s = _store(tmp_path, now)
+    assert s.status() == ("absent", None, None)
+    s.write(_wrapped(now - 5.5 * DAY))
+    state, age, left = s.status()
+    assert state == s.state() == "reauth_due"
+    assert age is not None and round(age, 2) == round(s.age_days() or 0, 2)
+    assert left is not None and round(left, 2) == round(s.days_until_dead() or 0, 2)
+
+
 def test_states_by_age(tmp_path: Path) -> None:
     now = 1_000_000.0
     s = _store(tmp_path, now)
