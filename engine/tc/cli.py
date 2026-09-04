@@ -21,6 +21,7 @@ from tc.broker.fake import Recorder
 from tc.broker.token import NoAuthInProgress, TokenStore, action_for
 from tc.config import Settings, load_settings
 from tc.loops.session import seed_hwm
+from tc.main import JOBS, check_bind, run_once, serve
 from tc.rules.consistency import run_checks
 from tc.store.db import Store
 
@@ -123,6 +124,20 @@ def cmd_seed_hwm(ns: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run(ns: argparse.Namespace) -> int:
+    """The service. `--once JOB` is the operator smoke test: start, run one
+    job, stop, no HTTP surface."""
+    s = _settings(ns)
+    if ns.once:
+        rc: int = asyncio.run(run_once(s, ns.once))
+        return rc
+    # Checked here rather than inside serve() so a bad bind costs nothing: no
+    # store, no broker, no token read.
+    check_bind(s.engine.http_bind)
+    asyncio.run(serve(s))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tc")
     p.add_argument("--config", default="config.yml")
@@ -144,6 +159,10 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--out", required=True)
     r.add_argument("--symbols", required=True)
     r.set_defaults(fn=cmd_record_fixtures)
+
+    run = sub.add_parser("run")
+    run.add_argument("--once", default=None, metavar="JOB", help=f"one of: {', '.join(JOBS)}")
+    run.set_defaults(fn=cmd_run)
 
     sh = sub.add_parser("seed-hwm")
     sh.add_argument("--value", required=True)
