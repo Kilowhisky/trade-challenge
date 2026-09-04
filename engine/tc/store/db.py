@@ -132,6 +132,18 @@ class Store:
         Acquires ``self._lock`` itself — there is one connection and one
         writer queue, so callers must NOT already hold the lock when they
         enter this context manager (doing so would deadlock).
+
+        There is deliberately no ``CancelledError`` handling here. A
+        cancellation between BEGIN and COMMIT unwinds without the ROLLBACK
+        above (``except Exception`` does not catch ``BaseException``), which
+        is safe only because of one invariant the engine holds: cancellation
+        of a store user is only ever followed by ``close()``
+        (``Engine.stop()`` cancels every job task and then closes the store,
+        in that order). Closing the connection rolls the open transaction
+        back implicitly, so the half-written transaction can never be
+        committed by a later caller. If a future caller ever cancels a task
+        and keeps using the same store, this block needs an explicit
+        ``except BaseException`` rollback.
         """
         async with self._lock:
             c = self._c()
@@ -376,6 +388,21 @@ class Store:
         await self.execute(
             "UPDATE alerts SET acked_at=? WHERE id=? AND acked_at IS NULL", (_now(), alert_id)
         )
+
+    async def ack_alerts_of_kind(self, kind: str) -> int:
+        """Ack every open alert of one kind; returns how many were acked.
+
+        The counterpart to `open_alert`. `token_dead` is opened by the token
+        loop on every dead/absent check and nothing else ever closed it, so a
+        re-auth left a permanent open alert behind — and a standing alert that
+        outlives its condition is one an operator stops reading.
+        """
+        async with self._lock:
+            cur = await self._c().execute(
+                "UPDATE alerts SET acked_at=? WHERE kind=? AND acked_at IS NULL",
+                (_now(), kind),
+            )
+            return int(cur.rowcount or 0)
 
     async def open_alerts(self) -> list[AlertRow]:
         rows = await self.fetchall("SELECT * FROM alerts WHERE acked_at IS NULL ORDER BY id")

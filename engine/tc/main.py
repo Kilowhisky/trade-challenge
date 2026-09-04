@@ -53,7 +53,7 @@ from tc.http.app import EngineState, build_app
 from tc.loops.expectations import digest, run_expectations
 from tc.loops.reconcile import reconcile
 from tc.loops.session import close_session
-from tc.loops.tick import run_tick
+from tc.loops.tick import TickResult, run_tick
 from tc.loops.token import token_check
 from tc.notify import Notifier, Pinger
 from tc.rules.model import Rules
@@ -69,6 +69,15 @@ JOBS: tuple[str, ...] = ("tick", "session_close", "token_check", "expectations",
 
 BACKUPS_KEPT = 14  # ~3 weeks of trading days; the store is small and the disk is not
 LOOP_INTERVAL_S = 1.0
+# A fallback window is retried on a timer, not on every pass. The loop wakes
+# once a second, and the market calendar does not change that fast: an outage
+# at 04:00 used to mean ~57,000 failed market-hours calls before the open,
+# each one a log line and an HTTP round trip.
+WINDOW_RETRY_S = 300.0
+# Standing trips are re-posted at most hourly (see `_job_tick`). A trip that is
+# still true four hours later is worth saying again; saying it 78 times is how
+# a channel gets muted.
+TRIP_REPOST_S = 3600.0
 
 
 @runtime_checkable
@@ -112,6 +121,7 @@ class Engine:
         # full session would have session_close and the §3.3/§3.5 clocks
         # working from a calendar the market does not share.
         self._window_is_fallback = False
+        self._last_window_try: datetime | None = None
         self._account_hash: str | None = None
         self._tasks: set[asyncio.Task[Verdict | None]] = set()
         self._stopping = False
@@ -124,6 +134,7 @@ class Engine:
             now=clock,
             version=__version__,
             shadow=settings.shadow.enabled,
+            on_token_installed=self._on_token_installed,
         )
 
     # --- lifecycle ---------------------------------------------------------
@@ -144,7 +155,8 @@ class Engine:
         if unknown:
             raise ValueError(f"schedule names jobs that do not exist: {', '.join(unknown)}")
         await self._open_broker()
-        await self._refresh_window(self._et(self._clock()).date())
+        now = self._clock()
+        await self._refresh_window(self._et(now).date(), now)
         self._account_hash = await self._resolve_hash()
 
     async def stop(self) -> None:
@@ -200,12 +212,13 @@ class Engine:
     async def _pass(self, now: datetime) -> None:
         today = self._et(now).date()
         if self._window is None or self._window.date != today:
-            await self._refresh_window(today)
+            await self._refresh_window(today, now)
             self.scheduler.prune(today)
-        elif self._window_is_fallback:
-            # One retry per pass until the real calendar answers, then never
-            # again for this day.
-            await self._refresh_window(today)
+        elif self._window_is_fallback and self._window_retry_due(now):
+            # Retried on a WINDOW_RETRY_S timer until the real calendar
+            # answers, then never again for this day. The loop passes once a
+            # second; the calendar does not.
+            await self._refresh_window(today, now)
         for fire in self.scheduler.mark_missed(now):
             # A restart re-enumerates the whole day, so most of what this
             # process "missed" was run by the process before it. Recording a
@@ -275,10 +288,16 @@ class Engine:
             # carry a URL, a token fragment or an account number.
             name = type(e).__name__
             log.exception("job %s failed", fire.job)
+            self.state.consecutive_failures[fire.job] = (
+                self.state.consecutive_failures.get(fire.job, 0) + 1
+            )
             await self._record_fire(fire, started, "failed", {"error": name})
             await self._pinger.fail(fire.job, "failed")
             await self.notifier.post(f"⚠️ {fire.job} failed: {name}")
             return "failed"
+        # done/noop: the job worked, so the streak is over. A run that
+        # reaches here is the evidence /health needs that the loop is alive.
+        self.state.consecutive_failures[fire.job] = 0
         await self._record_fire(fire, started, verdict, detail)
         await self._pinger.ok(fire.job, verdict)
         return verdict
@@ -337,16 +356,48 @@ class Engine:
         self.state.blind = res.row.state == "BLIND"
         if not self.state.blind:
             self.state.last_broker_read_ok_at = now
-        if not res.trips:
-            return "done", {}
         # Trips are the loop working, not the job failing: a sweep that finds
         # a naked position did its job. The verdict stays `done` so the
         # expectations layer's "no failed runs" check keeps meaning what it
         # says, and the trips ride in the detail.
-        lines = [f"🚨 TICK TRIP {res.row.at_et}"]
-        lines += [f"  watch {t.watch} {t.name}: {t.detail}" for t in res.trips]
-        await self.notifier.post("\n".join(lines))
+        await self._post_trips(res, now)
+        if not res.trips:
+            return "done", {}
         return "done", {"trips": [t.model_dump() for t in res.trips]}
+
+    async def _post_trips(self, res: TickResult, now: datetime) -> None:
+        """Post on transition, not on every sweep.
+
+        A naked position is true every 15 minutes until someone fixes it, and
+        the old code posted the same 🚨 block each time — ~26 identical
+        messages an hour, which trains the reader to scroll past the one that
+        is new. So: post when the set of trips CHANGES (including to empty,
+        which gets its own one-line all-clear), and re-post a standing trip
+        once an hour so it cannot fade into silence either.
+        """
+        signature = "|".join(f"{t.watch}:{t.name}:{t.detail}" for t in res.trips)
+        prior = self.state.last_trip_signature
+        if signature != prior:
+            if res.trips:
+                await self.notifier.post(self._trip_block(res))
+            elif prior:
+                # Something was tripped at the last sweep and is not now.
+                await self.notifier.post(f"✅ book clean again {res.row.at_et}")
+            self.state.last_trip_signature = signature
+            self.state.last_trip_posted_at = now
+            return
+        last_posted = self.state.last_trip_posted_at
+        standing = last_posted is not None and (now - last_posted).total_seconds() >= TRIP_REPOST_S
+        if res.trips and standing:
+            await self.notifier.post(self._trip_block(res, still=True))
+            self.state.last_trip_posted_at = now
+
+    @staticmethod
+    def _trip_block(res: TickResult, *, still: bool = False) -> str:
+        head = f"🚨 TICK TRIP {res.row.at_et}" + (" (still tripped)" if still else "")
+        return "\n".join(
+            [head] + [f"  watch {t.watch} {t.name}: {t.detail}" for t in res.trips]
+        )
 
     async def _job_session_close(self, now: datetime) -> tuple[Verdict, dict[str, Any]]:
         today = self._et(now).date()
@@ -422,21 +473,36 @@ class Engine:
             return w.is_trading_day
         return fallback_window(d).is_trading_day
 
-    async def _refresh_window(self, d: date) -> None:
+    def _window_retry_due(self, now: datetime) -> bool:
+        last = self._last_window_try
+        return last is None or (now - last).total_seconds() >= WINDOW_RETRY_S
+
+    async def _refresh_window(self, d: date, now: datetime) -> None:
         """The broker's calendar if it will answer, the weekday guess if it
-        will not — and the guess is retried on the next pass, because a
+        will not — and the guess is retried every WINDOW_RETRY_S, because a
         transient failure at 04:00 should not leave the whole session running
-        on an assumed holiday calendar."""
+        on an assumed holiday calendar.
+
+        Logging is on transition only: one line when the guess starts, one
+        when the real calendar arrives. The failing state repeats every five
+        minutes for as long as the outage lasts, and a line per attempt buries
+        everything else in the log."""
+        self._last_window_try = now
+        was_fallback = self._window_is_fallback
         try:
             self._window = await self._broker.market_window(d)
             self._window_is_fallback = False
+            if was_fallback:
+                log.info("market_window(%s) answered; the fallback window is dropped", d)
         except (BrokerError, OSError) as e:
             # OSError covers the fixture broker in paper mode reading a day it
             # has no hours file for. Either way: no calendar, so assume the
             # weekday window and keep monitoring rather than stopping.
-            log.warning(
-                "market_window(%s) failed (%s); using the fallback window", d, type(e).__name__
-            )
+            if not was_fallback:
+                log.warning(
+                    "market_window(%s) failed (%s); using the fallback window, retrying every %ds",
+                    d, type(e).__name__, int(WINDOW_RETRY_S),
+                )
             self._window = fallback_window(d)
             self._window_is_fallback = True
 
@@ -463,6 +529,45 @@ class Engine:
                 raise BrokerError("no account hashes in the token's scope")
             self._account_hash = hashes[0]
         return self._account_hash
+
+    async def _on_token_installed(self) -> None:
+        """A token just landed on `/oauth/callback`. Nothing else re-opens the
+        broker, so without this the engine holds a client bound to a token
+        that died days ago and every job keeps failing after a successful
+        phone re-auth — with `/health` reporting `ok: true` because the
+        callback had flipped `blind` off on its own.
+
+        `blind` is set from the read, not from the install: the file being on
+        disk proves nothing about whether Schwab will answer for it.
+        """
+        await self._reopen_broker()
+        try:
+            hashes = await self._broker.account_hashes()
+        except (BrokerError, OSError) as e:
+            log.warning(
+                "token installed but the first read failed (%s); still BLIND", type(e).__name__
+            )
+            self.state.blind = True
+            return
+        self._account_hash = hashes[0] if hashes else None
+        now = self._clock()
+        self.state.blind = False
+        self.state.last_broker_read_ok_at = now
+        # The window may have been guessed for the whole blind stretch.
+        self._last_window_try = None
+        await self._refresh_window(self._et(now).date(), now)
+
+    async def _reopen_broker(self) -> None:
+        """Drop the bound client and warm a new one up. `SchwabBroker._c()`
+        rebuilds on demand anyway, so a failure here costs nothing — the next
+        call reads the token file again."""
+        if not isinstance(self._broker, _Lifecycle):
+            return
+        try:
+            await self._broker.close()
+        except Exception:
+            log.exception("closing the broker before re-open failed; continuing")
+        await self._open_broker()
 
     async def _open_broker(self) -> None:
         if not isinstance(self._broker, _Lifecycle):

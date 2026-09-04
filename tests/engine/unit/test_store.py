@@ -207,3 +207,22 @@ async def test_record_orders_is_atomic(tmp_path: Path, monkeypatch: pytest.Monke
     row = await s.fetchone("SELECT COUNT(*) FROM order_snapshots")
     assert row is not None and row[0] == 1
     await s.close()
+
+
+async def test_ack_alerts_of_kind_closes_only_that_kind(tmp_path: Path) -> None:
+    """The counterpart to `open_alert`: `token_dead` is a standing condition
+    that something has to be able to answer, and acking by id required a
+    caller that knew the id."""
+    store = Store(tmp_path / "e.db")
+    await store.open()
+    await store.open_alert("token_dead", "blind")
+    await store.open_alert("token_dead", "blind again")
+    await store.open_alert("naked_position", "AMH has no stop")
+
+    acked = await store.ack_alerts_of_kind("token_dead")
+
+    assert acked == 2
+    assert [a.kind for a in await store.open_alerts()] == ["naked_position"]
+    # Idempotent: a second ack finds nothing left open and says so.
+    assert await store.ack_alerts_of_kind("token_dead") == 0
+    await store.close()

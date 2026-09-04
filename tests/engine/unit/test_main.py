@@ -25,9 +25,10 @@ import asyncio
 import json
 import shutil
 from collections.abc import AsyncIterator
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal as D  # noqa: N817 -- brevity in a Decimal-heavy fixture table
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -41,7 +42,14 @@ from tc.clock import ET, trading_days_between
 from tc.config import Settings, load_settings
 from tc.http.app import build_app
 from tc.loops.session import seed_hwm
-from tc.main import BACKUPS_KEPT, Engine, build_engine, check_bind
+from tc.main import (
+    BACKUPS_KEPT,
+    TRIP_REPOST_S,
+    WINDOW_RETRY_S,
+    Engine,
+    build_engine,
+    check_bind,
+)
 from tc.notify import Notifier, Pinger
 from tc.store.db import Store
 
@@ -132,6 +140,32 @@ class FlakyWindowBroker(FakeBroker):
         if self.window_calls == 1:
             raise BrokerError("503: hours unavailable")
         return await super().market_window(d)
+
+
+class DeadWindowBroker(FakeBroker):
+    """The market-hours read never answers. The engine keeps the guessed
+    calendar and must not hammer the endpoint once a second for it."""
+
+    def __init__(self, fixture_dir: Path, frozen_now: datetime) -> None:
+        super().__init__(fixture_dir, frozen_now)
+        self.window_calls = 0
+
+    async def market_window(self, d: date) -> MarketWindow:
+        self.window_calls += 1
+        raise BrokerError("503: hours unavailable")
+
+
+class RecoveringBroker(FakeBroker):
+    """Broken until `fail` is cleared — the upstream outage that ends."""
+
+    def __init__(self, fixture_dir: Path, frozen_now: datetime) -> None:
+        super().__init__(fixture_dir, frozen_now)
+        self.fail = True
+
+    async def account(self, account_hash: str) -> AccountSnapshot:
+        if self.fail:
+            raise BrokerError("500: upstream")
+        return await super().account(account_hash)
 
 
 class UnwritableStore(Store):
@@ -575,11 +609,15 @@ async def test_a_fallback_window_is_retried_until_the_calendar_answers(
     s = _settings(tmp_path)
     await _seed(store)
     broker = FlakyWindowBroker(_fx(tmp_path), NOW)
-    eng = _engine(s, store, broker, Clock(et(9, 0)), RecordingNotifier(client), client)
+    clock = Clock(et(9, 0))
+    eng = _engine(s, store, broker, clock, RecordingNotifier(client), client)
 
     await eng.start()
     assert eng.window_is_fallback is True
 
+    # The retry is on a WINDOW_RETRY_S timer, so the pass that gets the real
+    # calendar is the first one after that window has elapsed.
+    clock.t = et(9, 0) + timedelta(seconds=WINDOW_RETRY_S)
     await asyncio.wait_for(eng.run_for(1), 5)
     assert eng.window_is_fallback is False
     assert eng.window == await FakeBroker(FIX, NOW).market_window(TODAY)
@@ -602,6 +640,256 @@ async def test_a_ledger_write_failure_does_not_take_the_job_down(
 
     assert await eng.run_job("tick") == "done"
     assert len(await store.ticks_for("2026-09-04")) == 1  # the sweep still happened
+    await eng.stop()
+
+
+async def test_the_fallback_window_is_not_retried_every_pass(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    """The loop wakes once a second and the market calendar does not change
+    that fast. Retrying on every pass meant a broker outage at 04:00 produced
+    tens of thousands of failed market-hours calls before the open — one HTTP
+    round trip and one log line each."""
+    s = _settings(tmp_path)
+    await _seed(store)
+    broker = DeadWindowBroker(_fx(tmp_path), NOW)
+    base = et(9, 0)
+    clock = Clock(base)
+    eng = _engine(s, store, broker, clock, RecordingNotifier(client), client)
+
+    await eng.start()  # the one attempt: it fails, and the guess is taken
+    assert broker.window_calls == 1 and eng.window_is_fallback is True
+
+    for seconds in (0, 1, 2):
+        clock.t = base + timedelta(seconds=seconds)
+        await asyncio.wait_for(eng.run_for(1), 5)
+    assert broker.window_calls == 1  # three passes, no second attempt
+
+    clock.t = base + timedelta(seconds=WINDOW_RETRY_S + 1)
+    await asyncio.wait_for(eng.run_for(1), 5)
+    assert broker.window_calls == 2
+    await eng.stop()
+
+
+# --- the token install path -------------------------------------------------
+
+async def test_a_token_install_reopens_the_broker_and_ends_blind(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    """The engine came up before any token existed: every job is BLIND and
+    nothing re-opens the broker on its own. `/oauth/callback` awaits
+    `on_token_installed`, and only the read it performs may clear `blind` —
+    the flag the probe and `/health` are reading."""
+    s = _settings(tmp_path)
+    await _seed(store)
+    d = _fx(tmp_path)
+    (d / "unauthorized").touch()  # no token: every broker call is a 401
+    clock = Clock(et(9, 32))
+    eng = _engine(s, store, FakeBroker(d, NOW), clock, RecordingNotifier(client), client)
+    await eng.start()
+
+    await asyncio.wait_for(eng.run_for(1), 5)
+    assert eng.state.blind is True
+    assert [t.state for t in await store.ticks_for("2026-09-04")] == ["BLIND"]
+
+    (d / "unauthorized").unlink()  # the phone re-auth lands
+    assert eng.state.on_token_installed is not None
+    await eng.state.on_token_installed()
+
+    assert eng.state.blind is False
+    assert eng.window_is_fallback is False  # the calendar was re-read too
+
+    clock.t = et(9, 47)
+    await asyncio.wait_for(eng.run_for(1), 5)
+    assert [t.state for t in await store.ticks_for("2026-09-04")] == ["BLIND", "RTH"]
+
+    app = build_app(eng.state)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://engine"
+    ) as c:
+        body = (await c.get("/health")).json()
+    assert body["ok"] is True and body["blind"] is False
+    await eng.stop()
+
+
+async def test_a_token_install_whose_read_fails_stays_blind(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    """A token that installs but does not authenticate — the wrong app's
+    token, or a grant revoked at the broker. The file on disk proves nothing,
+    so `/health` must keep saying `ok: false`."""
+    s = _settings(tmp_path)
+    await _seed(store)
+    d = _fx(tmp_path)
+    (d / "unauthorized").touch()
+    eng = _engine(s, store, FakeBroker(d, NOW), Clock(et(9, 32)), RecordingNotifier(client), client)
+    await eng.start()
+    assert eng.state.blind is True
+
+    assert eng.state.on_token_installed is not None
+    await eng.state.on_token_installed()  # the marker is still there: still 401
+
+    assert eng.state.blind is True
+    app = build_app(eng.state)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://engine"
+    ) as c:
+        assert (await c.get("/health")).json()["ok"] is False
+    await eng.stop()
+
+
+# --- trips are posted on transition -----------------------------------------
+
+async def test_a_standing_trip_is_posted_once_not_every_sweep(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    """A naked position is true every 15 minutes until someone fixes it.
+    Re-posting it each sweep is ~26 identical messages an hour, which trains
+    the reader to scroll past the one that is new."""
+    s = _settings(tmp_path)
+    await _seed(store)
+    d = _fx(tmp_path)
+    (d / "orders.json").write_text("[]")  # AMH held with no stop
+    notifier = RecordingNotifier(client)
+    clock = Clock(et(9, 32))
+    eng = _engine(s, store, FakeBroker(d, NOW), clock, notifier, client)
+    await eng.start()
+
+    await eng.run_job("tick")
+    clock.t = et(9, 47)
+    await eng.run_job("tick")
+
+    assert len(notifier.posts) == 1
+    assert notifier.posts[0].startswith("🚨 TICK TRIP")
+    assert "watch 4 naked" in notifier.posts[0]
+    await eng.stop()
+
+
+async def test_a_changed_trip_set_posts_again(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    """Silence is only safe while nothing has changed. A second, different
+    watch tripping is new information and must not be swallowed by the
+    dedupe."""
+    s = _settings(tmp_path)
+    await _seed(store)
+    d = _fx(tmp_path)
+    (d / "orders.json").write_text("[]")
+    notifier = RecordingNotifier(client)
+    clock = Clock(et(9, 32))
+    eng = _engine(s, store, FakeBroker(d, NOW), clock, notifier, client)
+    await eng.start()
+    await eng.run_job("tick")
+
+    payload = json.loads((d / "account.json").read_text())
+    payload["securitiesAccount"]["isClosingOnlyRestricted"] = True
+    (d / "account.json").write_text(json.dumps(payload))
+    clock.t = et(9, 47)
+    await eng.run_job("tick")
+
+    assert len(notifier.posts) == 2
+    assert "watch 1 restriction" in notifier.posts[1]
+    await eng.stop()
+
+
+async def test_clearing_the_trips_posts_one_all_clear(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    """The other half of posting on transition: a book that has stopped being
+    tripped is worth exactly one line, and a book that was never tripped is
+    worth none."""
+    s = _settings(tmp_path)
+    await _seed(store)
+    d = _fx(tmp_path)
+    notifier = RecordingNotifier(client)
+    clock = Clock(et(9, 32))
+    eng = _engine(s, store, FakeBroker(d, NOW), clock, notifier, client)
+    await eng.start()
+
+    await eng.run_job("tick")  # clean book: nothing to say
+    assert notifier.posts == []
+
+    (d / "orders.json").write_text("[]")
+    clock.t = et(9, 47)
+    await eng.run_job("tick")
+    assert len(notifier.posts) == 1
+
+    (d / "orders.json").write_text((FIX / "orders.json").read_text())
+    clock.t = et(10, 2)
+    await eng.run_job("tick")
+    assert len(notifier.posts) == 2
+    assert notifier.posts[1].startswith("✅ book clean again")
+
+    clock.t = et(10, 17)
+    await eng.run_job("tick")
+    assert len(notifier.posts) == 2  # still clean: still silent
+    await eng.stop()
+
+
+async def test_a_standing_trip_is_reposted_after_an_hour(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    """Posting on transition must not become posting once and never again: a
+    trip that is still true an hour later gets said again, marked as standing
+    so nobody reads it as a new event."""
+    s = _settings(tmp_path)
+    await _seed(store)
+    d = _fx(tmp_path)
+    (d / "orders.json").write_text("[]")
+    notifier = RecordingNotifier(client)
+    start = et(9, 32)
+    clock = Clock(start)
+    eng = _engine(s, store, FakeBroker(d, NOW), clock, notifier, client)
+    await eng.start()
+
+    await eng.run_job("tick")
+    clock.t = start + timedelta(seconds=TRIP_REPOST_S - 1)
+    await eng.run_job("tick")
+    assert len(notifier.posts) == 1
+
+    clock.t = start + timedelta(seconds=TRIP_REPOST_S)
+    await eng.run_job("tick")
+    assert len(notifier.posts) == 2
+    assert "still tripped" in notifier.posts[1]
+    assert "watch 4 naked" in notifier.posts[1]
+    await eng.stop()
+
+
+# --- repeated failure is visible in /health ---------------------------------
+
+async def test_two_consecutive_tick_failures_make_health_not_ok(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    """Every job failure is absorbed into a ledger row by design, so nothing
+    about a loop that fails every single sweep reached `/health` — the probe
+    read a green light over a dead loop. One failure is a transient upstream;
+    two in a row is not."""
+    s = _settings(tmp_path)
+    await _seed(store)
+    broker = RecoveringBroker(_fx(tmp_path), NOW)
+    eng = _engine(s, store, broker, Clock(et(9, 32)), RecordingNotifier(client), client)
+    await eng.start()
+
+    async def health() -> dict[str, Any]:
+        app = build_app(eng.state)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://engine"
+        ) as c:
+            body: dict[str, Any] = (await c.get("/health")).json()
+            return body
+
+    assert await eng.run_job("tick") == "failed"
+    body = await health()
+    assert body["consecutive_tick_failures"] == 1 and body["ok"] is True
+
+    assert await eng.run_job("tick") == "failed"
+    body = await health()
+    assert body["consecutive_tick_failures"] == 2 and body["ok"] is False
+
+    broker.fail = False
+    assert await eng.run_job("tick") == "done"
+    body = await health()
+    assert body["consecutive_tick_failures"] == 0 and body["ok"] is True
     await eng.stop()
 
 

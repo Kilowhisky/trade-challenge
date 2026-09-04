@@ -84,16 +84,23 @@ def evaluate(health: dict[str, object] | None, now_et: datetime) -> list[str]:
         msgs.append(f"token dies in {days:.1f} days — {action}")
 
     age_s = health.get("last_broker_read_age_s")
-    if (
-        isinstance(age_s, (int, float))
-        and age_s > BROKER_READ_STALE_S
-        and _in_regular_hours(now_et)
-    ):
-        msgs.append(f"no broker read for {int(age_s)}s during regular hours")
+    if isinstance(age_s, (int, float)):
+        if age_s > BROKER_READ_STALE_S and _in_regular_hours(now_et):
+            msgs.append(f"no broker read for {int(age_s)}s during regular hours")
+    elif _in_regular_hours(now_et):
+        # `None` here is not "no news": it is an engine that has never once
+        # read the account, which during regular hours is exactly the state a
+        # dead token or a broker that never re-opened leaves behind. Treating
+        # a missing age as silence made the loudest failure the quietest.
+        msgs.append("no successful broker read yet during regular hours")
 
     naked = health.get("positions_without_stop")
     if isinstance(naked, (int, float)) and naked > 0:
         msgs.append(f"{int(naked)} position(s) without a stop")
+
+    alerts = health.get("open_alerts")
+    if isinstance(alerts, (int, float)) and alerts > 0:
+        msgs.append(f"{int(alerts)} open alert(s)")
 
     pending = health.get("pending_approval_age_s")
     if isinstance(pending, (int, float)) and pending > APPROVAL_PENDING_S:

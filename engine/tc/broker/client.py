@@ -52,46 +52,76 @@ class SchwabBroker:
         self._client: AsyncClient | None = None
 
     async def open(self) -> None:
-        try:
-            self._client = schwab_auth.client_from_access_functions(
-                self._app_key,
-                self._app_secret,
-                token_read_func=self._store.read_func(),
-                token_write_func=self._store.write_func(),
-                asyncio=True,
-            )
-        except FileNotFoundError as e:
-            raise BrokerUnauthorized(str(e)) from e
-        self._client.set_timeout(30)
+        """An eager warm-up, not the only way in.
+
+        `client_from_access_functions` reads the token file once and binds it
+        for the client's life, so a client built before the first token exists
+        can never authenticate. `open()` therefore only *tries*: it may raise
+        `BrokerUnauthorized` on a cold box, and that must not poison the
+        broker — `_c()` builds on demand, so the next call after a phone
+        re-auth re-reads the file and succeeds without anyone calling `open()`
+        again.
+        """
+        self._c()
 
     async def close(self) -> None:
-        if self._client is not None:
-            await self._client.session.aclose()
-            self._client = None
+        c, self._client = self._client, None
+        if c is not None:
+            await c.session.aclose()
 
     def _c(self) -> AsyncClient:
+        """The client, built on demand. `self._client is None` means "no token
+        has been read yet, or the last read was rejected" — either way the
+        token file is read again here, which is the whole re-open path."""
         if self._client is None:
-            raise BrokerError("broker not opened")
+            try:
+                client = schwab_auth.client_from_access_functions(
+                    self._app_key,
+                    self._app_secret,
+                    token_read_func=self._store.read_func(),
+                    token_write_func=self._store.write_func(),
+                    asyncio=True,
+                )
+            except FileNotFoundError as e:
+                raise BrokerUnauthorized(str(e)) from e
+            client.set_timeout(30)
+            self._client = client
         return self._client
+
+    async def _guard(self, resp: httpx.Response) -> dict[str, Any] | list[Any]:
+        """`_raise_for`, plus: a 401 drops the bound client.
+
+        The token behind a live client is dead for good — schwab-py refreshes
+        from the file it read at construction, so the client cannot recover on
+        its own. Dropping it means the next call re-reads the file, which is
+        what turns a phone re-auth into a working engine without a restart.
+        """
+        try:
+            return _raise_for(resp)
+        except BrokerUnauthorized:
+            await self.close()
+            raise
 
     def now(self) -> datetime:
         return datetime.now(UTC)
 
     async def account_hashes(self) -> list[str]:
-        data = _raise_for(await self._c().get_account_numbers())
+        data = await self._guard(await self._c().get_account_numbers())
         assert isinstance(data, list)
         return [str(x["hashValue"]) for x in data]
 
     async def account(self, account_hash: str) -> AccountSnapshot:
         c = self._c()
-        data = _raise_for(await c.get_account(account_hash, fields=[c.Account.Fields.POSITIONS]))
+        data = await self._guard(
+            await c.get_account(account_hash, fields=[c.Account.Fields.POSITIONS])
+        )
         assert isinstance(data, dict)
         return AccountSnapshot.from_payload(account_hash, data, self.now())
 
     async def orders(
         self, account_hash: str, from_dt: datetime, to_dt: datetime
     ) -> list[OrderRow]:
-        data = _raise_for(
+        data = await self._guard(
             await self._c().get_orders_for_account(
                 account_hash, from_entered_datetime=from_dt, to_entered_datetime=to_dt
             )
@@ -102,13 +132,13 @@ class SchwabBroker:
     async def quotes(self, symbols: Sequence[str]) -> dict[str, Quote]:
         if not symbols:
             return {}
-        data = _raise_for(await self._c().get_quotes(list(symbols)))
+        data = await self._guard(await self._c().get_quotes(list(symbols)))
         assert isinstance(data, dict)
         return {s: Quote.from_payload(s, q) for s, q in data.items() if "quote" in q}
 
     async def market_window(self, d: date) -> MarketWindow:
         c = self._c()
-        data = _raise_for(await c.get_market_hours([c.MarketHours.Market.EQUITY], date=d))
+        data = await self._guard(await c.get_market_hours([c.MarketHours.Market.EQUITY], date=d))
         assert isinstance(data, dict)
         return MarketWindow.from_payload(d, data)
 
@@ -117,7 +147,7 @@ class SchwabBroker:
             raise ValueError("days must be positive")
         end = self.now()
         start = end - timedelta(days=days * 2 + 7)  # weekends/holidays; trimmed below
-        data = _raise_for(
+        data = await self._guard(
             await self._c().get_price_history_every_day(
                 symbol, start_datetime=start, end_datetime=end
             )

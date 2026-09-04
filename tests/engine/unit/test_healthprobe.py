@@ -57,6 +57,8 @@ def _health(**overrides: Any) -> dict[str, object]:
         "last_broker_read_ok_at": "2026-09-08T14:00:00+00:00",
         "last_broker_read_age_s": 10,
         "positions_without_stop": 0,
+        "open_alerts": 0,
+        "consecutive_tick_failures": 0,
         "pending_approval_age_s": None,
         "runner_ok": True,
         "db_ok": True,
@@ -136,8 +138,25 @@ def test_broker_read_age_at_threshold_is_silent() -> None:
     assert evaluate(_health(last_broker_read_age_s=1200), TUE_RTH) == []
 
 
-def test_broker_read_age_none_is_silent() -> None:
-    assert evaluate(_health(last_broker_read_age_s=None), TUE_RTH) == []
+def test_broker_read_age_none_alerts_during_regular_hours() -> None:
+    """A missing age is not "no news": it is an engine that has never had a
+    successful broker read, which during RTH is the token-dead / broker-never-
+    reopened shape. Silence there hid the loudest failure the probe has."""
+    assert evaluate(_health(last_broker_read_age_s=None), TUE_RTH) == [
+        "no successful broker read yet during regular hours"
+    ]
+
+
+def test_broker_read_age_none_is_silent_outside_regular_hours() -> None:
+    """Overnight there is nothing to read: the market is shut and the engine
+    is not expected to have touched the broker."""
+    assert evaluate(_health(last_broker_read_age_s=None), TUE_EVENING) == []
+    assert evaluate(_health(last_broker_read_age_s=None), SAT_SAME_CLOCK) == []
+
+
+def test_open_alerts_are_reported_and_zero_is_silent() -> None:
+    assert evaluate(_health(open_alerts=2), TUE_RTH) == ["2 open alert(s)"]
+    assert evaluate(_health(open_alerts=0), TUE_RTH) == []
 
 
 def test_positions_without_stop() -> None:
@@ -196,8 +215,13 @@ def test_db_ok_true_is_silent() -> None:
 
 def test_missing_keys_treated_as_none_no_messages() -> None:
     # A health body with almost nothing in it should not blow up and should
-    # not alert on fields it does not carry -- only `ok` defaults to False.
-    assert evaluate({"ok": True}, TUE_RTH) == []
+    # not alert on fields it does not carry -- only `ok` defaults to False,
+    # and (during RTH only) a missing broker-read age, which is a claim about
+    # the engine rather than a field it forgot to send.
+    assert evaluate({"ok": True}, TUE_EVENING) == []
+    assert evaluate({"ok": True}, TUE_RTH) == [
+        "no successful broker read yet during regular hours"
+    ]
 
 
 def test_multiple_breaches_all_reported() -> None:

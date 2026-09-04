@@ -22,10 +22,11 @@ Three routes, three different trust levels:
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from datetime import datetime
 
+import httpx
 from authlib.common.errors import AuthlibBaseError
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
@@ -44,8 +45,10 @@ _CALLBACK_OK = "Token installed — you can close this tab."
 
 @dataclass
 class EngineState:
-    """Task 10 (`main.py`) constructs and owns one of these; every route here
-    only reads (or, for `blind`, flips) its fields. Not a pydantic model:
+    """Task 10 (`main.py`) constructs and owns one of these; the routes here
+    read its fields and call `on_token_installed`, but never decide `blind`
+    for themselves — the engine sets that from a read that succeeded. Not a
+    pydantic model:
     this is live in-process state mutated between requests (`last_tick`,
     `blind`), not a value ever serialised, validated, or sent over the wire
     as a unit."""
@@ -62,6 +65,20 @@ class EngineState:
     runner_ok: bool | None = None
     pending_approval_age_s: float | None = None
     in_flight_proposal: bool = False
+    # Set by the engine to a coroutine that re-opens the broker against the
+    # token that has just landed and re-reads the account. The callback route
+    # awaits it and never touches `blind` itself: a token on disk is not a
+    # working broker, and only a read that actually succeeded may clear BLIND.
+    on_token_installed: Callable[[], Awaitable[None]] | None = None
+    # Consecutive `failed` job runs, per job, reset by the first done/noop.
+    # /health turns the tick's count into `ok: false` — a job that fails every
+    # sweep is an engine that is not working, however healthy its parts look.
+    consecutive_failures: dict[str, int] = field(default_factory=dict)
+    # Trip posting is on transition (main.py `_job_tick`): the signature of the
+    # trips last posted, and when. Standing trips are re-posted hourly, not
+    # every sweep.
+    last_trip_signature: str | None = None
+    last_trip_posted_at: datetime | None = None
 
 
 async def _db_ok(store: Store) -> bool:
@@ -71,6 +88,17 @@ async def _db_ok(store: Store) -> bool:
         logger.exception("health: db check failed")
         return False
     return True
+
+
+async def _open_alert_count(store: Store) -> int:
+    """Unacked alerts. A store that will not answer reports 0 rather than
+    failing the request: `db_ok` is already false in that case and the probe
+    alerts on it, and /health's one contract is that it always answers."""
+    try:
+        return len(await store.open_alerts())
+    except Exception:
+        logger.exception("health: open-alert count failed")
+        return 0
 
 
 def build_app(state: EngineState) -> Starlette:
@@ -84,9 +112,15 @@ def build_app(state: EngineState) -> Starlette:
         naked = None if state.last_tick is None or state.last_tick.view is None else (
             len(state.last_tick.view.naked)
         )
+        open_alerts = await _open_alert_count(state.store)
+        # Two consecutive failures is the threshold: one failed sweep is a
+        # transient upstream, two in a row is a loop that is not working. The
+        # engine cannot report this about itself any other way — every job
+        # failure is already absorbed into a ledger row by design.
+        tick_failures = state.consecutive_failures.get("tick", 0)
 
         body = {
-            "ok": (not state.blind) and db_ok,
+            "ok": (not state.blind) and db_ok and tick_failures < 2,
             "version": state.version,
             "shadow": state.shadow,
             "blind": state.blind,
@@ -98,6 +132,8 @@ def build_app(state: EngineState) -> Starlette:
             "pending_approval_age_s": state.pending_approval_age_s,
             "runner_ok": state.runner_ok,
             "db_ok": db_ok,
+            "open_alerts": open_alerts,
+            "consecutive_tick_failures": tick_failures,
             "in_flight_proposal": state.in_flight_proposal,
             "action": action_for(token_state),
         }
@@ -106,11 +142,30 @@ def build_app(state: EngineState) -> Starlette:
     async def oauth_callback(request: Request) -> Response:
         try:
             await run_in_threadpool(state.token.complete_auth, str(request.url))
-        except (NoAuthInProgress, ValueError, AuthlibBaseError) as e:
+        except (
+            NoAuthInProgress,
+            ValueError,
+            AuthlibBaseError,
+            OSError,
+            KeyError,
+            httpx.HTTPError,
+        ) as e:
+            # The class name is the entire body on every one of these: the
+            # request URL and its code/state params are one-time OAuth
+            # secrets, and an exception message here can carry them.
             await state.store.record_token_event("install_failed", type(e).__name__)
             return PlainTextResponse(type(e).__name__, status_code=400)
         await state.store.record_token_event("installed", "callback")
-        state.blind = False
+        # The token is installed, so the standing "token dead" alert is
+        # answered — nothing else ever acks it, and an alert that can only
+        # open is one an operator learns to ignore.
+        await state.store.ack_alerts_of_kind("token_dead")
+        # `blind` is NOT cleared here. The engine's hook re-opens the broker
+        # and re-reads the account; whether that read succeeds is the only
+        # evidence the engine can see, and /health must keep saying ok:false
+        # until it does.
+        if state.on_token_installed is not None:
+            await state.on_token_installed()
         return PlainTextResponse(_CALLBACK_OK)
 
     async def api_status(request: Request) -> Response:

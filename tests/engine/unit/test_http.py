@@ -124,6 +124,7 @@ async def test_health_shape_and_values(tmp_path: Path, store: Store) -> None:
         "ok", "version", "shadow", "blind", "token_state", "token_days_until_dead",
         "last_broker_read_ok_at", "last_broker_read_age_s", "positions_without_stop",
         "pending_approval_age_s", "runner_ok", "db_ok", "in_flight_proposal", "action",
+        "open_alerts", "consecutive_tick_failures",
     }
     assert body["ok"] is True
     assert body["version"] == "0.2.0"
@@ -136,6 +137,8 @@ async def test_health_shape_and_values(tmp_path: Path, store: Store) -> None:
     assert body["pending_approval_age_s"] is None
     assert body["runner_ok"] is None
     assert body["db_ok"] is True
+    assert body["open_alerts"] == 0
+    assert body["consecutive_tick_failures"] == 0
     assert body["in_flight_proposal"] is False
     assert body["action"] == "none"
 
@@ -182,6 +185,35 @@ async def test_health_token_dead_action_mirrors_token_wording(tmp_path: Path, st
     assert body["action"] == "DEAD — account is blind until re-auth"
 
 
+async def test_health_counts_open_alerts(tmp_path: Path, store: Store) -> None:
+    """An alert nobody has acked is a standing condition the probe must see:
+    it is the only channel-independent evidence that something was reported."""
+    await store.open_alert("token_dead", "the engine is BLIND")
+    await store.open_alert("naked_position", "AMH has no stop")
+    state = _state(tmp_path, store)
+    assert (await _get(state, "/health")).json()["open_alerts"] == 2
+
+    acked = await store.ack_alerts_of_kind("token_dead")
+    assert acked == 1
+    assert (await _get(state, "/health")).json()["open_alerts"] == 1
+
+
+async def test_health_ok_false_after_two_consecutive_tick_failures(
+    tmp_path: Path, store: Store
+) -> None:
+    """One failed sweep is a transient upstream; two in a row is a loop that
+    is not working — and until now nothing about repeated job failure could
+    make `ok` false, so the probe read a green light over a dead loop."""
+    state = _state(tmp_path, store)
+    state.consecutive_failures["tick"] = 1
+    body = (await _get(state, "/health")).json()
+    assert body["consecutive_tick_failures"] == 1 and body["ok"] is True
+
+    state.consecutive_failures["tick"] = 2
+    body = (await _get(state, "/health")).json()
+    assert body["consecutive_tick_failures"] == 2 and body["ok"] is False
+
+
 # --- /oauth/callback -----------------------------------------------------
 
 
@@ -199,9 +231,78 @@ async def test_oauth_callback_success(
     assert r.status_code == 200
     assert r.text == "Token installed — you can close this tab."
     assert seen["url"].endswith("/oauth/callback?code=abc&state=S")
-    assert state.blind is False
+    # The route does NOT clear `blind` on its own: a token file on disk is
+    # not a broker that answers. With no engine hook registered there is no
+    # successful read to point at, so the engine stays blind.
+    assert state.blind is True
     rows = await store.fetchall("SELECT kind, detail FROM token_events")
     assert [tuple(row) for row in rows] == [("installed", "callback")]
+
+
+async def test_oauth_callback_awaits_the_engine_hook_and_acks_token_dead(
+    tmp_path: Path, store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The install is the engine's cue to re-open the broker. `blind` is
+    whatever that hook's read proves — the route never decides it."""
+    await store.open_alert("token_dead", "the engine is BLIND")
+    state = _state(tmp_path, store, blind=True)
+    monkeypatch.setattr(state.token, "complete_auth", lambda url: None)
+    called: list[str] = []
+
+    async def hook() -> None:
+        called.append("hook")
+        state.blind = False
+
+    state.on_token_installed = hook
+    r = await _get(state, "/oauth/callback?code=abc&state=S")
+
+    assert r.status_code == 200
+    assert called == ["hook"]
+    assert state.blind is False
+    assert [a.kind for a in await store.open_alerts()] == []
+
+
+async def test_oauth_callback_stays_blind_when_the_hook_read_fails(
+    tmp_path: Path, store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A token that installs but does not authenticate (wrong app, revoked
+    grant) must not turn /health green. `ok` follows the read, not the file."""
+    state = _state(tmp_path, store, blind=True)
+    monkeypatch.setattr(state.token, "complete_auth", lambda url: None)
+
+    async def hook() -> None:
+        state.blind = True  # the engine's read failed; still BLIND
+
+    state.on_token_installed = hook
+    assert (await _get(state, "/oauth/callback?code=abc&state=S")).status_code == 200
+    assert state.blind is True
+    assert (await _get(state, "/health")).json()["ok"] is False
+
+
+@pytest.mark.parametrize(
+    ("exc", "name"),
+    [
+        (OSError("disk"), "OSError"),
+        (KeyError("callback_url"), "KeyError"),
+        (httpx.ConnectError("schwab unreachable"), "ConnectError"),
+    ],
+)
+async def test_oauth_callback_maps_io_failures_to_install_failed(
+    tmp_path: Path, store: Store, monkeypatch: pytest.MonkeyPatch, exc: Exception, name: str
+) -> None:
+    """A torn auth-context file, a missing key in it, and a network failure
+    talking to Schwab are all "the install did not happen" — a 400 naming the
+    class, not a 500 traceback that could carry the one-time code."""
+    state = _state(tmp_path, store)
+
+    def raise_it(received_url: str) -> None:
+        raise exc
+
+    monkeypatch.setattr(state.token, "complete_auth", raise_it)
+    r = await _get(state, "/oauth/callback?code=abc&state=S")
+    assert r.status_code == 400 and r.text == name
+    rows = await store.fetchall("SELECT kind, detail FROM token_events")
+    assert [tuple(row) for row in rows] == [("install_failed", name)]
 
 
 async def test_oauth_callback_no_auth_in_progress(
