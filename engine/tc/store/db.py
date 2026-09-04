@@ -16,7 +16,7 @@ from typing import Any, Literal
 import aiosqlite
 from pydantic import BaseModel, ConfigDict
 
-from tc.broker.models import AccountSnapshot, OrderRow
+from tc.broker.models import RESTING, STOP_TYPES, AccountSnapshot, OrderRow
 
 Verdict = Literal["done", "noop", "content_failed", "failed", "timeout", "missed"]
 VERDICTS: frozenset[str] = frozenset(
@@ -276,6 +276,34 @@ class Store:
             " (SELECT id FROM account_snapshots ORDER BY id DESC LIMIT 1)"
         )
         return {r["symbol"]: int(r["quantity"]) for r in rows}
+
+    async def resting_stops_on(self, d: date) -> dict[str, tuple[Decimal, Decimal]]:
+        """The resting stop map (task-11-brief.md, ruling 4) for the newest
+        order snapshot read taken on `d`: symbol -> (stop_price, price) for
+        every STOP/STOP_LIMIT row whose status is still resting. Used only by
+        `tc.shadow.diff_day` -- this reads the store, it never calls the
+        broker or writes anything."""
+        prefix = d.isoformat()
+        newest = await self.fetchone(
+            "SELECT read_at FROM order_snapshots WHERE read_at LIKE ?"
+            " ORDER BY read_at DESC LIMIT 1",
+            (prefix + "%",),
+        )
+        if newest is None:
+            return {}
+        rows = await self.fetchall(
+            "SELECT symbol, status, order_type, stop_price, price FROM order_snapshots"
+            " WHERE read_at = ?",
+            (newest["read_at"],),
+        )
+        result: dict[str, tuple[Decimal, Decimal]] = {}
+        for r in rows:
+            if r["order_type"] not in STOP_TYPES or r["status"] not in RESTING:
+                continue
+            if r["stop_price"] is None or r["price"] is None:
+                continue
+            result[r["symbol"]] = (Decimal(r["stop_price"]), Decimal(r["price"]))
+        return result
 
     async def first_seen(self, symbol: str) -> datetime | None:
         """``read_at`` of the earliest account snapshot that carried `symbol`

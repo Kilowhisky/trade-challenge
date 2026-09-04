@@ -23,6 +23,7 @@ from tc.config import Settings, load_settings
 from tc.loops.session import seed_hwm
 from tc.main import JOBS, check_bind, run_once, serve
 from tc.rules.consistency import run_checks
+from tc.shadow import ShadowDiff, diff_day
 from tc.store.db import Store
 
 
@@ -124,6 +125,53 @@ def cmd_seed_hwm(ns: argparse.Namespace) -> int:
     return 0
 
 
+async def _shadow_diff(
+    s: Settings, d: date, status_path: Path, ticks_path: Path
+) -> ShadowDiff:
+    store = Store(s.engine.data_dir / "engine.db")
+    try:
+        await store.open()
+        return await diff_day(store, d, status_path, ticks_path, s.engine.reserve_usd)
+    finally:
+        await store.close()
+
+
+def cmd_shadow_diff(ns: argparse.Namespace) -> int:
+    """Phase 0 exit criterion: diff one engine day against the legacy
+    `status/*.md` + `status/ticks/*.tsv` ledgers it replaces. Prints one line
+    per mismatch, then `SHADOW OK`/`SHADOW DIFF`; exit 0/1. A missing legacy
+    file is an operator error (exit 4), not a diff finding."""
+    s = _settings(ns)
+    d = date.fromisoformat(ns.date)
+    store_dir = Path(ns.store_dir)
+    status_path = store_dir / "status" / f"{ns.date}.md"
+    ticks_path = store_dir / "status" / "ticks" / f"{ns.date}.tsv"
+    if not status_path.exists():
+        print(f"tc: no legacy status file at {status_path}", file=sys.stderr)
+        return 4
+    if not ticks_path.exists():
+        print(f"tc: no legacy ticks file at {ticks_path}", file=sys.stderr)
+        return 4
+    result = asyncio.run(_shadow_diff(s, d, status_path, ticks_path))
+    if not result.hwm_match:
+        if result.missing_engine_session:
+            print(f"HWM no engine session_status recorded for {ns.date}")
+        else:
+            print("HWM mismatch between engine session_status and legacy status")
+    for hhmm, engine_v, legacy_v in result.value_diffs:
+        print(f"VALUE {hhmm} engine={engine_v} legacy={legacy_v}")
+    for hhmm, engine_state, legacy_state in result.state_diffs:
+        print(f"STATE {hhmm} engine={engine_state} legacy={legacy_state}")
+    if not result.stop_map_match:
+        print("STOPS mismatch between engine resting stops and legacy stop map")
+    for hhmm in result.missing_engine_ticks:
+        print(f"MISSING-ENGINE-TICK {hhmm}")
+    for hhmm in result.missing_legacy_ticks:
+        print(f"MISSING-LEGACY-TICK {hhmm}")
+    print("SHADOW OK" if result.ok else "SHADOW DIFF")
+    return 0 if result.ok else 1
+
+
 def cmd_run(ns: argparse.Namespace) -> int:
     """The service. `--once JOB` is the operator smoke test: start, run one
     job, stop, no HTTP surface."""
@@ -168,6 +216,11 @@ def build_parser() -> argparse.ArgumentParser:
     sh.add_argument("--value", required=True)
     sh.add_argument("--recorded-on", required=True)
     sh.set_defaults(fn=cmd_seed_hwm)
+
+    sd = sub.add_parser("shadow-diff")
+    sd.add_argument("date")
+    sd.add_argument("--store-dir", required=True)
+    sd.set_defaults(fn=cmd_shadow_diff)
 
     return p
 
