@@ -6,6 +6,7 @@ engine:
   repo_dir: /app/repo          # the checkout, read-only: rules.yml, .claude/, CLAUDE.md
   http_bind: 127.0.0.1:8080
   reserve_usd: "900.00"        # CLAUDE.md header: the one fixed dollar quantity
+  orders_from: 2026-08-14      # the earliest date an order could still be resting — coverage, not a date (tick.md §B3)
 token:
   reauth_after_days: 5         # engine posts the auth URL to Discord at this age
   hard_expiry_days: 7          # Schwab's absolute refresh-token lifetime (verified 2026-09-02)

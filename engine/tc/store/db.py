@@ -258,6 +258,13 @@ class Store:
             intraday_high=None if row["intraday_high"] is None else Decimal(row["intraday_high"]),
         )
 
+    async def latest_positions(self) -> dict[str, int]:
+        rows = await self.fetchall(
+            "SELECT symbol, quantity FROM position_snapshots WHERE snapshot_id ="
+            " (SELECT id FROM account_snapshots ORDER BY id DESC LIMIT 1)"
+        )
+        return {r["symbol"]: int(r["quantity"]) for r in rows}
+
     async def record_job_run(
         self,
         job: str,

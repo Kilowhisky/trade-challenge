@@ -6,6 +6,7 @@ moment an order or a re-auth needs it.
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,8 @@ class EngineConfig(BaseModel):
     repo_dir: Path                      # rules.yml, prompts, the manual (read-only mount)
     http_bind: str = "127.0.0.1:8080"
     reserve_usd: Decimal = Decimal("900.00")
+    # the earliest date an order could still be resting — coverage, not a date (tick.md §B3)
+    orders_from: date = date(2026, 8, 14)
 
 
 class ShadowConfig(BaseModel):
