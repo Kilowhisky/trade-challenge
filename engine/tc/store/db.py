@@ -242,10 +242,8 @@ class Store:
             ),
         )
 
-    async def latest_session_status(self) -> SessionStatusRow | None:
-        row = await self.fetchone("SELECT * FROM session_status ORDER BY date DESC LIMIT 1")
-        if row is None:
-            return None
+    @staticmethod
+    def _status_row(row: sqlite3.Row) -> SessionStatusRow:
         return SessionStatusRow(
             date=date.fromisoformat(row["date"]),
             close_value=Decimal(row["close_value"]),
@@ -257,6 +255,20 @@ class Store:
             ratcheted=bool(row["ratcheted"]),
             intraday_high=None if row["intraday_high"] is None else Decimal(row["intraday_high"]),
         )
+
+    async def latest_session_status(self) -> SessionStatusRow | None:
+        row = await self.fetchone("SELECT * FROM session_status ORDER BY date DESC LIMIT 1")
+        return None if row is None else self._status_row(row)
+
+    async def session_status_for(self, d: date) -> SessionStatusRow | None:
+        row = await self.fetchone("SELECT * FROM session_status WHERE date=?", (d.isoformat(),))
+        return None if row is None else self._status_row(row)
+
+    async def ticks_for(self, at_et_prefix: str) -> list[TickRow]:
+        rows = await self.fetchall(
+            "SELECT * FROM ticks WHERE at_et LIKE ? ORDER BY id", (at_et_prefix + "%",)
+        )
+        return [TickRow(**{k: r[k] for k in TickRow.model_fields}) for r in rows]
 
     async def latest_positions(self) -> dict[str, int]:
         rows = await self.fetchall(

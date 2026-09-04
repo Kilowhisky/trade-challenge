@@ -151,6 +151,25 @@ def test_token_status_branches(
     assert f"state={state}" in capsys.readouterr().out
 
 
+def test_seed_hwm_converts_pre_amendment_basis(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = cli.main([*_cfg(tmp_path), "seed-hwm", "--value", "2900.00", "--recorded-on", "2026-08-25"])
+    out = capsys.readouterr().out
+    assert rc == 0 and out.strip() == "hwm=3800.00 basis=account"
+
+
+def test_seed_hwm_twice_exits_4(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    args = _cfg(tmp_path)
+    assert cli.main([*args, "seed-hwm", "--value", "3800.00", "--recorded-on", "2026-09-03"]) == 0
+    capsys.readouterr()
+    rc = cli.main([*args, "seed-hwm", "--value", "1.00", "--recorded-on", "2026-09-03"])
+    err = capsys.readouterr().err
+    assert rc == 4 and err.startswith("tc: ")
+
+
 def test_default_env_is_resolved_next_to_the_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

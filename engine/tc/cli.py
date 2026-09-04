@@ -7,7 +7,8 @@ import argparse
 import asyncio
 import sys
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import yaml
@@ -19,7 +20,9 @@ from tc.broker.client import BrokerError, SchwabBroker
 from tc.broker.fake import Recorder
 from tc.broker.token import NoAuthInProgress, TokenStore
 from tc.config import Settings, load_settings
+from tc.loops.session import seed_hwm
 from tc.rules.consistency import run_checks
+from tc.store.db import Store
 
 
 def _settings(ns: argparse.Namespace) -> Settings:
@@ -108,6 +111,23 @@ def cmd_record_fixtures(ns: argparse.Namespace) -> int:
     return 0
 
 
+async def _seed_hwm(s: Settings, value: Decimal, recorded_on: date) -> Decimal:
+    store = Store(s.engine.data_dir / "engine.db")
+    try:
+        await store.open()
+        row = await seed_hwm(store, value, recorded_on, s.engine.reserve_usd)
+        return row.hwm
+    finally:
+        await store.close()
+
+
+def cmd_seed_hwm(ns: argparse.Namespace) -> int:
+    recorded_on = date.fromisoformat(ns.recorded_on)
+    hwm = asyncio.run(_seed_hwm(_settings(ns), Decimal(ns.value), recorded_on))
+    print(f"hwm={hwm} basis=account")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tc")
     p.add_argument("--config", default="config.yml")
@@ -129,6 +149,11 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--out", required=True)
     r.add_argument("--symbols", required=True)
     r.set_defaults(fn=cmd_record_fixtures)
+
+    sh = sub.add_parser("seed-hwm")
+    sh.add_argument("--value", required=True)
+    sh.add_argument("--recorded-on", required=True)
+    sh.set_defaults(fn=cmd_seed_hwm)
 
     return p
 
