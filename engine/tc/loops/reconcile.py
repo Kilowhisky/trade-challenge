@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 from pydantic import BaseModel, ConfigDict
 
 from tc.broker.client import Broker
-from tc.broker.models import AccountSnapshot, OrderRow
+from tc.broker.models import RESTING, AccountSnapshot, OrderRow
 from tc.store.db import Store
 
 
@@ -40,7 +40,7 @@ def build_view(account: AccountSnapshot, orders: list[OrderRow], read_at: dateti
     entries = [
         o
         for o in orders
-        if o.status in {"WORKING", "QUEUED", "ACCEPTED"}
+        if o.status in RESTING
         and o.order_type == "LIMIT"
         and o.legs
         and o.legs[0].instruction.startswith("BUY")
