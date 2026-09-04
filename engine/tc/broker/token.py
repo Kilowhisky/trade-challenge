@@ -25,6 +25,20 @@ from tc.config import TokenConfig
 TokenState = Literal["absent", "fresh", "reauth_due", "dead"]
 DAY = 86400.0
 
+# The four action strings a human (or /health, task 9) reads off a TokenState.
+# Lives here, not in cli.py, so the token loop and any future consumer share
+# one copy instead of a second inlined dict silently drifting from this one.
+_ACTIONS: dict[TokenState, str] = {
+    "fresh": "none",
+    "reauth_due": "REAUTH NOW: tc auth-url, open on phone",
+    "dead": "DEAD — account is blind until re-auth",
+    "absent": "no token — run tc auth-url",
+}
+
+
+def action_for(state: TokenState) -> str:
+    return _ACTIONS[state]
+
 
 class NoAuthInProgress(Exception):  # noqa: N818 -- name fixed by the task-6 interface contract
     """complete_auth was called with no persisted auth context."""

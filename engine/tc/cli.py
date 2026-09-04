@@ -18,7 +18,7 @@ from pydantic_settings import SettingsError
 
 from tc.broker.client import BrokerError, SchwabBroker
 from tc.broker.fake import Recorder
-from tc.broker.token import NoAuthInProgress, TokenStore
+from tc.broker.token import NoAuthInProgress, TokenStore, action_for
 from tc.config import Settings, load_settings
 from tc.loops.session import seed_hwm
 from tc.rules.consistency import run_checks
@@ -48,12 +48,7 @@ def _token_line(store: TokenStore) -> tuple[str, int]:
     state = store.state()
     age = store.age_days()
     left = store.days_until_dead()
-    action = {
-        "fresh": "none",
-        "reauth_due": "REAUTH NOW: tc auth-url, open on phone",
-        "dead": "DEAD — account is blind until re-auth",
-        "absent": "no token — run tc auth-url",
-    }[state]
+    action = action_for(state)
     fmt: Callable[[float | None], str] = lambda x: "n/a" if x is None else f"{x:.2f}"  # noqa: E731
     line = f"state={state} age_days={fmt(age)} days_until_dead={fmt(left)} action={action}"
     rc = {"fresh": 0, "reauth_due": 2, "dead": 3, "absent": 3}[state]
