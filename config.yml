@@ -19,3 +19,16 @@ schedule:                      # ET. weekdays = trading days per get_market_hour
   token_check:   "at 07:05 daily"
   expectations:  "at 07:30 daily"
   backup:        "at 23:30 daily"
+expectations:                  # spec §7 layer 3 — declarative anomaly checks over the store
+  - name: ticks_per_session_min
+    check: ticks_per_session_min
+    arg: 20                    # a normal RTH session sweeps every 15m from 09:32-15:47 -> ~25 ticks
+  - name: session_status_present
+    check: session_status_present
+  - name: job_verdict_not
+    check: job_verdict_not
+    arg: content_failed
+    window_sessions: 5
+  - name: token_days_until_dead_min
+    check: token_days_until_dead_min
+    arg: 2

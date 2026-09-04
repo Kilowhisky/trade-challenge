@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
@@ -45,6 +45,24 @@ class TokenConfig(BaseModel):
         return self
 
 
+class Expectation(BaseModel):
+    """One row of spec §7 layer 3: a named, declarative anomaly check over
+    the store (tc.loops.expectations). ``arg`` and ``window_sessions`` are
+    config data, not §9 rule numbers -- they tune what the check watches for,
+    not an account risk limit."""
+
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    check: Literal[
+        "ticks_per_session_min",
+        "session_status_present",
+        "job_verdict_not",
+        "token_days_until_dead_min",
+    ]
+    arg: int | str | None = None
+    window_sessions: int = 1
+
+
 class FileConfig(BaseModel):
     """The whole of config.yml. Unknown keys are errors, not warnings."""
 
@@ -53,6 +71,7 @@ class FileConfig(BaseModel):
     token: TokenConfig
     schedule: dict[str, str] = Field(default_factory=dict)
     shadow: ShadowConfig = Field(default_factory=ShadowConfig)
+    expectations: list[Expectation] = Field(default_factory=list)
 
 
 class Secrets(BaseSettings):
@@ -84,6 +103,7 @@ class Settings(BaseModel):
     token: TokenConfig
     schedule: dict[str, str]
     shadow: ShadowConfig
+    expectations: list[Expectation]
 
     # Read-only passthroughs so callers say s.schwab_app_key, not
     # s.secrets.schwab_app_key -- the split above is an internal concern.
@@ -125,4 +145,5 @@ def load_settings(config_path: Path, env_file: Path | None = None) -> Settings:
         token=file_cfg.token,
         schedule=file_cfg.schedule,
         shadow=file_cfg.shadow,
+        expectations=file_cfg.expectations,
     )

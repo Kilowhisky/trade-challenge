@@ -336,6 +336,12 @@ class Store:
             for r in rows
         ]
 
+    async def record_expectation(self, name: str, ok: bool, detail: str) -> None:
+        await self.execute(
+            "INSERT INTO expectations_log(at, name, ok, detail) VALUES (?,?,?,?)",
+            (_now(), name, int(ok), detail),
+        )
+
     async def record_rules_version(self, sha256: str, path: str) -> None:
         await self.execute(
             "INSERT OR IGNORE INTO rules_versions(sha256, path, seen_at) VALUES (?,?,?)",
