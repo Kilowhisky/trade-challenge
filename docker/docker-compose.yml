@@ -242,6 +242,12 @@ services:
   # broker/scheduler/claude above until Phase 3 — it reads and writes its own
   # state independently and nothing above depends on it yet.
   engine:
+    # OPT-IN via the `engine` profile. scripts/deploy.sh runs a bare
+    # `compose up -d` every night at 18:30 ET; without a profile that would
+    # try to bring this service up on a host that has no /srv/tc/.env yet and
+    # fail the whole deploy. Naming the service (`up -d engine`) activates
+    # the profile; the runbook does exactly that.
+    profiles: ["engine"]
     build: {context: .., dockerfile: docker/Dockerfile.engine}
     image: ${TC_ENGINE_IMAGE:-ghcr.io/kilowhisky/trade-challenge-engine:latest}
     container_name: tc-engine

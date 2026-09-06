@@ -1,3 +1,42 @@
+# Handoff — 2026-09-06 (Sunday), 17:30 ET
+
+**The old stack is down until you re-auth.** The Pi rebooted Saturday ~17:44 ET.
+When it came back, the containers had no DNS for a while (pihole started after
+docker); `tc-broker` crashed on a Discord lookup and never listened on :8000, so
+`tc-scheduler` (killed by the reboot, exit 255) could not restart behind it.
+Saturday's 07:40 `weekly-universe` and 09:40 `sector-tag` had already failed
+that morning on the same outage (`Request timed out`, `fetch of origin/deploy
+failed`) — so **no qualified set and no sector tags exist yet**.
+
+What I did at 17:10 ET today: DNS was healthy again, so I restarted
+`tc-broker` and started `tc-scheduler` directly. The scheduler is up (no jobs
+until Tuesday; Monday is Labor Day). The broker is **not starting on purpose**:
+its entrypoint reports `token is 5d old, past the 5-day forced re-auth` and
+waits for a fresh token.
+
+## Needs you before Tuesday 09:30 ET
+
+1. **Re-auth the old broker** (runbook unchanged): `ssh -L 8182:127.0.0.1:8182 brewmaster`,
+   then `cd ~/trade-challenge && docker compose -f docker/docker-compose.yml run --rm schwab-auth`.
+   The broker self-starts when the token appears. Hard expiry of the current
+   token is Tuesday 2026-09-08 ~10:48 ET; after that the account is blind
+   either way.
+2. **After re-auth, force the missed weekend jobs** (they need the broker):
+   `docker exec tc-scheduler /app/scripts/scheduled-run.sh weekly-universe --force`
+   then `… sector-tag --force`. Until they run, Tuesday's scout reports `cohort 0`.
+3. Watch `#llm-yolo` at 09:57 ET Tuesday for the first research pass of the week.
+
+## v3 engine — Phase 0b merged to `main` (6d75f63), not deployed
+
+See the section below for what it is and the runbook
+(`docs/superpowers/plans/2026-09-04-v3-phase0-runbook.md`) for how to bring it
+up beside the old stack once the three prerequisites are done. `main` has NOT
+been pushed to `deploy`: the new compose `engine` service is behind a profile
+so the nightly deploy cannot trip over it, but I want you to see this note
+before the server adopts 22 commits.
+
+---
+
 # Handoff — 2026-09-04, afternoon
 
 ## v3 engine — Phase 0b built, not yet deployed

@@ -72,6 +72,11 @@ volume.** It does not exist yet at this point — the engine mints its own
 token against the new app in §4. A copied token would be the old app's
 token in the new app's clothes, and would not authenticate.
 
+> **The `engine` service is behind the `engine` compose profile.** Every command below names the
+> service explicitly (`build engine`, `up -d engine`, `exec engine`, `down engine`), which activates
+> the profile. The nightly `scripts/deploy.sh` runs a bare `compose up -d` and therefore never
+> touches the engine — start and stop it only by hand during Phase 0.
+
 ## 2. Bring-up
 
 From the checkout, on the branch this repo builds `deploy` from (this
