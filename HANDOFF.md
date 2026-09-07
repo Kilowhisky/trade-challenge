@@ -1,3 +1,55 @@
+# Handoff — 2026-09-07 (Labor Day), 13:15 ET
+
+**The old stack is retired.** Chris, 10:03 PDT: *"The old broker is dead."*
+`tc-broker` and `tc-scheduler` are stopped (not deleted — rollback is
+`docker compose up -d broker scheduler` plus a schwab-mcp re-auth), and the
+host's nightly `deploy.sh` cron is commented out so it cannot restart them.
+Nothing in v2 runs any more: no ticks, no research, no execute passes.
+
+**The v3 engine is running on the Pi** (`tc-engine`, image built from
+`docker/Dockerfile.engine` at a3dd3f4, shadow mode, no Discord yet):
+`curl -s http://127.0.0.1:8080/health` on the Pi. High-water mark seeded at
+$3,800.00 (basis account value, from `status/2026-09-04.md`). It is **BLIND
+until a token exists** — every tick writes a BLIND row and the book is
+watched only by the GTC stops resting at Schwab (AMH, CSX, USB, IQV).
+
+## Needs you, now
+
+1. **Mint the engine's token.** Run on the Pi:
+   `cd ~/trade-challenge && docker compose -f docker/docker-compose.yml exec engine tc --config /app/repo/config.yml --env /srv/tc/.env auth-url`
+   Open the printed URL in any browser, log in with MFA, accept. The browser
+   is sent to `https://127.0.0.1:8182/?code=…` and fails to load — that is
+   expected (it is the old app's registered callback). Copy the ENTIRE
+   address-bar URL and run
+   `… exec engine tc --config /app/repo/config.yml --env /srv/tc/.env auth-complete '<that url>'`
+   (single quotes). `token-status` should then read `state=fresh`. The engine
+   picks the token up on its next call; no restart.
+2. **A Discord webhook** (optional but strongly wanted): channel
+   `#engine-shadow` → Integrations → Webhooks → new → copy URL; append
+   `TC_DISCORD_WEBHOOK_URL=<url>` and `TC_DISCORD_SHADOW_WEBHOOK_URL=<url>` to
+   `/srv/tc/.env` on the Pi, `PROBE_WEBHOOK=<url>` to `/etc/tc/probe.env`, then
+   `docker compose -f docker/docker-compose.yml restart engine` and
+   `sudo systemctl enable --now tc-healthprobe.timer`.
+3. **Tailscale login** for the phone re-auth later: `sudo tailscale up` on the
+   Pi prints a link; open it signed in. Then MagicDNS + HTTPS certs in the
+   admin console, and change the Schwab app's callback to
+   `https://brewmaster.<tailnet>.ts.net/oauth/callback` (Schwab re-approves the
+   app, 1–3 days; until then keep the paste flow in item 1).
+
+## What the engine cannot do yet — and the plan
+
+It watches (reconcile, seven tick watches, clocks, close + HWM, expectations,
+`/health`). It **cannot place, replace or cancel an order, and runs no
+research** — those are Plan 0c (Claude runner + research tools) and Plan 1
+(order path). With v2 gone those two plans are the only path back to a system
+that trades; they start next. Until Plan 1 lands, a stop that fills, a partial
+fill, or an option clock cannot be acted on by anything but you at Schwab.
+
+Labor Day note: the engine's ticks today were recorded `missed`/`BLIND`
+because a blind engine assumes a weekday is a trading day (by design).
+
+---
+
 # Handoff — 2026-09-06 (Sunday), 17:30 ET
 
 **The old stack is down until you re-auth.** The Pi rebooted Saturday ~17:44 ET.
