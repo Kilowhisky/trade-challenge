@@ -258,6 +258,10 @@ services:
       - ..:/app/repo:ro
       - /srv/tc/data:/data
       - /srv/tc/.env:/srv/tc/.env:ro
+      # Phase 0 only: the old store, read-only, so `tc shadow-diff DATE
+      # --store-dir /data/store` can compare the engine's view against the
+      # bash stack's ledgers. Removed with the store at Phase 3.
+      - ${TC_DATA_DIR:-../../trade-challenge-store}:/data/store:ro
     network_mode: host
     mem_limit: 512m
     oom_score_adj: 300
