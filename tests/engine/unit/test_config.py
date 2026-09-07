@@ -109,3 +109,19 @@ def test_schedule_and_shadow_sections(
     assert s.shadow.enabled is True
     assert s.engine.repo_dir == Path("/r")
     assert str(s.discord_shadow_webhook_url) == "https://discord.test/shadow"
+
+
+def test_engine_loads_without_any_discord_webhook(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No Discord configured is a valid (quiet) engine, not a startup failure."""
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "engine: {data_dir: /d, repo_dir: /r}\n"
+        "token: {reauth_after_days: 5, hard_expiry_days: 7, callback_url: https://x.ts.net/oauth/callback}\n"
+    )
+    for k in ("TC_DISCORD_WEBHOOK_URL", "TC_DISCORD_SHADOW_WEBHOOK_URL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("TC_SCHWAB_APP_KEY", "k")
+    monkeypatch.setenv("TC_SCHWAB_APP_SECRET", "s")
+    from tc.config import load_settings
+    s = load_settings(cfg, env_file=tmp_path / "no-such-env")
+    assert s.discord_webhook_url is None and s.discord_shadow_webhook_url is None

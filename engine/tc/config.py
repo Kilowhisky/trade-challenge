@@ -85,7 +85,9 @@ class Secrets(BaseSettings):
 
     schwab_app_key: str
     schwab_app_secret: str
-    discord_webhook_url: AnyHttpUrl
+    # Both webhooks are optional: an engine with no Discord still watches the
+    # book, serves /health and writes its ledgers; Notifier(None) posts nothing.
+    discord_webhook_url: AnyHttpUrl | None = None
     discord_shadow_webhook_url: AnyHttpUrl | None = None
     healthchecks_base_url: AnyHttpUrl | None = None
 
@@ -120,7 +122,7 @@ class Settings(BaseModel):
         return self.secrets.schwab_app_secret
 
     @property
-    def discord_webhook_url(self) -> AnyHttpUrl:
+    def discord_webhook_url(self) -> AnyHttpUrl | None:
         return self.secrets.discord_webhook_url
 
     @property
