@@ -27,7 +27,7 @@ These are spec §11's Phase 0 prerequisites; do not proceed past §2 without
 paper mode without live reads").
 
 1. **Second Schwab app**, developer portal, callback
-   `https://brewmaster.tail14458e.ts.net:8443/oauth/callback` (the exact hostname is
+   `https://brewhouse.wetzelrice.com:8443/oauth/callback` (the exact hostname is
    only known after §3 below runs `tailscale up`; register the app once
    that hostname is in hand). Approval takes one to three days.
 2. **Tailscale on the Pi and on the phone**, MagicDNS and HTTPS certificates
@@ -112,12 +112,16 @@ does not exist until `tailscale up` has run.
 ```
 sudo tailscale up
 # in the Tailscale admin console: enable MagicDNS and HTTPS certificates
-sudo tailscale serve --bg --https=8443 http://127.0.0.1:8080   # 443 is Pi-hole's web UI on this host
+# DONE 2026-09-07: Caddy (with the Cloudflare DNS module) terminates TLS for
+# brewhouse.wetzelrice.com on 100.121.202.108:8443 and proxies to the engine;
+# config /etc/caddy/Caddyfile, token /etc/caddy/env, unit caddy.service.
+# `tailscale serve` is OFF (it cannot issue a certificate for a custom name).
+# Cloudflare: an A record brewhouse -> 100.121.202.108, DNS only (grey cloud).
 ```
 
 Note the resulting hostname (`https://<pi>.<tailnet>.ts.net`). Set
 `config.yml`'s `token.callback_url` to
-`https://brewmaster.tail14458e.ts.net:8443/oauth/callback` (replacing the
+`https://brewhouse.wetzelrice.com:8443/oauth/callback` (replacing the
 `https://REPLACE-ME.ts.net/oauth/callback` placeholder), redeploy the
 `engine` service so it picks the edit up (`docker compose -f
 docker/docker-compose.yml up -d engine`), and register that **exact** URL on
@@ -157,7 +161,7 @@ docker compose -f docker/docker-compose.yml exec engine \
 
 prints a Schwab login URL. Open it on the phone with Tailscale connected
 (§3 above put that hostname on the app and in `config.yml`) — the callback
-lands on `https://brewmaster.tail14458e.ts.net:8443/oauth/callback`, which
+lands on `https://brewhouse.wetzelrice.com:8443/oauth/callback`, which
 the `engine` container's HTTP app serves directly (no SSH tunnel needed,
 unlike the old `tc-schwab-auth` flow). Confirm:
 

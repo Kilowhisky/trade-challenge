@@ -14,7 +14,7 @@ token:
   # The callback registered on the ONE Schwab app (schwab-mcp's default). Schwab
   # matches it exactly; a browser cannot load it, which is fine: the operator
   # copies the redirected URL and runs `tc auth-complete '<url>'`. Move it to
-  # https://brewmaster.tail14458e.ts.net:8443/oauth/callback (tailscale serve on
+  # https://brewhouse.wetzelrice.com:8443/oauth/callback (tailscale serve on
   # 8443; 443 is Pi-hole) once Tailscale is up and
   # the app's callback has been changed in the developer portal (re-approval).
   callback_url: https://127.0.0.1:8182
