@@ -30,11 +30,12 @@ watched only by the GTC stops resting at Schwab (AMH, CSX, USB, IQV).
    `/srv/tc/.env` on the Pi, `PROBE_WEBHOOK=<url>` to `/etc/tc/probe.env`, then
    `docker compose -f docker/docker-compose.yml restart engine` and
    `sudo systemctl enable --now tc-healthprobe.timer`.
-3. **Tailscale login** for the phone re-auth later: `sudo tailscale up` on the
-   Pi prints a link; open it signed in. Then MagicDNS + HTTPS certs in the
-   admin console, and change the Schwab app's callback to
-   `https://brewmaster.<tailnet>.ts.net/oauth/callback` (Schwab re-approves the
-   app, 1–3 days; until then keep the paste flow in item 1).
+3. **Tailscale is DONE** (2026-09-07 13:20 ET): the Pi is `brewmaster.tail14458e.ts.net`,
+   HTTPS certs enabled, `tailscale serve` fronts the engine on **port 8443**
+   (443 is Pi-hole). The phone callback to register on the Schwab app is
+   `https://brewmaster.tail14458e.ts.net:8443/oauth/callback`; changing an
+   app's callback triggers Schwab re-approval (1–3 days), so either register
+   it on a NEW app and switch keys when approved, or accept a possible pause.
 
 ## What the engine cannot do yet — and the plan
 
