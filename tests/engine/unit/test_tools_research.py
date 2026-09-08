@@ -122,7 +122,7 @@ async def research_server(tmp_path: Path, store: Store, docs: DocStore) -> FastM
         account_hash=lambda: "HASH_REDACTED",
     )
     server = FastMCP(name="engine", streamable_http_path="/", stateless_http=False)
-    tools_research.register(server, deps)
+    tools_research.register(server, deps, "research")
     return server
 
 

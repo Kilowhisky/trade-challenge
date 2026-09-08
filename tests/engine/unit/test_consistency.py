@@ -22,6 +22,7 @@ def _mini_repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     shutil.copy(REPO / "rules.yml", root / "rules.yml")
+    shutil.copy(REPO / "config.yml", root / "config.yml")
     shutil.copy(REPO / "CLAUDE.md", root / "CLAUDE.md")
     shutil.copy(REPO / "strategy.md", root / "strategy.md")
     shutil.copytree(REPO / ".claude", root / ".claude")
@@ -187,3 +188,65 @@ def test_run_checks_includes_the_tool_registry(monkeypatch: pytest.MonkeyPatch) 
     rep = run_checks(REPO)
     assert not rep.ok
     assert any(f.check == "tool_registry" for f in rep.findings)
+
+
+# --- schedule vs doc --------------------------------------------------------
+
+def test_schedule_check_passes_as_shipped() -> None:
+    from tc.rules.consistency import check_schedule_vs_doc
+
+    findings, count = check_schedule_vs_doc(REPO, _rules())
+    assert findings == []
+    assert count > 0
+
+
+def test_a_schedule_key_naming_no_job_is_found(tmp_path: Path) -> None:
+    """`Engine.start` rejects it too — but at start, on an unattended box,
+    where "it did not come up" is discovered whenever someone next looks."""
+    root = _mini_repo(tmp_path)
+    cfg = root / "config.yml"
+    cfg.write_text(cfg.read_text().replace("  scout:", "  scoot:", 1))
+    rep = run_checks(root)
+    assert not rep.ok
+    assert any("'scoot'" in f.message for f in rep.findings if f.check == "schedule_vs_doc")
+
+
+def test_a_job_spec_with_no_schedule_entry_is_found(tmp_path: Path) -> None:
+    """A job that has a spec and nothing that fires it reads as a working
+    feature and is not one."""
+    root = _mini_repo(tmp_path)
+    cfg = root / "config.yml"
+    cfg.write_text("\n".join(
+        line for line in cfg.read_text().splitlines() if not line.startswith("  catalyst:")
+    ))
+    rep = run_checks(root)
+    assert any(
+        "can never fire" in f.message for f in rep.findings if f.check == "schedule_vs_doc"
+    )
+
+
+def test_research_cadence_drifting_from_its_command_file_is_found(tmp_path: Path) -> None:
+    root = _mini_repo(tmp_path)
+    cfg = root / "config.yml"
+    cfg.write_text(
+        cfg.read_text().replace('"every 60m 09:57-14:57 weekdays"', '"every 60m 09:12-15:12 weekdays"')
+    )
+    rep = run_checks(root)
+    assert not rep.ok
+    messages = [f.message for f in rep.findings if f.check == "schedule_vs_doc"]
+    assert any("hourly at :57" in m for m in messages)
+    assert any("hours 9-14" in m for m in messages)
+
+
+def test_a_command_file_that_stops_stating_the_cadence_is_found(tmp_path: Path) -> None:
+    """The check reads the doc's own words rather than restating them, so the
+    doc losing them is itself the finding — not a silently skipped check."""
+    root = _mini_repo(tmp_path)
+    doc = root / ".claude" / "commands" / "research.md"
+    doc.write_text(doc.read_text().replace("hourly at :57", "whenever"))
+    rep = run_checks(root)
+    assert any(
+        "no longer states the research cadence" in f.message
+        for f in rep.findings
+        if f.check == "schedule_vs_doc"
+    )

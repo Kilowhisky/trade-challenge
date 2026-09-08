@@ -35,6 +35,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field
 
+from tc.mcp.registry import Role
 from tc.research import ledgers
 from tc.research.cohort import CohortRow
 from tc.research.cohort import cohort as compute_cohort
@@ -172,7 +173,18 @@ class Alert(BaseModel):
     body: str
 
 
-def register(server: FastMCP, deps: McpDeps) -> None:
+def register(server: FastMCP, deps: McpDeps, role: Role) -> None:
+    """Add every research tool to `server`.
+
+    `role` is unused and required. Every registrar shares the
+    `ToolRegistrar` shape `(server, deps, role)` so the wiring can hold
+    them in one list per role; this module happens to register the same
+    set whatever the role is, and only `build_servers` decides which roles
+    it is called for. A registrar with its own narrower signature would
+    have to be adapted at every call site, and an adapter is a place a
+    role can be dropped without anything noticing.
+    """
+    del role
     store = deps.store
     docs = deps.docs
 

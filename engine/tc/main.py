@@ -49,13 +49,18 @@ from tc.broker.models import MarketWindow
 from tc.broker.token import TokenStore
 from tc.clock import ET, fallback_window, trading_days_between
 from tc.config import Settings
-from tc.http.app import EngineState, build_app
+from tc.http.app import EngineState, McpMounts, build_app
+from tc.jobs.dispatch import JobRunner, RunnerClient
+from tc.jobs.spec import JOB_SPECS
 from tc.loops.expectations import digest, run_expectations
 from tc.loops.reconcile import reconcile
 from tc.loops.session import close_session
 from tc.loops.tick import TickResult, run_tick
 from tc.loops.token import token_check
 from tc.loops.universe import UniverseUnavailable, counts_detail, run_weekly_universe
+from tc.mcp import server as mcp_server
+from tc.mcp import tools_read, tools_research
+from tc.mcp.server import McpDeps, build_servers
 from tc.notify import Notifier, Pinger
 from tc.research.docs import DocStore
 from tc.rules.model import Rules
@@ -64,11 +69,20 @@ from tc.store.db import Store, Verdict
 
 log = logging.getLogger(__name__)
 
+# The jobs that are a Claude run rather than engine code — scout, catalyst,
+# preopen, postclose, research, sector_tag. Each reads its whole definition
+# (agent, allowlist, verdict shape, budget, window) from `JOB_SPECS`, and is
+# dispatched through `JobRunner` (jobs/dispatch.py). DERIVED from that table
+# rather than retyped: a hand-kept copy of a dict's keys is a job that either
+# has no spec or has one nothing dispatches, and both fail quietly.
+CLAUDE_JOBS: tuple[str, ...] = tuple(JOB_SPECS)
+
 # The job table. A name not in here is a config error, not a job that quietly
 # never runs: `Engine.start` rejects the schedule and `--once` rejects the
 # argument, both before anything is opened.
 JOBS: tuple[str, ...] = (
     "tick", "session_close", "token_check", "expectations", "backup", "weekly_universe",
+    *CLAUDE_JOBS,
 )
 
 BACKUPS_KEPT = 14  # ~3 weeks of trading days; the store is small and the disk is not
@@ -82,6 +96,35 @@ WINDOW_RETRY_S = 300.0
 # still true four hours later is worth saying again; saying it 78 times is how
 # a channel gets muted.
 TRIP_REPOST_S = 3600.0
+
+
+_mcp_wired = False
+
+
+def _wire_mcp_registrars() -> None:
+    """Hook the tool modules into the MCP roles, exactly once per process.
+
+    `tc.mcp.server` keeps its registrar table at module scope, so calling
+    `register` twice would build every server with two copies of every tool.
+    Wiring is therefore idempotent rather than left to the caller to get right
+    — `tc run --once` builds an engine, the tests build several, and a
+    duplicate registration is the kind of defect that shows up only as a
+    warning in a log nobody reads.
+
+    Registration is explicit and here rather than at import of the tool
+    modules: importing a module must never widen a server's surface, because
+    then what a role exposes depends on what happened to be imported.
+    """
+    global _mcp_wired
+    if _mcp_wired:
+        return
+    # The read tools go to both roles; `tools_read` itself withholds `book`
+    # from research. The research writers go to the research role only, and
+    # `build_servers` would refuse to build `decide` with them anyway.
+    mcp_server.register("research", tools_read.register)
+    mcp_server.register("decide", tools_read.register)
+    mcp_server.register("research", tools_research.register)
+    _mcp_wired = True
 
 
 @runtime_checkable
@@ -107,6 +150,7 @@ class Engine:
         clock: Callable[[], datetime],
         sleep_s: float = LOOP_INTERVAL_S,
         client: httpx.AsyncClient | None = None,
+        jobs: JobRunner | None = None,
     ) -> None:
         self._s = settings
         self._broker = broker
@@ -133,6 +177,14 @@ class Engine:
         self._window_is_fallback = False
         self._last_window_try: datetime | None = None
         self._account_hash: str | None = None
+        # The Claude half. `None` is a supported deployment -- an engine built
+        # without a runner records every Claude job as a `noop` naming the
+        # reason, rather than failing a job nobody installed.
+        self._jobs = jobs
+        # Built in `start()`, once the store is open: the MCP surface the
+        # runner reaches back through. `None` means no role tokens were
+        # configured, and `serve()` then mounts nothing.
+        self.mcp: McpMounts | None = None
         self._tasks: set[asyncio.Task[Verdict | None]] = set()
         self._stopping = False
         self.notifier = notifier
@@ -164,10 +216,43 @@ class Engine:
         unknown = sorted(set(self.scheduler.specs) - set(JOBS))
         if unknown:
             raise ValueError(f"schedule names jobs that do not exist: {', '.join(unknown)}")
+        self.mcp = self._build_mcp()
         await self._open_broker()
         now = self._clock()
         await self._refresh_window(self._et(now).date(), now)
         self._account_hash = await self._resolve_hash()
+        # `runner_ok` is what /health and the host probe report about the other
+        # container. It is read AFTER the broker so a dead runner never delays
+        # the account read, and it is not fatal: an engine whose runner is down
+        # still ticks, and saying so is the whole point of the field.
+        if self._jobs is not None:
+            self.state.runner_ok = await self._jobs.health()
+
+    def _build_mcp(self) -> McpMounts | None:
+        """The two role servers, or nothing at all.
+
+        `build_servers` is called WITHOUT `allow_stubs`, so a declared tool
+        that no registrar supplies fails the engine's start rather than
+        shipping a server that answers "not implemented yet" to a job that
+        needed it. Absent role tokens are the one soft failure: they mean the
+        operator has not installed a runner, which is a deployment, not a
+        defect.
+        """
+        tokens = self._s.mcp_tokens()
+        if not tokens:
+            log.warning("no MCP role tokens configured: the runner surface is not mounted")
+            return None
+        _wire_mcp_registrars()
+        deps = McpDeps(
+            store=self._store,
+            broker=self._broker,
+            docs=self._docs,
+            rules=self._rules,
+            settings=self._s,
+            clock=self._clock,
+            account_hash=lambda: self._account_hash,
+        )
+        return McpMounts(servers=build_servers(deps), tokens=tokens)
 
     async def stop(self) -> None:
         self._stopping = True
@@ -344,7 +429,14 @@ class Engine:
             return await self._job_backup(now)
         if job == "weekly_universe":
             return await self._job_weekly_universe(now)
+        if job in CLAUDE_JOBS:
+            return await self._job_claude(job, now)
         raise ValueError(f"unknown job {job!r}")
+
+    async def _job_claude(self, job: str, now: datetime) -> tuple[Verdict, dict[str, Any]]:
+        if self._jobs is None:
+            return "noop", {"skipped": "no runner configured"}
+        return await self._jobs.execute(job, now)
 
     # --- jobs --------------------------------------------------------------
 
@@ -702,14 +794,15 @@ def build_engine(
         # #llm-yolo. But silence is a state an operator must be told about,
         # because every notification below will now be dropped.
         log.warning("shadow mode is on with no shadow webhook configured: Discord is silent")
+    notifier = Notifier(
+        None if webhook is None else str(webhook), client, "[shadow] " if shadow else ""
+    )
     return Engine(
         settings,
         broker=broker,
         store=Store(settings.engine.data_dir / "engine.db"),
         token=token_store(settings),
-        notifier=Notifier(
-            None if webhook is None else str(webhook), client, "[shadow] " if shadow else ""
-        ),
+        notifier=notifier,
         pinger=Pinger(
             None
             if settings.healthchecks_base_url is None
@@ -718,6 +811,21 @@ def build_engine(
         ),
         clock=clock,
         client=client,
+        jobs=JobRunner(
+            RunnerClient(
+                str(settings.runner.url),
+                settings.runner_token,
+                client,
+                settings.runner.slack_s,
+                connect_timeout_s=settings.runner.connect_timeout_s,
+                # The bearer the runner presents BACK to the engine's own MCP
+                # mount. Every job in JOB_SPECS runs as the research role; the
+                # decide token is Plan 1's and is not handed out here.
+                role_token=settings.mcp_research_token,
+            ),
+            notifier,
+            clock,
+        ),
     )
 
 
@@ -746,7 +854,8 @@ async def serve(settings: Settings) -> None:
         await engine.start()
         server = _Server(
             uvicorn.Config(
-                build_app(engine.state), host=host, port=port, log_level="warning"
+                build_app(engine.state, mcp=engine.mcp), host=host, port=port,
+                log_level="warning",
             )
         )
         stop = asyncio.Event()

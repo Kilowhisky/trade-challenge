@@ -32,6 +32,8 @@ from typing import Any
 
 import httpx
 import pytest
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
 
 from tc import cli, main
 from tc.broker.client import Broker, BrokerError
@@ -41,9 +43,12 @@ from tc.broker.token import TokenStore
 from tc.clock import ET, trading_days_between
 from tc.config import Settings, load_settings
 from tc.http.app import build_app
+from tc.jobs.dispatch import JobRunner, RunnerClient
 from tc.loops.session import seed_hwm
 from tc.main import (
     BACKUPS_KEPT,
+    CLAUDE_JOBS,
+    JOBS,
     TRIP_REPOST_S,
     WINDOW_RETRY_S,
     Engine,
@@ -191,21 +196,27 @@ def _fx(tmp_path: Path) -> Path:
     return d
 
 
-def _write_config(tmp_path: Path, *, bind: str = "127.0.0.1:8080") -> Path:
+def _write_config(
+    tmp_path: Path, *, bind: str = "127.0.0.1:8080", env_extra: str = ""
+) -> Path:
     (tmp_path / "config.yml").write_text(
         CONFIG.format(data=tmp_path, repo=REPO, bind=bind)
     )
-    (tmp_path / ".env").write_text(ENV)
+    (tmp_path / ".env").write_text(ENV + env_extra)
     return tmp_path / "config.yml"
 
 
-def _cli_args(tmp_path: Path, *, bind: str = "127.0.0.1:8080") -> list[str]:
-    cfg = _write_config(tmp_path, bind=bind)
+def _cli_args(
+    tmp_path: Path, *, bind: str = "127.0.0.1:8080", env_extra: str = ""
+) -> list[str]:
+    cfg = _write_config(tmp_path, bind=bind, env_extra=env_extra)
     return ["--config", str(cfg), "--env", str(tmp_path / ".env")]
 
 
-def _settings(tmp_path: Path, *, bind: str = "127.0.0.1:8080") -> Settings:
-    cfg = _write_config(tmp_path, bind=bind)
+def _settings(
+    tmp_path: Path, *, bind: str = "127.0.0.1:8080", env_extra: str = ""
+) -> Settings:
+    cfg = _write_config(tmp_path, bind=bind, env_extra=env_extra)
     return load_settings(cfg, tmp_path / ".env")
 
 
@@ -216,6 +227,7 @@ def _engine(
     clock: Clock,
     notifier: Notifier,
     client: httpx.AsyncClient,
+    jobs: JobRunner | None = None,
 ) -> Engine:
     token = TokenStore(
         settings.engine.data_dir / "token.json", settings.token, "k", "s"
@@ -229,6 +241,7 @@ def _engine(
         pinger=Pinger(None, client),
         clock=clock,
         sleep_s=0.0,
+        jobs=jobs,
     )
 
 
@@ -341,7 +354,7 @@ async def test_a_dead_token_starts_blind_and_health_says_so(
     assert eng.state.blind is True
     app = build_app(eng.state)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://engine"
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:8080"
     ) as c:
         body = (await c.get("/health")).json()
     assert body["ok"] is False and body["blind"] is True
@@ -708,7 +721,7 @@ async def test_a_token_install_reopens_the_broker_and_ends_blind(
 
     app = build_app(eng.state)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://engine"
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:8080"
     ) as c:
         body = (await c.get("/health")).json()
     assert body["ok"] is True and body["blind"] is False
@@ -735,7 +748,7 @@ async def test_a_token_install_whose_read_fails_stays_blind(
     assert eng.state.blind is True
     app = build_app(eng.state)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://engine"
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:8080"
     ) as c:
         assert (await c.get("/health")).json()["ok"] is False
     await eng.stop()
@@ -876,7 +889,7 @@ async def test_two_consecutive_tick_failures_make_health_not_ok(
     async def health() -> dict[str, Any]:
         app = build_app(eng.state)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://engine"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:8080"
         ) as c:
             body: dict[str, Any] = (await c.get("/health")).json()
             return body
@@ -936,3 +949,208 @@ def test_run_once_exits_1_when_the_job_failed(
     assert cli.main([*args, "seed-hwm", "--value", "3800.00", "--recorded-on", "2026-09-03"]) == 0
 
     assert cli.main([*args, "run", "--once", "tick"]) == 1
+
+
+# --- the Claude jobs --------------------------------------------------------
+
+MCP_ENV = (
+    "TC_RUNNER_TOKEN=runner-token-not-real\n"
+    "TC_MCP_RESEARCH_TOKEN=research-token-not-real\n"
+    "TC_MCP_DECIDE_TOKEN=decide-token-not-real\n"
+)
+SCOUT_AT = datetime(2026, 9, 4, 11, 15, tzinfo=UTC)  # 07:15 ET, inside scout's window
+SCOUT_RESULT: dict[str, Any] = {
+    "verdict_raw": {"cohort": 3, "observed": 2, "escalations": [], "summary": "SCOUT ok"},
+    "result_text": "{}",
+    "is_error": False,
+    "subtype": "success",
+    "num_turns": 5,
+    "permission_denials": [],
+    "usage": {},
+    "duration_s": 9.0,
+    "timed_out": False,
+}
+
+
+def _fake_runner(payload: dict[str, Any]) -> RunnerClient:
+    def h(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/health"):
+            return httpx.Response(200, json={"ok": True, "busy": False})
+        return httpx.Response(200, json=payload)
+
+    return RunnerClient(
+        "http://runner",
+        "runner-token-not-real",
+        httpx.AsyncClient(transport=httpx.MockTransport(h)),
+        120.0,
+    )
+
+
+def test_every_scheduled_job_in_the_repo_config_is_a_known_job() -> None:
+    """config.yml is the deployed schedule. A key naming no job stops the
+    container at start, on a box where "it did not come up" is discovered
+    whenever someone next looks."""
+    import yaml
+
+    cfg = yaml.safe_load((REPO / "config.yml").read_text())
+    assert set(cfg["schedule"]) <= set(JOBS)
+    # And every Claude job the spec table defines is actually scheduled: a job
+    # with a spec and no schedule reads as a working feature and is not one.
+    assert set(CLAUDE_JOBS) <= set(cfg["schedule"])
+
+
+async def test_a_claude_job_dispatches_through_the_job_runner(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    s = _settings(tmp_path)
+    e = _engine(
+        s, store, FakeBroker(_fx(tmp_path), NOW), Clock(SCOUT_AT),
+        RecordingNotifier(client), client, jobs=JobRunner(
+            _fake_runner(SCOUT_RESULT), RecordingNotifier(client), lambda: SCOUT_AT
+        ),
+    )
+    assert await e.run_job("scout", SCOUT_AT) == "done"
+    rows = await _job_runs(store)
+    assert [r[0] for r in rows] == ["scout"]
+    assert rows[0][1] == "done"
+
+
+async def test_a_claude_job_with_no_runner_is_a_noop_row_not_a_failure(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    """An engine deployed without a runner is a supported deployment. A
+    `failed` row every weekday at 07:12 for a service nobody installed is how
+    a deadman gets muted."""
+    s = _settings(tmp_path)
+    e = _engine(s, store, FakeBroker(_fx(tmp_path), NOW), Clock(SCOUT_AT),
+                RecordingNotifier(client), client)
+    assert await e.run_job("scout", SCOUT_AT) == "noop"
+    assert (await _job_runs(store))[0][1] == "noop"
+
+
+async def test_start_mounts_the_mcp_surface_and_reads_the_runners_health(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    s = _settings(tmp_path, env_extra=MCP_ENV)
+    e = _engine(
+        s, store, FakeBroker(_fx(tmp_path), NOW), Clock(NOW), RecordingNotifier(client),
+        client, jobs=JobRunner(_fake_runner(SCOUT_RESULT), RecordingNotifier(client),
+                               lambda: NOW),
+    )
+    await e.start()
+    try:
+        assert e.mcp is not None
+        assert set(e.mcp.servers) == {"research", "decide"}
+        assert e.mcp.tokens == s.mcp_tokens()
+        assert e.state.runner_ok is True
+        # No `allow_stubs`: every declared tool has a real registrar, which is
+        # what makes "the role lists what the registry declares" mean anything.
+        research = {t.name for t in e.mcp.servers["research"]._tool_manager.list_tools()}
+        assert "quotes" in research and "doc_write" in research
+        assert "book" not in research  # the research roles hold no account tool
+    finally:
+        await e.stop()
+
+
+async def test_no_mcp_tokens_means_no_mount_and_an_engine_that_still_runs(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    s = _settings(tmp_path)
+    e = _engine(s, store, FakeBroker(_fx(tmp_path), NOW), Clock(NOW),
+                RecordingNotifier(client), client)
+    await e.start()
+    try:
+        assert e.mcp is None
+        assert build_app(e.state, mcp=e.mcp) is not None
+    finally:
+        await e.stop()
+
+
+async def test_start_refuses_a_declared_tool_no_registrar_supplies(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stub-filled server satisfies every "live matches declared" check while
+    answering nothing, so an unimplemented tool must fail boot, not ship."""
+    from tc.mcp.registry import ROLE_TOOLS
+
+    monkeypatch.setitem(ROLE_TOOLS, "research", (*ROLE_TOOLS["research"], "not_a_tool"))
+    s = _settings(tmp_path, env_extra=MCP_ENV)
+    e = _engine(s, store, FakeBroker(_fx(tmp_path), NOW), Clock(NOW),
+                RecordingNotifier(client), client)
+    with pytest.raises(RuntimeError, match="not_a_tool"):
+        await e.start()
+    await e.stop()
+
+
+async def test_the_mounted_research_role_answers_ping_only_with_its_bearer(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    """The engine's own wiring, over the wire: the mount exists, the gate is
+    on it, and the lifespan entered the session manager."""
+    s = _settings(tmp_path, env_extra=MCP_ENV)
+    e = _engine(s, store, FakeBroker(_fx(tmp_path), NOW), Clock(NOW),
+                RecordingNotifier(client), client)
+    await e.start()
+    app = build_app(e.state, mcp=e.mcp)
+    try:
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+
+            def in_process(
+                headers: dict[str, str] | None = None,
+                timeout: httpx.Timeout | None = None,
+                auth: httpx.Auth | None = None,
+            ) -> httpx.AsyncClient:
+                # The MCP client speaks to this app over ASGI, so no port is
+                # bound and no other test can collide with one.
+                return httpx.AsyncClient(
+                    transport=transport, headers=headers, timeout=timeout, auth=auth
+                )
+
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://127.0.0.1:8080"
+            ) as c:
+                bare = await c.post("/mcp/research/", json={})
+                assert bare.status_code == 401
+                async with streamablehttp_client(
+                    # A port in the Host header: the MCP transport's DNS-
+                    # rebinding guard allows `127.0.0.1:*`, not a bare host.
+                    "http://127.0.0.1:8080/mcp/research/",
+                    headers={"Authorization": "Bearer research-token-not-real"},
+                    httpx_client_factory=in_process,
+                ) as (r_, w_, _id):
+                    async with ClientSession(r_, w_) as session:
+                        await session.initialize()
+                        res = await session.call_tool("ping", {})
+        assert res.isError is False
+        assert res.structuredContent is not None
+        assert res.structuredContent["role"] == "research"
+    finally:
+        await e.stop()
+
+
+def test_run_once_accepts_a_claude_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`tc run --once scout` is the operator's way to fire a research pass by
+    hand. Before the six jobs joined JOBS it was refused as an unknown job."""
+    fx = _fx(tmp_path)
+    monkeypatch.setenv("TC_MODE", "paper")
+    monkeypatch.setenv("TC_FIXTURES", str(fx))
+    monkeypatch.setattr(main, "_now", lambda: SCOUT_AT)
+
+    async def fake_run(
+        self: RunnerClient, spec: Any, *, prompt_extra: str = ""
+    ) -> Any:
+        from tc.jobs.dispatch import RunnerReply, RunResultView
+
+        return RunnerReply(result=RunResultView.model_validate(SCOUT_RESULT))
+
+    async def fake_health(self: RunnerClient) -> bool:
+        return True
+
+    monkeypatch.setattr(RunnerClient, "run", fake_run)
+    monkeypatch.setattr(RunnerClient, "health", fake_health)
+    args = _cli_args(tmp_path, env_extra=MCP_ENV)
+    assert cli.main([*args, "run", "--once", "scout"]) == 0
