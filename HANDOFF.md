@@ -1,4 +1,15 @@
-# Handoff — 2026-09-08, 18:45 ET
+# Handoff — 2026-09-08, 19:00 ET
+
+**Results of the first runs (18:30–18:55 ET):** `weekly_universe` fetched 11,266 /
+quoted 11,246 / qualified 3,005 / ranked 500. `postclose` (first Claude job)
+wrote scorecard, standing, options-roster, 5 OI snapshots, 20 screen rows.
+`sector_tag` tagged 243 names into the three sectors → **cohort 11** for
+tomorrow's 07:12 scout. Both Claude verdicts were classified `content_failed`
+because the CLI left `structured_output` empty although the final text was the
+verdict JSON; hotfix `c04866e` recovers the verdict from the text
+(`verdict_source: text`) — merged, deployed, engine rebuilt 19:00 ET. Expect
+the first clean verdicts at 07:12 (scout) and 08:17 (preopen).
+
 
 **Plan 0c is merged and running on the Pi.** `main` = `1e3eadd` (33 commits, engine
 670 tests, runner 88, mypy --strict, ruff, both consistency checkers clean); the
