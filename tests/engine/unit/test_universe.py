@@ -25,6 +25,8 @@ from tc.loops.universe import (
     SANITY_FLOOR,
     Counts,
     DirectoryUnavailable,
+    EmptyUniverse,
+    UniverseUnavailable,
     fetch_symbols,
     filter_universe,
     parse_directory,
@@ -424,6 +426,14 @@ def docs(tmp_path: Path, store: Store) -> DocStore:
 DIRECTORY_SYMBOLS = [s for s in PAYLOADS if len(s) <= 5]   # NOPRICE is 7 chars: not listable
 
 
+def _old_row() -> dict[str, Any]:
+    """Last week's universe, as one stored row."""
+    return {"symbol": "OLD", "price": D("10"), "adv10": D("1000000"),
+            "dollar_vol": D("10000000"), "pct_from_52wk_high": D("1.0"), "optionable": True,
+            "leverage": D("0"), "last_earnings": "2026-08-01", "is_etf": False,
+            "session_range_pct": D("1.2"), "description": "OLD CO", "qualified": True}
+
+
 @pytest.fixture
 def directory_body() -> str:
     return _directory([*_filler(1200), *DIRECTORY_SYMBOLS])
@@ -508,13 +518,7 @@ async def test_an_unreachable_directory_keeps_last_weeks_universe(
     sweep_ctx_unreachable: dict[str, Any],
 ) -> None:
     store: Store = sweep_ctx_unreachable["store"]
-    await store.replace_universe(
-        date(2026, 9, 5),
-        [{"symbol": "OLD", "price": D("10"), "adv10": D("1000000"),
-          "dollar_vol": D("10000000"), "pct_from_52wk_high": D("1.0"), "optionable": True,
-          "leverage": D("0"), "last_earnings": "2026-08-01", "is_etf": False,
-          "session_range_pct": D("1.2"), "description": "OLD CO", "qualified": True}],
-    )
+    await store.replace_universe(date(2026, 9, 5), [_old_row()])
     before = await store.universe_asof()
     with pytest.raises(DirectoryUnavailable):
         await run_weekly_universe(**sweep_ctx_unreachable)
@@ -522,6 +526,27 @@ async def test_an_unreachable_directory_keeps_last_weeks_universe(
     assert [r["symbol"] for r in await store.universe_rows()] == ["OLD"]
     # And no half-written document either.
     assert (await sweep_ctx_unreachable["docs"].read("universe")).exists is False
+
+
+async def test_every_chunk_failing_keeps_last_weeks_universe(sweep_ctx: dict[str, Any]) -> None:
+    """A token that lapses between the fetch and the first chunk quotes nothing.
+    Writing that as a universe stamps today's date over the newest rows and
+    hides last week's -- the 2026-08-29 outage through a different door."""
+    store: Store = sweep_ctx["store"]
+    await store.replace_universe(date(2026, 9, 5), [_old_row()])
+    sweep_ctx["broker"] = _StubBroker({})
+    with pytest.raises(EmptyUniverse):
+        await run_weekly_universe(**sweep_ctx)
+    assert await store.universe_asof() == date(2026, 9, 5)
+    assert [r["symbol"] for r in await store.universe_rows()] == ["OLD"]
+    assert (await sweep_ctx["docs"].read("universe")).exists is False
+
+
+def test_both_abort_reasons_share_the_base_the_caller_catches() -> None:
+    """`main.py` catches one type. A new reason to abort must not be able to
+    escape it."""
+    assert issubclass(DirectoryUnavailable, UniverseUnavailable)
+    assert issubclass(EmptyUniverse, UniverseUnavailable)
 
 
 async def test_a_rerun_of_the_same_week_is_idempotent(sweep_ctx: dict[str, Any]) -> None:

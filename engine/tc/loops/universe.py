@@ -73,16 +73,33 @@ HEADER = (
 )
 
 
-# N818 wants an "Error" suffix. This name is the contract `main.py` catches by
-# to turn an unreadable directory into a `failed` verdict rather than a crash,
-# and "DirectoryUnavailableError" reads as a failure to determine availability
-# rather than what this is: the directory, unavailable.
-class DirectoryUnavailable(RuntimeError):  # noqa: N818
-    """The symbol directory could not be read, or read back as implausible.
+# N818 wants an "Error" suffix on all three. These names are the contract
+# `main.py` catches by to turn a failed sweep into a `failed` verdict rather
+# than a crash, and "DirectoryUnavailableError" reads as a failure to determine
+# availability rather than what this is: the directory, unavailable.
+class UniverseUnavailable(RuntimeError):  # noqa: N818
+    """The sweep produced nothing installable, whatever the cause.
 
     Never a partial write: the caller keeps last week's universe, which is
     stale and says so, rather than this week's, which would be empty and would
-    not.
+    not. `main.py` catches this base, so a new reason to abort cannot be added
+    without the caller already handling it.
+    """
+
+
+class DirectoryUnavailable(UniverseUnavailable):
+    """The symbol directory could not be read, or read back as implausible."""
+
+
+class EmptyUniverse(UniverseUnavailable):
+    """The directory was fine and the quotes were not.
+
+    The sanity floor guards the fetch; this guards everything after it. A token
+    that lapses between the fetch and the first chunk fails every chunk, quotes
+    nothing, and qualifies nothing -- which without this check writes an
+    `asof`-stamped empty table over the newest one, leaving the scout with no
+    cohort for a week. That is the 2026-08-29 outage arriving through a
+    different door.
     """
 
 
@@ -359,6 +376,15 @@ async def run_weekly_universe(
             log.warning("weekly universe: chunk %d of %d failed: %s", chunks, len(symbols), e)
 
     rows, counts = filter_universe(quotes, rules, rank_top=0)   # 0: the whole qualified set
+    if not rows:
+        # Before any write, and deliberately not a "wrote 0 rows" success:
+        # `replace_universe` stamps today's date, so an empty write makes
+        # `universe_asof()` point at nothing and hides last week's rows.
+        raise EmptyUniverse(
+            f"sweep qualified 0 of {len(quotes)} quoted symbols"
+            f" ({chunks_failed} of {chunks} chunks failed) — refusing to install"
+            " an empty universe; last week's stands"
+        )
     # The store holds every qualifying name -- the scout tier, ~3,196 names --
     # and the document holds the ranked head of it. In v2 those were two files
     # and a flag; the rank discards precisely the low-coverage mid-caps the

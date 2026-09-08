@@ -55,7 +55,7 @@ from tc.loops.reconcile import reconcile
 from tc.loops.session import close_session
 from tc.loops.tick import TickResult, run_tick
 from tc.loops.token import token_check
-from tc.loops.universe import DirectoryUnavailable, counts_detail, run_weekly_universe
+from tc.loops.universe import UniverseUnavailable, counts_detail, run_weekly_universe
 from tc.notify import Notifier, Pinger
 from tc.research.docs import DocStore
 from tc.rules.model import Rules
@@ -476,14 +476,18 @@ class Engine:
                 broker=self._broker, store=self._store, docs=self._docs,
                 rules=self._rules, client=client, now=now,
             )
-        except DirectoryUnavailable as e:
-            # Not a crash: the directory was unreadable and last week's universe
+        except UniverseUnavailable as e:
+            # Not a crash: nothing installable came back and last week's universe
             # stands. It is `failed` so the deadman sees it, with the reason.
             await self.notifier.post(f"⚠️ weekly_universe: {e}")
-            return "failed", {"error": "DirectoryUnavailable", "detail": str(e)}
+            return "failed", {"error": type(e).__name__, "detail": str(e)}
+        # chunks_failed is in the line because a sweep that lost chunks quoted
+        # less than the whole market and still wrote a universe: visibly
+        # partial beats silently narrow.
         await self.notifier.post(
             f"🗺️ universe {counts.fetched} fetched / {counts.qualified} qualified"
-            f" / {counts.ranked} ranked ({counts.dropped} dropped)"
+            f" / {counts.ranked} ranked ({counts.dropped} dropped),"
+            f" {counts.chunks_failed} of {counts.chunks} chunks failed"
         )
         return "done", counts_detail(counts)
 
