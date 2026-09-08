@@ -39,14 +39,14 @@ READ_TOOLS: tuple[str, ...] = (
 DECIDE_ONLY_READ_TOOLS: tuple[str, ...] = ("book",)
 
 RESEARCH_TOOLS: tuple[str, ...] = (
-    # writers. `doc_rewrite` is the whole-document write (v2's
+    # writers. `doc_write` is the whole-document write (v2's
     # research-replace.sh). It is NOT named `doc_replace`: FORBIDDEN below
     # matches `replace` as a substring, and §10 is a rule about the model's
     # vocabulary, not about which tool happens to be dangerous -- a name the
     # contract test has to be taught to forgive is a contract test with an
     # exception list, which is the thing this check exists to not have.
     "evidence_append", "escalation_raise", "escalation_score", "sector_write",
-    "ledger_append", "tombstone", "doc_rewrite",
+    "ledger_append", "tombstone", "doc_write",
     # readers the prompts cannot run without
     "doc_read", "evidence_read", "escalations_read", "ledger_read", "sectors_read",
     "cohort", "universe_symbols", "universe_names_page", "alert_read",

@@ -86,7 +86,13 @@ def test_registry_declares_no_order_shaped_tool() -> None:
 def test_the_pattern_would_catch_the_names_it_exists_to_catch() -> None:
     """A guard on the guard: a regex that matched nothing would make every
     assertion above vacuously true."""
-    for name in ("place_order", "cancel_order", "replace_order", "get_orders", "order"):
+    for name in (
+        "place_order", "cancel_order", "replace_order", "get_orders", "order",
+        # The near misses that a plausible registry actually proposes. The
+        # document writer is `doc_write` and the universe writer is
+        # `universe_write` precisely because these names are refused.
+        "doc_replace", "replace_universe", "order_status", "cancel_stop",
+    ):
         assert FORBIDDEN.search(name), name
 
 
