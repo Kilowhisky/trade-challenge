@@ -152,6 +152,10 @@ class _StubClient:
         return _StubResp({"screeners": [], "hashValue": self._hash_value})
 
     async def get_option_chain(self, symbol: str, **kw: Any) -> _StubResp:
+        # The recorder must bound what it captures: an unbounded chain is
+        # megabytes, and these fixtures are committed to a public repo.
+        assert kw.get("strike_count"), "recorder asked for an unbounded chain"
+        assert kw.get("from_date") and kw.get("to_date")
         return _StubResp({"callExpDateMap": {}, "putExpDateMap": {}, "hashValue": self._hash_value})
 
     async def get_option_expiration_chain(self, symbol: str) -> _StubResp:

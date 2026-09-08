@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -30,6 +30,12 @@ from tc.broker.models import (
 )
 
 HASH_RE = re.compile(r"\b[0-9A-F]{32,}\b")
+
+# How much chain the recorder captures. Not a rule parameter -- a fixture
+# size bound, wide enough to hold both sides of the money at the near
+# expiries a caller screens.
+CHAIN_STRIKES = 10
+CHAIN_WINDOW_DAYS = 60
 
 
 class FakeBroker:
@@ -203,7 +209,17 @@ class Recorder:
         }
         for s in symbols:
             raw[f"bars-{s}.json"] = _raise_for(await c.get_price_history_every_day(s))
-            raw[f"chain-{s}.json"] = _raise_for(await c.get_option_chain(s))
+            # Bounded, not the whole chain: an unbounded chain for a liquid
+            # name is megabytes of JSON, and these fixtures are committed to a
+            # public repo. The window matches what callers actually ask for.
+            raw[f"chain-{s}.json"] = _raise_for(
+                await c.get_option_chain(
+                    s,
+                    strike_count=CHAIN_STRIKES,
+                    from_date=d,
+                    to_date=d + timedelta(days=CHAIN_WINDOW_DAYS),
+                )
+            )
             raw[f"expirations-{s}.json"] = _raise_for(
                 await c.get_option_expiration_chain(s)
             )
