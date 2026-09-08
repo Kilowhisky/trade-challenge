@@ -270,10 +270,22 @@ JOB_SPECS: dict[str, JobSpec] = {
             "Return a single JSON object matching the DeepVerdict schema "
             "(kind=\"preopen\") and nothing else."
         ),
+        # Identical to `postclose`'s allowlist, not just preopen's own needs:
+        # both jobs share the `deep-research` agent, and an agent's `tools:`
+        # frontmatter is the SDK-enforced ceiling (0c-sdk-facts §1.5/§5), not
+        # a per-job overlay -- one frontmatter list has to work for whichever
+        # of the two modes actually runs, so it is the union of what either
+        # needs, and each job spec must itself grant that union or the
+        # subset check (`test_every_job_spec_agent_exists_and_its_tools_are_a_subset`)
+        # fails. preopen never calls the postclose-only tools in practice
+        # (§P is file-only, per deep-research.md), but it must be GRANTED
+        # them for the shared agent file to be honest about what it can
+        # reach in either mode.
         allowed_tools=tools_for(
             "get_datetime", "market_hours", "quotes", "instruments", "option_chain",
-            "expiration_chain", "price_history", "doc_read", "doc_write",
-            "alert_read", "status_latest",
+            "expiration_chain", "price_history", "universe_symbols",
+            "ledger_append", "ledger_read", "tombstone", "doc_read", "doc_write",
+            "alert_read", "status_latest", "rules",
         )
         + _WEB_AND_READ,
         verdict=DeepVerdict,
@@ -296,11 +308,14 @@ JOB_SPECS: dict[str, JobSpec] = {
             "budget never reached. Return a single JSON object matching the "
             "DeepVerdict schema (kind=\"postclose\") and nothing else."
         ),
+        # Kept textually identical to `preopen`'s allowlist (see the comment
+        # there) -- the two jobs share one agent file, whose frontmatter is
+        # the ceiling both must fit under.
         allowed_tools=tools_for(
             "get_datetime", "market_hours", "quotes", "instruments", "option_chain",
             "expiration_chain", "price_history", "universe_symbols",
             "ledger_append", "ledger_read", "tombstone", "doc_read", "doc_write",
-            "alert_read", "status_latest",
+            "alert_read", "status_latest", "rules",
         )
         + _WEB_AND_READ,
         verdict=DeepVerdict,
@@ -326,7 +341,7 @@ JOB_SPECS: dict[str, JobSpec] = {
         allowed_tools=tools_for(
             "get_datetime", "market_hours", "quotes", "instruments", "option_chain",
             "expiration_chain", "price_history", "movers", "doc_read", "doc_write",
-            "ledger_read", "alert_read", "status_latest",
+            "ledger_read", "alert_read", "status_latest", "rules",
         )
         + _WEB_AND_READ,
         verdict=ResearchVerdict,

@@ -83,7 +83,7 @@ generate an alert or interrupt the monitoring loop.
    (research is read-only) but §E is **suppressed** — no pings in
    closing-only posture.
 4. **After 16:00 ET: no research passes from the tick-chained loop.** The
-   POST pass — including §B-oi — is owned exclusively by the 16:20 ET
+   POST pass — including §B-oi — is owned exclusively by the 16:22 ET
    deep-research run (/deep-research postclose; design rev2 §8.1). A
    chained invocation after 16:00 simply stops here.
 
@@ -148,11 +148,12 @@ not run it — see `.claude/commands/deep-research.md` §D.1.
    Cap **6 underlyings** (budget: one chain call each, on top of the normal
    pass budget).
 2. **Snapshot:** per underlying, append one compact record via
-   `mcp__engine__ledger_append(name="oi", …)` — spot, aggregate call/put
-   OI, and per-contract rows bounded to strikes within ±20% of spot, ≤ 60
-   DTE, OI ≥ 100, cap ~40 contracts. `appended: false` means the
-   underlying is already snapshotted today — that is a skip, not an
-   error; move to the next underlying.
+   `mcp__engine__ledger_append(name="oi", …)` — required fields `symbol`
+   and `t` (the ledger's own validator, `tc/research/ledgers.py`), plus
+   spot, aggregate call/put OI, and per-contract rows bounded to strikes
+   within ±20% of spot, ≤ 60 DTE, OI ≥ 100, cap ~40 contracts.
+   `appended: false` means the underlying is already snapshotted today —
+   that is a skip, not an error; move to the next underlying.
 3. **Diff** against the most recent prior day's OI ledger rows
    (`mcp__engine__ledger_read(name="oi", latest_before=…)`). Notable: a
    contract's OI up **≥ 30% and ≥ 500 contracts**, or a marked aggregate
@@ -220,7 +221,7 @@ A ping fires only when **all** hold:
 The ping is **one line** to Chris: symbol, sleeve, thesis, reference price.
 Log it: `mcp__engine__ledger_append(name="events", date=…, record={"t":
 "HH:MM:SS","event":"ping","symbol":"XYZ","sleeve":"catalyst",
-"ref_price":"0.00"})`. A ping is an invitation to run the full §4.9/§4.10
+"ref_price":0.00})`. A ping is an invitation to run the full §4.9/§4.10
 entry discipline — which may, and often should, conclude "no." Record the
 outcome (acted / declined + reason) in the decisions corpus; a declined
 ping gets a counterfactual entry so the ping mechanism itself is scored by

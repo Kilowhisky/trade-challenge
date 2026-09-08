@@ -88,6 +88,32 @@ def test_every_job_spec_agent_exists_and_its_tools_are_a_subset() -> None:
         )
 
 
+def test_shared_agent_tools_equal_the_union_of_every_job_that_dispatches_it() -> None:
+    """An agent file's `tools:` is the SDK-enforced ceiling (0c-sdk-facts
+    §1.5/§5), not a per-job overlay -- one file's header has to work for
+    every mode it might run in. When two JobSpecs name the same agent (e.g.
+    "preopen" and "postclose" both run `deep-research`), the fix is to widen
+    BOTH job specs to the union rather than narrow the frontmatter, so the
+    ceiling stays honest about what either mode can actually reach. This
+    pins that invariant for every agent shared by 2+ jobs: its declared
+    tools are exactly the union of those jobs' allowed_tools -- not a
+    subset (a stale, narrower frontmatter silently strands a job's tools,
+    the regression this test exists to catch) and not a superset (a
+    frontmatter tool no job grants can never actually be called). A
+    single-job agent is already covered by the plain subset test above --
+    equality there is that job's own tool-selection choice, not an
+    SDK-ceiling constraint, so it is out of scope here."""
+    by_agent: dict[str, set[str]] = {}
+    for spec in JOB_SPECS.values():
+        by_agent.setdefault(spec.agent, set()).update(spec.allowed_tools)
+    for agent, union in by_agent.items():
+        if sum(1 for spec in JOB_SPECS.values() if spec.agent == agent) < 2:
+            continue
+        fm = frontmatter(ROOT / ".claude" / "agents" / f"{agent}.md")
+        tools = {t.strip() for t in fm["tools"].split(",")}
+        assert tools == union, f"{agent}: {sorted(tools ^ union)}"
+
+
 @pytest.mark.parametrize("name", LIVE_AGENTS)
 def test_every_agent_states_its_verdict_contract(name: str) -> None:
     body = (ROOT / ".claude" / "agents" / f"{name}.md").read_text()

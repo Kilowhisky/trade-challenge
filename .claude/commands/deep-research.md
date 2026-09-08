@@ -143,9 +143,6 @@ for live evaluation, not to make a decision ahead of it.
   same shape §D uses below:
   `{"t":"HH:MM:SS","event":"deep_research","mode":"preopen","catchup":true|false,"skipped":"<features or ->","api_calls":N,"schwab_calls":N}` —
   recording what this file-only run swept and what it could not reach.
-  This ledger write is available in the postclose job's tool grant; a
-  preopen run that cannot reach `ledger_append` records the same facts in
-  `notes` on its returned verdict instead.
 
 ## §D — postclose mode (16:22 ET; owns the POST window, design rev2 §8.1)
 
@@ -230,7 +227,10 @@ reached:**
      1. **Symbols** come from `mcp__engine__universe_symbols()` — the
         working universe as a flat, sorted list of qualified symbols, one
         call, no payload to route around. Never re-derive the list from
-        prose or from a stale copy.
+        prose or from a stale copy. A `working_universe_size` of
+        **500**<!--rule:strategy_working_universe_size--> is therefore a
+        handful of `mcp__engine__quotes` calls per run, not a chunked
+        multi-day sweep.
      2. **Batch the quotes** in chunks of up to 50 symbols (the
         `mcp__engine__quotes` per-call cap) and qualify each against the
         floors below.
@@ -241,8 +241,8 @@ reached:**
      small enough to sweep completely every day. There is no cursor and no
      resume — the sweep either completes or reports what it missed.
 
-     Qualification against survivors: the §1.4 liquidity floors
-     (`mcp__engine__rules` if available, else `rules.yml`) for price and
+     Qualification against survivors: the §1.4 liquidity floors (read via
+     `mcp__engine__rules`) for price and
      volume, up to the §3.1-derived unsizeable line, above 50-day SMA,
      positive 3- and 6-month returns, within ~10% of 52-week high. Rank
      the top ~15 survivors of the sweep into the ledger.
