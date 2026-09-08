@@ -8,6 +8,19 @@ watched session under v3. Still no Discord webhook, so trips reach nobody
 until `/srv/tc/.env` has `TC_DISCORD_SHADOW_WEBHOOK_URL`; check
 `https://brewmaster.tail14458e.ts.net:8443/health` and `/api/ticks?date=` instead.
 
+**Plan 0c (the Claude runner + research tools) has its bootstrap runbook and
+exit checklist written:**
+`docs/superpowers/plans/2026-09-08-v3-plan0c-bootstrap.md`. It covers writing
+the two new secrets files (`/srv/tc/.env` gains `TC_RUNNER_TOKEN`,
+`TC_RUNNER_URL`, `TC_MCP_RESEARCH_TOKEN`, `TC_MCP_DECIDE_TOKEN`; a new
+`/srv/tc/runner.env` holds `CLAUDE_CODE_OAUTH_TOKEN`, `TC_RUNNER_TOKEN`,
+`TC_ENGINE_URL`), building and starting the two new containers (`runner`,
+and the `engine` container's `/mcp/research` + `/mcp/decide` mounts), the v2
+store import, and the seeding order (`weekly_universe` → `sector_tag` →
+`postclose`/`research`) that gets `scout` off `cohort 0`. Not yet run on the
+Pi — this is the next thing to do once the token/webhook items above are
+settled.
+
 ---
 
 # Earlier — 2026-09-07 (Labor Day), 13:15 ET
