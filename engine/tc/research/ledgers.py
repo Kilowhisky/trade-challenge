@@ -123,7 +123,7 @@ async def evidence_append(
         for k, v in record.items()
         if k not in {"claim", "url", "source_type", "observed", "independence"}
     }
-    await store.insert_evidence(
+    row_id = await store.insert_evidence(
         {
             "symbol": sym,
             "date": ds,
@@ -135,7 +135,11 @@ async def evidence_append(
             "extra": extra,
         }
     )
-    return {"appended": True, "symbol": sym, "date": ds}
+    # The row id goes back to the caller: an escalation's `evidence_ids` is
+    # meant to name the observations that supported it, and a synthetic
+    # reference minted from symbol/date/source_type resolves to nothing and
+    # cannot even distinguish two observations of the same kind on one day.
+    return {"appended": True, "symbol": sym, "date": ds, "id": row_id}
 
 
 def escalation_id(symbol: str, d: date, record: dict[str, Any]) -> str:

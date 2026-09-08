@@ -1,5 +1,5 @@
 ---
-description: Weekly sector tagger — classify the sweep's qualified universe into the three scout sectors (research/sectors.tsv). The right-hand side of the cohort join.
+description: Weekly sector tagger — classify the sweep's qualified universe into the three scout sectors, writing the engine's `sectors` table via `mcp__engine__sector_write`. The right-hand side of the cohort join.
 ---
 
 # /sector-tag — classify the qualified universe into the scout's sectors

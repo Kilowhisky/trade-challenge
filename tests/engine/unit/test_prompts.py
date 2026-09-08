@@ -114,6 +114,32 @@ def test_shared_agent_tools_equal_the_union_of_every_job_that_dispatches_it() ->
         assert tools == union, f"{agent}: {sorted(tools ^ union)}"
 
 
+def test_a_single_job_agent_declares_exactly_its_job_s_allowlist() -> None:
+    """For an agent only one JobSpec dispatches, the two lists are one fact
+    written twice, so they must be equal in both directions.
+
+    A frontmatter NARROWER than the allowlist strands a tool the job spec
+    grants: the agent header is the SDK-enforced ceiling (0c-sdk-facts
+    §1.5/§5), so the job is refused a tool the engine believes it has, and the
+    plain subset test above passes over it silently -- that is exactly how
+    `research-scout` ended up without `mcp__engine__rules` while its job spec
+    granted it. A frontmatter WIDER than the allowlist is the mirror defect: a
+    declared tool no job's `allowed_tools` covers is one the runner's gate
+    denies, so the header advertises reach the job does not have.
+
+    Shared agents are the separate case (below): their ceiling is the union of
+    every job that dispatches them, not any one job's choice.
+    """
+    for spec in JOB_SPECS.values():
+        if sum(1 for s in JOB_SPECS.values() if s.agent == spec.agent) > 1:
+            continue
+        fm = frontmatter(ROOT / ".claude" / "agents" / f"{spec.agent}.md")
+        tools = {t.strip() for t in fm["tools"].split(",")}
+        assert tools == set(spec.allowed_tools), (
+            f"{spec.agent}: {sorted(tools ^ set(spec.allowed_tools))}"
+        )
+
+
 @pytest.mark.parametrize("name", LIVE_AGENTS)
 def test_every_agent_states_its_verdict_contract(name: str) -> None:
     body = (ROOT / ".claude" / "agents" / f"{name}.md").read_text()

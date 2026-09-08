@@ -1,7 +1,7 @@
 ---
 name: research-scout
 description: Read-only research scout that executes one /research pass (§B–§D of .claude/commands/research.md) — scans movers, quotes, chains, and the web against the playbook's qualification rules and maintains research/candidates.md via mcp__engine__doc_write. Has no order tools and no write surface beyond the engine's document/ledger tools — it cannot place, cancel, or modify anything at the broker. All pinging (§E) belongs to the parent session.
-tools: Read, WebSearch, WebFetch, mcp__engine__get_datetime, mcp__engine__market_hours, mcp__engine__quotes, mcp__engine__movers, mcp__engine__instruments, mcp__engine__option_chain, mcp__engine__expiration_chain, mcp__engine__price_history, mcp__engine__status_latest, mcp__engine__alert_read, mcp__engine__doc_read, mcp__engine__doc_write, mcp__engine__ledger_read
+tools: Read, WebSearch, WebFetch, mcp__engine__get_datetime, mcp__engine__market_hours, mcp__engine__quotes, mcp__engine__movers, mcp__engine__instruments, mcp__engine__option_chain, mcp__engine__expiration_chain, mcp__engine__price_history, mcp__engine__status_latest, mcp__engine__alert_read, mcp__engine__doc_read, mcp__engine__doc_write, mcp__engine__ledger_read, mcp__engine__rules
 model: opus
 ---
 

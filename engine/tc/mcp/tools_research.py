@@ -118,6 +118,10 @@ class Appended(BaseModel):
     appended: bool
     reason: str | None = None
     detail: str = ""
+    # The evidence ledger's row id. Null for the appenders that have no row of
+    # their own to name (`ledger_append`, `tombstone`), and the value an
+    # escalation's `evidence_ids` is built from for `evidence_append`.
+    id: int | None = None
 
 
 class Raised(BaseModel):
@@ -195,7 +199,8 @@ def register(server: FastMCP, deps: McpDeps, role: Role) -> None:
         description=(
             "Record one dated observation about one name. Refused unless claim, url, "
             "source_type, observed and independence are all present, source_type is one "
-            "of the six known kinds, and observed equals the date argument."
+            "of the six known kinds, and observed equals the date argument. Returns the "
+            "row's `id` — use those ids, as strings, for an escalation's evidence_ids."
         ),
     )
     async def evidence_append_tool(
@@ -205,7 +210,7 @@ def register(server: FastMCP, deps: McpDeps, role: Role) -> None:
             out = await ledgers.evidence_append(store, symbol, _date(date), record)
         except REFUSALS as e:
             raise _guard(e) from e
-        return Appended(appended=True, detail=str(out.get("symbol", "")))
+        return Appended(appended=True, detail=str(out.get("symbol", "")), id=out["id"])
 
     @server.tool(
         name="escalation_raise",
@@ -337,8 +342,9 @@ def register(server: FastMCP, deps: McpDeps, role: Role) -> None:
     @server.tool(
         name="evidence_read",
         description=(
-            "Every dated observation recorded for one name, oldest first. This is the "
-            "delta baseline: read it before searching, so today's pass records what is new."
+            "Every dated observation recorded for one name, oldest first, each with its "
+            "row `id`. This is the delta baseline: read it before searching, so today's "
+            "pass records what is new. Cite those ids in an escalation's evidence_ids."
         ),
     )
     async def evidence_read_tool(symbol: SYMBOL) -> Rows:

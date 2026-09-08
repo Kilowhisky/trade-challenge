@@ -61,9 +61,10 @@ Procedure — no improvisation:
 
 Return the JSON object matching the `ScoutVerdict` schema you were given —
 `cohort`, `observed`, `escalations` (each
-`{symbol, claim, evidence_ids}` — the ledger has no separate row id, so give
-each entry a short reference such as `"AAPL:2026-09-08:counterparty"` built
-from symbol, date and source type), and `summary` in the form
+`{symbol, claim, evidence_ids}` — the ids `mcp__engine__evidence_append`
+returned for the observations that support the claim, as strings; the same
+ids `mcp__engine__evidence_read` shows. Never invent a reference: an id you
+did not get back from a tool cites nothing), and `summary` in the form
 `SCOUT <ET date> | cohort n | observed n | escalated n | <symbols or ->`.
 
 Nothing else. No narration, no essays on what a company might do — the detail

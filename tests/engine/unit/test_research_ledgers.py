@@ -39,6 +39,25 @@ async def test_evidence_happy_path(store: Store) -> None:
     assert len(await store.evidence_for("CSX")) == 1
 
 
+async def test_the_append_returns_the_row_id_and_the_read_surfaces_it(
+    store: Store,
+) -> None:
+    """An escalation's `evidence_ids` is meant to name the observations that
+    supported it. Without a real id the model minted a synthetic reference
+    from symbol/date/source_type -- a string that resembles a citation,
+    resolves to nothing, and cannot even tell two observations of the same
+    kind on one day apart."""
+    first = await evidence_append(store, "CSX", D7, OBS)
+    second = await evidence_append(
+        store, "CSX", D7, {**OBS, "claim": "second yard idle", "url": "https://x/2"}
+    )
+    assert first["id"] != second["id"]
+    rows = await store.evidence_for("CSX")
+    assert [r["id"] for r in rows] == [first["id"], second["id"]]
+    # And the ids are what an escalation would cite, one per observation.
+    assert all(isinstance(r["id"], int) and r["id"] > 0 for r in rows)
+
+
 @pytest.mark.parametrize(
     "mutate",
     [

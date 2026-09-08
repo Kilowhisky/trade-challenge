@@ -96,6 +96,11 @@ mcp__engine__evidence_append(symbol=SYMBOL, date=<YYYY-MM-DD>, record={...})
 
 Required: `claim`, `url`, `source_type`, `observed`, `independence`.
 
+`evidence_append` returns the ledger row's `id`. **Keep it.** An escalation's
+`evidence_ids` is the list of those ids, as strings — the same ids
+`mcp__engine__evidence_read` shows — and an id you did not get back from a
+tool cites nothing.
+
 `claim` must be specific and falsifiable. `independence` is your stated reason
 this source is not a restatement of another — "separate supplier disclosure,
 not derived from the wire story above" is a reason; "different website" is not.
@@ -128,8 +133,9 @@ rather than a story told afterward.
 ## §D — Return
 
 Exactly one JSON object matching the `CatalystVerdict` schema: `scanned`,
-`observed`, `escalations[]` (each `{symbol, claim, evidence_ids}`), and
-`summary` in the form:
+`observed`, `escalations[]` (each `{symbol, claim, evidence_ids}` — the ids
+returned by `evidence_append`, as strings, never a reference you composed),
+and `summary` in the form:
 
 ```
 CATALYST 2026-09-01 | scanned 62 | observed 4 | escalated 0 | -

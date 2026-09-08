@@ -94,9 +94,11 @@ computes them from the live figure at order time.
   positions; marks irrelevant.
 - **§3.6 threshold ratchets:** Halt is the manual's multiple of the HWM of
   **account value**. It is
-  the only drawdown level — nothing happens above it (§3.6). HWM resolution —
-  source, once-per-session caching, and the no-intraday-ratchet rule — is
-  defined in tick.md §B5, one place.
+  the only drawdown level — nothing happens above it (§3.6). HWM resolution is
+  no longer a rule a prompt follows: `tc/loops/session.py` (`close_session`)
+  is the one place the mark ratchets — only at a close, only upward, an
+  intraday high recorded and never adopted — and `mcp__engine__status_latest`
+  is the one place anything reads it back.
 - **§3.8 method** *(strategy rule)*: evaluated **at entry** — sector/theme
   classification plus trailing 60-day daily-return correlation (>0.7 =
   correlated). Mid-hold correlation convergence in a selloff is not a
@@ -329,7 +331,7 @@ Chris's 9:30 ET check-in covers the gap that matters most. Watches:
 | Stop fill | position gone / stop consumed | Log exit; check orphaned remainder (§4.7); **redeploy cap = actual proceeds (§3 invariant)** |
 | Partial fill | filled qty ≠ stop qty | Replace stop (§4.4) |
 | Drawdown | account value vs the §3.6 Halt multiple of HWM (recorded HWM — resolved once per session from the latest status file; ratchets only at the session-close §7.2 write, never intraday) | Halt per §3.6 — the only level |
-| Reserve | total cash < $900, computed per tick.md watch 2 (canonical — a conservative min() over both candidate totals until §7.8's field-semantics observation) | Invariant breach — halt buys, investigate |
+| Reserve | total cash < $900, computed by the engine's tick (`tc/loops/tick.py`) as a conservative min() over both candidate totals — see §7.8's field-semantics observation | Invariant breach — halt buys, investigate |
 | Clocks | option DTE (§3.3 close at 5), leveraged day count (§3.5) | Escalating from 2 days out |
 | Correlation | weekly: 60-day corr of held names | >0.7 cluster → adds blocked |
 | Restriction | `isClosingOnlyRestricted` true | §5 protocol: read-only, notify |
@@ -354,10 +356,11 @@ only — an idea source, never a signal.
 
 **Open:** §4.5 broker-first reconciliation → `scripts/check-consistency.sh`
 (rule drift is a defect, fix before trading) → §3.6 check (ratcheted
-thresholds; resolve `recorded_hwm` per tick.md §B5 **including its orphaned-
-ledger recovery rule** — at reconciliation time, before any order, not only
-at the first tick) → reserve invariant → diff vs trade log (unexplained
-differences investigated before any order) → loop → planned actions.
+thresholds; `recorded_hwm` comes from `mcp__engine__status_latest`, which
+reads the row `tc/loops/session.py` wrote at the last close — at
+reconciliation time, before any order, not only at the first tick) → reserve
+invariant → diff vs trade log (unexplained differences investigated before
+any order) → loop → planned actions.
 
 - **Deep-research deadman (design rev2 §8.5):** check that yesterday's
   `research/preopen/` brief and `research/screen/` jsonl exist (mtime).
@@ -411,9 +414,10 @@ confirms against that written record, never memory. >0.7 cluster → adds
 blocked (§3.8).
 **Close-write format** *(strategy rule)*: every session-close status file
 ends with a **"State recorded — current"** block (account value, competition
-capital, HWM, settled/unsettled cash) — tick.md §B5 resolves `recorded_hwm`
-from exactly that heading, so a close that names it differently orphans the
-next session's HWM lookup.
+capital, HWM, settled/unsettled cash). The heading is no longer load-bearing:
+`tc/loops/session.py` writes the mark to the `session_status` table and
+`mcp__engine__status_latest` reads it back, so nothing parses the file for
+`recorded_hwm` any more. The block stays because it is what a human reads.
 
 **The `Competition capital:` line is a retained legacy field name**, not a
 live rule anchor. Since 2026-08-31 every §3 cap is taken against **account

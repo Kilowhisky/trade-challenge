@@ -500,12 +500,17 @@ class Store:
 
     async def evidence_for(self, symbol: str) -> list[dict[str, Any]]:
         rows = await self.fetchall(
-            "SELECT symbol, date, claim, url, source_type, observed, independence,"
+            "SELECT id, symbol, date, claim, url, source_type, observed, independence,"
             " extra_json, written_at FROM evidence WHERE symbol=? ORDER BY id",
             (symbol,),
         )
         return [
             {
+                # The row id, surfaced because it is what an escalation's
+                # `evidence_ids` is supposed to point at. Without it the model
+                # had to mint a synthetic reference, which is a string that
+                # resembles a citation and resolves to nothing.
+                "id": r["id"],
                 "symbol": r["symbol"],
                 "date": r["date"],
                 "claim": r["claim"],

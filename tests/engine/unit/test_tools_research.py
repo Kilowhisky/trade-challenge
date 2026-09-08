@@ -203,8 +203,12 @@ async def test_evidence_append_records_a_good_observation(research_server: FastM
                 "observed": "2026-09-07", "independence": "unrelated"},
     )
     assert out.appended is True and out.detail == "CSX"
+    # The row id comes back, and it is the same id `evidence_read` shows: this
+    # is the pair the prompts tell the model to build `evidence_ids` from.
+    assert isinstance(out.id, int) and out.id > 0
     read = await call(research_server, "evidence_read", symbol="CSX")
     assert [r["claim"] for r in read.rows] == ["yard idle"]
+    assert [r["id"] for r in read.rows] == [out.id]
 
 
 async def test_escalation_below_the_bar_is_refused_with_the_bar_named(
