@@ -24,10 +24,11 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import zlib
 from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from tc.store.db import IN_SCOPE_SECTORS, LEDGER_TABLES, Store
 
@@ -47,11 +48,19 @@ SOURCE_TYPES = (
 BAR_SOURCE_TYPES = tuple(t for t in SOURCE_TYPES if t != "mainstream")
 SECTORS = (*IN_SCOPE_SECTORS, "other")
 DIRECTIONS = ("up", "down")
-OUTCOMES = ("right", "wrong", "void")
+Outcome = Literal["right", "wrong", "void"]
+OUTCOMES: tuple[Outcome, ...] = ("right", "wrong", "void")
 # A raise may not carry its own result: a prediction and its outcome written in
 # one call is the single property the escalation ledger exists to make
 # impossible.
 RESERVED_ON_RAISE = ("outcome", "scored", "kind")
+
+# The §1.7 skip. Returned from two places -- the pre-check and the UNIQUE
+# constraint that actually enforces it -- and they must be the same answer.
+OI_ALREADY_SNAPSHOTTED: dict[str, Any] = {
+    "appended": False,
+    "reason": "already snapshotted today",
+}
 
 LEDGER_REQUIRED: dict[str, tuple[str, ...]] = {
     "screen": ("symbol", "t", "src"),
@@ -163,6 +172,16 @@ async def escalation_raise(
             f" (mainstream never counts); got {sorted(distinct)}"
         )
     eid = escalation_id(sym, d, record)
+    # TOCTOU, unguarded: this read and the insert below are two separate
+    # acquisitions of the store lock, and `escalations.id` carries no UNIQUE
+    # constraint (it cannot -- one raise legitimately gathers many score rows
+    # under the same id). Two concurrent raises of the identical claim would
+    # both pass here and write two raise rows, and `store.escalations()` would
+    # reduce them to one entry with the second silently overwriting the first.
+    # Nothing in this system raises the same claim twice concurrently today:
+    # the scout is one scheduled job at a time. A partial unique index over
+    # `WHERE kind='raise'` is the real fix and belongs to a schema task, not
+    # this one.
     if await store.escalation_raise_exists(eid):
         raise LedgerError(f"already raised: {eid}")
     await store.insert_escalation(
@@ -172,35 +191,34 @@ async def escalation_raise(
 
 
 async def escalation_score(
-    store: Store, escalation_id_: str, outcome: str, d: date
+    store: Store, eid: str, outcome: Outcome, d: date
 ) -> dict[str, Any]:
     """Score a raise (§1.5). Append-only: an id may carry many score rows and
     the LAST one wins, which is why this never rewrites the raise.
 
-    `outcome` is typed `str` rather than a Literal on purpose -- the caller is
-    an MCP tool handing over whatever the model said, so the closed set has to
-    be enforced here at runtime, not only at a type checker the caller never
-    ran.
+    The runtime membership test below is NOT redundant with the `Outcome`
+    annotation. The caller is an MCP tool relaying whatever the model said,
+    and a type checker never ran on that value.
     """
     if outcome not in OUTCOMES:
         raise LedgerError(f"outcome must be one of {OUTCOMES}, got {outcome!r}")
-    if not await store.escalation_raise_exists(escalation_id_):
+    if not await store.escalation_raise_exists(eid):
         # Matched as a literal id, never a pattern: tickers carry dots and a
         # regex would attach an outcome to the wrong prediction.
-        raise LedgerError(f"no such raise: {escalation_id_}")
+        raise LedgerError(f"no such raise: {eid}")
     await store.insert_escalation(
         {
-            "id": escalation_id_,
+            "id": eid,
             "kind": "score",
             # rsplit, not split: the id is "<symbol>-<YYYY>-<MM>-<DD>-<crc>" and
             # a symbol may itself carry a hyphen, so the LAST four fields are
             # the fixed suffix. split("-")[0] read BRK-B as BRK.
-            "symbol": escalation_id_.rsplit("-", 4)[0],
+            "symbol": eid.rsplit("-", 4)[0],
             "at": d.isoformat(),
             "record": {"outcome": outcome},
         }
     )
-    return {"id": escalation_id_, "outcome": outcome}
+    return {"id": eid, "outcome": outcome}
 
 
 async def sector_write(store: Store, rows: list[dict[str, Any]], d: date) -> dict[str, Any]:
@@ -240,9 +258,20 @@ async def ledger_append(
     symbol = record.get("symbol")
     if name == "oi":
         sym = _symbol(symbol)
+        # Not an error: the caller skips this underlying and continues. The
+        # read and the write are two separate acquisitions of the store lock,
+        # so this pre-check is only the fast path -- two concurrent appends for
+        # the same (date, symbol) both see nothing here. What actually enforces
+        # one snapshot per underlying per day is UNIQUE(date, symbol) on
+        # `oi_snapshots`, and its IntegrityError has to arrive as the SAME skip
+        # rather than as an untyped sqlite error escaping a validating writer.
         if await store.oi_symbol_seen(d, sym):
-            # Not an error: the caller skips this underlying and continues.
-            return {"appended": False, "reason": "already snapshotted today"}
+            return dict(OI_ALREADY_SNAPSHOTTED)
+        try:
+            await store.append_ledger(name, d, sym, record)
+        except sqlite3.IntegrityError:
+            return dict(OI_ALREADY_SNAPSHOTTED)
+        return {"appended": True, "reason": None}
     await store.append_ledger(name, d, None if symbol is None else str(symbol), record)
     return {"appended": True, "reason": None}
 

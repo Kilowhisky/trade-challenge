@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import date
 from decimal import Decimal
@@ -120,7 +121,10 @@ async def test_escalation_raise_lands_with_its_claim(store: Store) -> None:
 async def test_score_needs_a_raise_and_a_legal_outcome(store: Store) -> None:
     eid = (await escalation_raise(store, "CSX", D7, RAISE))["id"]
     with pytest.raises(LedgerError):
-        await escalation_score(store, eid, "maybe", D7)
+        # Deliberately outside the Outcome literal: the annotation documents
+        # the closed set, the runtime check is what enforces it, and the caller
+        # is an MCP tool relaying a string mypy never saw.
+        await escalation_score(store, eid, "maybe", D7)  # type: ignore[arg-type]
     with pytest.raises(LedgerError):
         await escalation_score(store, "CSX-2026-09-07-nope", "right", D7)
     await escalation_score(store, eid, "right", D7)
@@ -219,6 +223,31 @@ async def test_oi_second_snapshot_is_a_skip_not_an_error(store: Store) -> None:
     again = await ledger_append(store, "oi", D7, rec)
     assert again == {"appended": False, "reason": "already snapshotted today"}
     assert len(await store.ledger_rows("oi", D7)) == 1
+
+
+async def test_two_concurrent_oi_appends_leave_one_row_and_no_exception(store: Store) -> None:
+    # The pre-check is check-then-act across two acquisitions of the store
+    # lock, so both callers see "not snapshotted". UNIQUE(date, symbol) is what
+    # actually holds the invariant, and its IntegrityError must arrive as the
+    # ordinary skip -- an untyped sqlite error escaping a validating writer
+    # would abort a whole OI sweep over a condition that means "carry on".
+    rec = {"symbol": "CSX", "t": "16:26:00", "call_oi": 2874}
+    out = await asyncio.gather(
+        ledger_append(store, "oi", D7, dict(rec)),
+        ledger_append(store, "oi", D7, dict(rec)),
+    )
+    assert sorted(bool(o["appended"]) for o in out) == [False, True]
+    assert [o["reason"] for o in out if not o["appended"]] == ["already snapshotted today"]
+    assert len(await store.ledger_rows("oi", D7)) == 1
+
+
+async def test_the_skip_result_is_a_fresh_dict_each_time(store: Store) -> None:
+    # Two callers must not share one mutable answer.
+    await ledger_append(store, "oi", D7, {"symbol": "CSX", "t": "16:26:00"})
+    first = await ledger_append(store, "oi", D7, {"symbol": "CSX", "t": "16:27:00"})
+    first["reason"] = "mutated by the caller"
+    second = await ledger_append(store, "oi", D7, {"symbol": "CSX", "t": "16:28:00"})
+    assert second["reason"] == "already snapshotted today"
 
 
 async def test_oi_idempotency_is_per_symbol_per_day(store: Store) -> None:
