@@ -171,3 +171,44 @@ def test_mcp_tokens_empty_when_unset(tmp_path: Path, monkeypatch: pytest.MonkeyP
     s = load_settings(cfg)
     assert s.mcp_tokens() == {}
     assert s.runner_token is None
+
+
+def test_mcp_tokens_rejects_equal_research_and_decide_tokens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A copy-paste in .env that gives both roles the same bearer must not
+    silently collapse the map onto whichever role sorts last -- that would
+    hand the research runner the decide role with no warning."""
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "engine: {data_dir: /d, repo_dir: /r, research_dir: /d/research}\n"
+        "token: {reauth_after_days: 5, hard_expiry_days: 7, callback_url: https://x.ts.net/oauth/callback}\n"
+        "runner: {url: 'http://127.0.0.1:8090'}\n"
+    )
+    monkeypatch.setenv("TC_SCHWAB_APP_KEY", "k")
+    monkeypatch.setenv("TC_SCHWAB_APP_SECRET", "s")
+    monkeypatch.setenv("TC_MCP_RESEARCH_TOKEN", "same-secret")
+    monkeypatch.setenv("TC_MCP_DECIDE_TOKEN", "same-secret")
+    from tc.config import load_settings
+
+    with pytest.raises(ValueError, match="must differ"):
+        load_settings(cfg)
+
+
+def test_mcp_tokens_one_set_is_one_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "engine: {data_dir: /d, repo_dir: /r, research_dir: /d/research}\n"
+        "token: {reauth_after_days: 5, hard_expiry_days: 7, callback_url: https://x.ts.net/oauth/callback}\n"
+        "runner: {url: 'http://127.0.0.1:8090'}\n"
+    )
+    monkeypatch.setenv("TC_SCHWAB_APP_KEY", "k")
+    monkeypatch.setenv("TC_SCHWAB_APP_SECRET", "s")
+    monkeypatch.setenv("TC_MCP_RESEARCH_TOKEN", "research-secret")
+    monkeypatch.delenv("TC_MCP_DECIDE_TOKEN", raising=False)
+    from tc.config import load_settings
+
+    s = load_settings(cfg)
+    assert s.mcp_tokens() == {"research-secret": "research"}

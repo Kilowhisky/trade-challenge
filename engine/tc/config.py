@@ -176,7 +176,21 @@ class Settings(BaseModel):
     def mcp_tokens(self) -> dict[str, str]:
         """Bearer -> role. A role with no token configured is simply not
         reachable: the middleware answers 403 rather than defaulting to a role,
-        because a default role is a way to reach tools without a credential."""
+        because a default role is a way to reach tools without a credential.
+
+        Raises if both roles are configured with the identical bearer: the
+        map is keyed by token, so a same-value copy-paste in .env would
+        otherwise silently collapse two entries into one and hand whichever
+        role is built last -- here, decide -- to a caller presenting the
+        research token. That is a silent privilege escalation, not a
+        configuration nicety, so it fails fast instead of picking a winner.
+        """
+        if (
+            self.mcp_research_token
+            and self.mcp_decide_token
+            and self.mcp_research_token == self.mcp_decide_token
+        ):
+            raise ValueError("mcp research and decide tokens must differ")
         pairs = (
             (self.mcp_research_token, "research"),
             (self.mcp_decide_token, "decide"),
@@ -195,7 +209,7 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 def load_settings(config_path: Path, env_file: Path | None = None) -> Settings:
     file_cfg = FileConfig.model_validate(_read_yaml(config_path))
     secrets = Secrets(_env_file=str(env_file)) if env_file is not None else Secrets()
-    return Settings(
+    settings = Settings(
         secrets=secrets,
         engine=file_cfg.engine,
         token=file_cfg.token,
@@ -204,3 +218,8 @@ def load_settings(config_path: Path, env_file: Path | None = None) -> Settings:
         shadow=file_cfg.shadow,
         expectations=file_cfg.expectations,
     )
+    # Fail fast (module docstring): a research/decide token collision is a
+    # startup-time settings defect, not something that should wait to surface
+    # until a request first calls mcp_tokens().
+    settings.mcp_tokens()
+    return settings
