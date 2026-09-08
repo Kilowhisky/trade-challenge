@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 from typing import Any
 
 import httpx
 import pytest
-from conftest import AUTH, BODY, FakeResult, fake_query
+from conftest import AUTH, BODY, FakeResult, RecordingGen, fake_query, gen_query
 
 import tc_runner.app as appmod
 
@@ -231,3 +232,130 @@ async def test_the_last_result_message_wins(
     )
     out = (await client.post("/run", json=BODY, headers=AUTH)).json()
     assert out["verdict_raw"] == {"cohort": 9}
+
+
+# --- review round 1: teardown, error text, timing-safe auth, wildcards --------
+
+
+async def test_a_timeout_closes_the_generator_before_the_lock_drops(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gen = RecordingGen([FakeResult()], delay=5.0)
+    monkeypatch.setattr(appmod, "QUERY", gen_query(gen))
+    out = (await client.post("/run", json={**BODY, "timeout_s": 0.05}, headers=AUTH)).json()
+    assert out["timed_out"] is True
+    assert out["is_error"] is True
+    assert out["verdict_raw"] is None
+    # The reap happened, and it happened before the response -- i.e. inside the
+    # lock, not after it.
+    assert gen.closed is True
+    assert out["teardown_s"] >= 0.0
+    assert out["result_text"] is None  # a clean reap says nothing
+    assert (await client.get("/health")).json()["busy"] is False
+
+
+async def test_a_wedged_teardown_does_not_hold_the_lock_forever(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(appmod, "TEARDOWN_S", 0.1)
+    gen = RecordingGen([FakeResult()], delay=5.0, close_delay=5.0)
+    monkeypatch.setattr(appmod, "QUERY", gen_query(gen))
+    out = (await client.post("/run", json={**BODY, "timeout_s": 0.05}, headers=AUTH)).json()
+    assert gen.close_started is True
+    assert gen.closed is False  # gave up on the reap rather than wedge the runner
+    assert out["timed_out"] is True
+    assert out["subtype"] is None  # a timeout is `timed_out`, not a runner throw
+    assert out["result_text"] is not None
+    assert "teardown did not complete" in out["result_text"]
+    assert 0.05 < out["teardown_s"] < 2.0
+    assert (await client.get("/health")).json()["busy"] is False
+
+
+async def test_a_completed_run_reports_no_teardown(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(appmod, "QUERY", fake_query([FakeResult()]))
+    assert (await client.post("/run", json=BODY, headers=AUTH)).json()["teardown_s"] == 0.0
+
+
+async def test_a_raise_before_any_result_names_the_exception(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _q(*, prompt: str, options: Any, **kw: Any) -> Any:
+        raise RuntimeError("no such file: /usr/local/bin/claude")
+        yield  # pragma: no cover - makes this an async generator
+
+    monkeypatch.setattr(appmod, "QUERY", _q)
+    out = (await client.post("/run", json=BODY, headers=AUTH)).json()
+    assert out["is_error"] is True
+    assert out["subtype"] == "error_runner_exception"
+    assert out["result_text"] is not None
+    assert "RuntimeError" in out["result_text"]
+    assert "no such file" in out["result_text"]
+
+
+async def test_a_result_message_wins_over_the_later_raise_s_text(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _q(*, prompt: str, options: Any, **kw: Any) -> Any:
+        yield FakeResult(is_error=True, subtype="error_max_turns", result="hit the turn cap")
+        raise RuntimeError("ResultError: exit code 1")
+
+    monkeypatch.setattr(appmod, "QUERY", _q)
+    out = (await client.post("/run", json=BODY, headers=AUTH)).json()
+    assert out["subtype"] == "error_max_turns"
+    assert out["result_text"] == "hit the turn cap"
+
+
+async def test_the_bearer_is_compared_with_compare_digest(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[bytes, bytes]] = []
+    real = secrets.compare_digest
+
+    def spy(a: bytes, b: bytes) -> bool:
+        calls.append((a, b))
+        return bool(real(a, b))
+
+    monkeypatch.setattr(secrets, "compare_digest", spy)
+    monkeypatch.setattr(appmod, "QUERY", fake_query([FakeResult()]))
+    assert (await client.post("/run", json=BODY, headers=AUTH)).status_code == 200
+    assert calls  # the compare went through the constant-time path, not `==`
+    # A prefix of the real token must still be a 403.
+    r = await client.post("/run", json=BODY, headers={"Authorization": "Bearer runner-token"})
+    assert r.status_code == 403
+
+
+@pytest.mark.parametrize("bad", ["*", "mcp__*", "Web*", "Bash*", "mcp__engine__doc_*", "**"])
+async def test_a_wildcard_wider_than_one_mcp_server_is_a_422(
+    client: httpx.AsyncClient, bad: str
+) -> None:
+    body = {**BODY, "allowed_tools": ["mcp__engine__cohort", bad]}
+    assert (await client.post("/run", json=body, headers=AUTH)).status_code == 422
+
+
+async def test_a_server_scoped_wildcard_is_accepted(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(appmod, "QUERY", fake_query([FakeResult()], captured=captured))
+    body = {**BODY, "allowed_tools": ["mcp__engine__*", "WebSearch"]}
+    assert (await client.post("/run", json=body, headers=AUTH)).status_code == 200
+    assert captured["options"].allowed_tools == ["mcp__engine__*", "WebSearch"]
+
+
+async def test_a_malformed_sdk_field_degrades_to_an_error_result(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # permission_denials is list[Any] on the SDK side; a non-dict entry must not
+    # become a 500 -- the engine's contract is that a run always answers.
+    monkeypatch.setattr(
+        appmod, "QUERY", fake_query([FakeResult(permission_denials=["not-a-dict"])])  # type: ignore[list-item]
+    )
+    r = await client.post("/run", json=BODY, headers=AUTH)
+    assert r.status_code == 200
+    out = r.json()
+    assert out["is_error"] is True
+    assert out["subtype"] == "error_runner_result"
+    assert out["result_text"] is not None
+    assert "could not render" in out["result_text"]

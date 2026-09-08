@@ -81,3 +81,47 @@ def client(monkeypatch: pytest.MonkeyPatch) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=appmod.app), base_url="http://runner"
     )
+
+
+class RecordingGen:
+    """A stand-in SDK generator that records whether `aclose()` was awaited.
+
+    The real `query()` returns an async generator whose close is what reaps the
+    CLI child; on the timeout path the runner must await that before it drops
+    the one-run lock, and this is how the suite sees that it did.
+    """
+
+    def __init__(self, seq: Sequence[Any], *, delay: float = 0.0, close_delay: float = 0.0):
+        self._seq = list(seq)
+        self._delay = delay
+        self._close_delay = close_delay
+        self.closed = False
+        self.close_started = False
+
+    def __aiter__(self) -> RecordingGen:
+        return self
+
+    async def __anext__(self) -> Any:
+        if self._delay:
+            await asyncio.sleep(self._delay)
+        if not self._seq:
+            raise StopAsyncIteration
+        return self._seq.pop(0)
+
+    async def aclose(self) -> None:
+        self.close_started = True
+        if self._close_delay:
+            await asyncio.sleep(self._close_delay)
+        self.closed = True
+
+
+def gen_query(gen: Any, captured: dict[str, Any] | None = None) -> Callable[..., Any]:
+    """A QUERY seam that hands back one prepared generator object."""
+
+    def _q(*, prompt: str, options: Any, **kw: Any) -> Any:
+        if captured is not None:
+            captured["prompt"] = prompt
+            captured["options"] = options
+        return gen
+
+    return _q

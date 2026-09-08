@@ -76,3 +76,40 @@ async def test_a_missing_tool_name_is_denied_not_waved_through() -> None:
     gate = make_gate(ALLOWED)
     out = await gate({"tool_input": {}}, "tu_1", None)
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize("name", ["MultiEdit", "SlashCommand", "TodoWrite"])
+def test_the_later_write_surface_is_denied_too(name: str) -> None:
+    # MultiEdit is Edit by another name; SlashCommand runs a command file this
+    # gate never reviewed; TodoWrite writes to the repo.
+    assert name in DENY_ALWAYS
+    assert tool_allowed(name, [name, "mcp__engine__*"]) is False
+
+
+async def test_the_gate_denies_rather_than_raising_on_a_null_input() -> None:
+    # A hook that raises is a hook whose decision never arrives, and no
+    # decision falls through to the allowlist -- the layer this gate outranks.
+    gate = make_gate(ALLOWED)
+    out = await gate(None, "tu_1", None)  # type: ignore[arg-type]
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert hso["permissionDecisionReason"].startswith("gate error: ")
+
+
+@pytest.mark.parametrize("bad", [123, None, ["Bash"], {"nested": True}])
+async def test_a_tool_name_that_is_not_a_string_is_denied(bad: object) -> None:
+    gate = make_gate(ALLOWED)
+    out = await gate({"tool_name": bad, "tool_input": {}}, "tu_1", None)
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert "not a name" in hso["permissionDecisionReason"]
+
+
+async def test_a_gate_error_names_the_exception_class() -> None:
+    class Exploding(dict[str, object]):
+        def get(self, *a: object, **k: object) -> object:
+            raise KeyError("boom")
+
+    gate = make_gate(ALLOWED)
+    out = await gate(Exploding(), "tu_1", None)
+    assert out["hookSpecificOutput"]["permissionDecisionReason"] == "gate error: KeyError"
