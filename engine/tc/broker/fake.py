@@ -13,6 +13,8 @@ from tc.broker.client import (
     Broker,
     BrokerError,
     BrokerUnauthorized,
+    ContractType,
+    MoverDirection,
     SchwabBroker,
     _raise_for,
 )
@@ -84,17 +86,26 @@ class FakeBroker:
         data = self._load("quotes-verbose.json")
         return {s: VerboseQuote.from_payload(s, data[s]) for s in symbols if s in data}
 
+    # Three reads below take arguments this fake does not use: `option_chain`
+    # ignores from_date/to_date/strike_count/contract_type, `instruments`
+    # ignores projection, `movers` ignores direction. That is deliberate and
+    # it is the same reason each time -- a fixture is ONE already-served
+    # response, recorded under one set of arguments. Re-deriving the answer
+    # here would test this filter rather than the caller, and would diverge
+    # from Schwab the first time its filtering differed from ours in any
+    # detail. What the fixture holds is what a call under those arguments
+    # returned; a test that needs a different slice records a different
+    # fixture. The file name carries the only argument that selects between
+    # recordings: the symbol, the query, the index.
+
     async def option_chain(
         self,
         symbol: str,
         from_date: date,
         to_date: date,
         strike_count: int,
-        contract_type: str,
+        contract_type: ContractType,
     ) -> OptionChainView:
-        # The date window, strike count and contract type are the recording's,
-        # not the caller's: a fixture is one already-served response, and
-        # re-filtering it here would test this filter instead of the caller.
         return OptionChainView.from_payload(symbol, self._load(f"chain-{symbol}.json"))
 
     async def expiration_chain(self, symbol: str) -> list[Expiration]:
@@ -105,7 +116,7 @@ class FakeBroker:
         data = self._load(f"instruments-{query}.json")
         return [Instrument.from_payload(i) for i in data.get("instruments", [])]
 
-    async def movers(self, index: str, direction: str) -> list[Mover]:
+    async def movers(self, index: str, direction: MoverDirection) -> list[Mover]:
         data = self._load(f"movers-{index}.json")
         return [Mover.from_payload(m) for m in data.get("screeners", [])]
 

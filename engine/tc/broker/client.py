@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 import httpx
 from schwab import auth as schwab_auth
@@ -24,6 +24,9 @@ from tc.broker.models import (
     VerboseQuote,
 )
 from tc.broker.token import TokenStore
+
+ContractType = Literal["CALL", "PUT", "ALL"]
+MoverDirection = Literal["up", "down"]
 
 
 class BrokerError(Exception):
@@ -48,14 +51,42 @@ class Broker(Protocol):
         from_date: date,
         to_date: date,
         strike_count: int,
-        contract_type: str,
+        contract_type: ContractType,
     ) -> OptionChainView: ...
     async def expiration_chain(self, symbol: str) -> list[Expiration]: ...
     async def instruments(self, query: str, projection: str) -> list[Instrument]: ...
-    async def movers(self, index: str, direction: str) -> list[Mover]: ...
+    async def movers(self, index: str, direction: MoverDirection) -> list[Mover]: ...
     async def market_window(self, d: date) -> MarketWindow: ...
     async def daily_bars(self, symbol: str, days: int) -> list[DailyBar]: ...
     def now(self) -> datetime: ...
+
+
+def _enum_by_name(enum_cls: Any, name: str, what: str) -> Any:
+    """A schwab-py enum member, by NAME, or a BrokerError.
+
+    By name rather than by value because the two differ where it matters:
+    `Movers.Index.DJI` is `"$DJI"`, and the caller says `DJI`. Constructing by
+    value would reject every index carrying the `$` prefix while silently
+    accepting the handful whose name and value happen to coincide -- a bug
+    that only shows up on the indices nobody tested with.
+
+    The wrapper exists because a bad key surfaces from inside schwab-py as a
+    bare KeyError, which no caller catching broker faults would think to
+    handle."""
+    try:
+        return enum_cls[name]
+    except KeyError:
+        raise BrokerError(f"unknown {what}: {name!r}") from None
+
+
+def _enum_by_value(enum_cls: Any, value: str, what: str) -> Any:
+    """A schwab-py enum member, by VALUE. Used where the wire spelling IS the
+    caller's vocabulary -- `Instrument.Projection` is `symbol-search`, not
+    `SYMBOL_SEARCH`, everywhere it is written down."""
+    try:
+        return enum_cls(value)
+    except ValueError:
+        raise BrokerError(f"unknown {what}: {value!r}") from None
 
 
 def _raise_for(resp: httpx.Response) -> dict[str, Any] | list[Any]:
@@ -187,13 +218,13 @@ class SchwabBroker:
         from_date: date,
         to_date: date,
         strike_count: int,
-        contract_type: str,
+        contract_type: ContractType,
     ) -> OptionChainView:
         c = self._c()
         data = await self._guard(
             await c.get_option_chain(
                 symbol,
-                contract_type=c.Options.ContractType[contract_type],
+                contract_type=_enum_by_name(c.Options.ContractType, contract_type, "contract type"),
                 strike_count=strike_count,
                 from_date=from_date,
                 to_date=to_date,
@@ -210,19 +241,26 @@ class SchwabBroker:
     async def instruments(self, query: str, projection: str) -> list[Instrument]:
         c = self._c()
         data = await self._guard(
-            await c.get_instruments(query, c.Instrument.Projection(projection))
+            await c.get_instruments(
+                query, _enum_by_value(c.Instrument.Projection, projection, "projection")
+            )
         )
         assert isinstance(data, dict)
         return [Instrument.from_payload(i) for i in data.get("instruments", [])]
 
-    async def movers(self, index: str, direction: str) -> list[Mover]:
+    async def movers(self, index: str, direction: MoverDirection) -> list[Mover]:
         c = self._c()
-        order = (
-            c.Movers.SortOrder.PERCENT_CHANGE_UP
-            if direction == "up"
-            else c.Movers.SortOrder.PERCENT_CHANGE_DOWN
-        )
-        data = await self._guard(await c.get_movers(c.Movers.Index(index), sort_order=order))
+        # A dict rather than an if/else: `else` would quietly read an unknown
+        # direction as "down" and return the wrong half of the market.
+        sorts = {
+            "up": "PERCENT_CHANGE_UP",
+            "down": "PERCENT_CHANGE_DOWN",
+        }
+        if direction not in sorts:
+            raise BrokerError(f"unknown mover direction: {direction!r}")
+        order = _enum_by_name(c.Movers.SortOrder, sorts[direction], "sort order")
+        idx = _enum_by_name(c.Movers.Index, index, "mover index")
+        data = await self._guard(await c.get_movers(idx, sort_order=order))
         assert isinstance(data, dict)
         return [Mover.from_payload(m) for m in data.get("screeners", [])]
 

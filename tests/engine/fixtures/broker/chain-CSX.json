@@ -4,8 +4,8 @@
  "callExpDateMap": {
   "2026-10-16:39": {
    "47.5": [{"symbol": "CSX   261016C00047500", "putCall": "CALL", "strikePrice": 47.5,
-             "bid": 2.05, "ask": 2.20, "last": 2.12, "delta": 0.61, "openInterest": 1500,
-             "totalVolume": 210, "volatility": 20.8, "daysToExpiration": 39,
+             "bid": 2.05, "ask": 2.20, "last": 2.12, "delta": 0.6123, "openInterest": 1500,
+             "totalVolume": 210, "volatility": 20.847, "daysToExpiration": 39,
              "expirationDate": "2026-10-16T20:00:00.000+00:00"}],
    "50.0": [{"symbol": "CSX   261016C00050000", "putCall": "CALL", "strikePrice": 50.0,
              "bid": 0.95, "ask": 1.10, "last": 1.00, "delta": 0.41, "openInterest": 420,
