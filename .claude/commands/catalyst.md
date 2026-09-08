@@ -18,26 +18,30 @@ also the only channel that produces anything between earnings seasons.
 A catalyst pass never trades, never sizes a position, and never decides what a
 finding means. Escalation hands the evidence to Chris; the thesis is his.
 
+Scheduled: 18:33 ET, weekdays.
+
 ## §A — Preconditions
 
-1. **`ALERT.md` exists and is unacknowledged** → closing-only posture. The
-   sweep still runs — knowing things is free — but mark the return line
-   `CLOSING-ONLY` so no escalation reads as actionable.
-2. **No sector universe on disk yet** (`research/sectors.tsv` absent) → emit
-   the return line with `scanned 0` and stop. The weekly sweep populates it;
-   an empty universe is a correct state, not a failure to work around.
+1. **`mcp__engine__alert_read()` shows an unacknowledged alert** → closing-only
+   posture. The sweep still runs — knowing things is free — but mark the
+   return line `CLOSING-ONLY` so no escalation reads as actionable.
+2. **`mcp__engine__sectors_read()` returns an empty list** → emit `scanned 0`
+   and stop. The weekly sweep populates it; an empty universe is a correct
+   state, not a failure to work around. This is the same condition the v2 gate
+   used a file's existence to detect, stated instead as an empty table that
+   cannot be confused with an unreadable path.
 
 ## §B — The sweep
 
 ### B1. Clock
 
-`get_datetime` for the Eastern date. Never the machine clock — the laptop runs
-Pacific and would file an evening pass under the wrong day, corrupting the
-ledger dates every later delta is computed against.
+`mcp__engine__get_datetime` for the Eastern date. Never the machine clock — a
+pass filed under the wrong day corrupts the ledger dates every later delta is
+computed against.
 
 ### B2. Scope
 
-The in-scope sectors are the three in `research/sectors.tsv`:
+The in-scope sectors are the three `mcp__engine__sectors_read()` carries:
 `consumer-software`, `airlines-transport`, `semis-hardware`. Names tagged
 `other` are out of scope — not because nothing happens there, but because the
 edge being traded is Chris's own domain knowledge, and a well-corroborated
@@ -47,7 +51,7 @@ edge.
 You are not iterating a list. Search the *sectors* for developing stories, then
 map what you find back to a tagged symbol. A story about an untagged company is
 worth recording only if the company plausibly belongs to one of the three — in
-which case tag it via `scripts/sector-write.sh` and proceed.
+which case tag it via `mcp__engine__sector_write` and proceed.
 
 ### B3. What to look for
 
@@ -87,7 +91,7 @@ underlying platform, never the aggregator alone.
 ### B5. Record every observation
 
 ```
-scripts/evidence-append.sh SYMBOL <YYYY-MM-DD> '<json>'
+mcp__engine__evidence_append(symbol=SYMBOL, date=<YYYY-MM-DD>, record={...})
 ```
 
 Required: `claim`, `url`, `source_type`, `observed`, `independence`.
@@ -112,7 +116,7 @@ Escalate **only** when all four hold:
 On a clear:
 
 ```
-scripts/escalation-log.sh raise SYMBOL <YYYY-MM-DD> '<json>'
+mcp__engine__escalation_raise(symbol=SYMBOL, date=<YYYY-MM-DD>, record={...})
 ```
 
 with `claim`, `direction` (`up`|`down`), `event_date`, and `source_types`.
@@ -123,12 +127,16 @@ rather than a story told afterward.
 
 ## §D — Return
 
-One line, plus one `ESCALATE:` line per clear. The wrapper relays escalations
-to Discord; a clean pass relays nothing.
+Exactly one JSON object matching the `CatalystVerdict` schema: `scanned`,
+`observed`, `escalations[]` (each `{symbol, claim, evidence_ids}`), and
+`summary` in the form:
 
 ```
 CATALYST 2026-09-01 | scanned 62 | observed 4 | escalated 0 | -
 ```
+
+A clean pass still returns `escalations: []` — the engine relays one Discord
+line per escalation and none when the list is empty.
 
 ## §E — What this pass must not do
 

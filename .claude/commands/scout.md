@@ -13,32 +13,37 @@ knowable about this company that the market has not yet priced?*
 A scout pass never trades, never sizes a position, and never decides what a
 finding means. Escalation hands the evidence to Chris; the thesis is his.
 
+Scheduled: 07:12 ET, weekdays.
+
 ## §A — Preconditions
 
-1. **`ALERT.md` exists and is unacknowledged** → the account is in
-   closing-only posture. Research still runs (knowing things is free), but
-   mark the return line `CLOSING-ONLY` so no escalation reads as actionable.
+1. **`mcp__engine__alert_read()` shows an unacknowledged alert** → the account
+   is in closing-only posture. Research still runs (knowing things is free),
+   but mark the return line `CLOSING-ONLY` so no escalation reads as
+   actionable.
 2. **The cohort is empty** → that is a correct result between earnings
-   seasons, not a failure. Emit the return line with `cohort 0` and stop.
-   Do not widen the window to find work.
+   seasons, not a failure. Emit `cohort 0` and stop — this is the `noop`
+   verdict, not a failure. Do not widen the window to find work.
 
 ## §B — The pass
 
 ### B1. Clock
 
-`get_datetime` for the Eastern date. Never the machine clock — the laptop runs
-Pacific and would file an evening pass under the wrong day, corrupting the
-ledger dates that every later delta is computed against.
+`mcp__engine__get_datetime` for the Eastern date. Never the machine clock — a
+pass filed under the wrong day corrupts the ledger dates that every later
+delta is computed against.
 
 ### B2. Cohort
 
 ```
-scripts/cohort.sh <YYYY-MM-DD>
+mcp__engine__cohort(date=<YYYY-MM-DD>)
 ```
 
-Prints `symbol	sector	est_next_earnings	days_out` for names whose estimated
-print falls in the entry window. Take the **first 2–3** rows not already
-observed today; the rest belong to later passes. Working the whole cohort in
+Returns `symbol`, `sector`, `est_next_earnings`, `days_out` for names whose
+estimated print falls in the entry window. Take the **first 2–3** rows not
+already observed today — check each candidate's history with
+`mcp__engine__evidence_read(symbol=...)` (§B3) to see whether it already has a
+row dated today. The rest belong to later passes. Working the whole cohort in
 one pass is how a scout runs out of budget and starts guessing.
 
 The window is the option **entry** window, not an arbitrary lookahead: implied
@@ -48,14 +53,14 @@ at exactly the point where a position could still be opened before the ramp.
 ### B3. Read the name's history FIRST
 
 ```
-research/evidence/<SYMBOL>.jsonl
+mcp__engine__evidence_read(symbol=<SYMBOL>)
 ```
 
 Read it before searching. This is what makes a delta possible, and the delta
 is the whole signal. Note what the last pass found, how long ago, and what the
-baseline looked like. If the file does not exist, this is the name's first
-pass — record that in your reasoning, escalate nothing on it, and let the
-baseline establish itself. **A first observation is never a delta.**
+baseline looked like. If the result is empty, this is the name's first pass —
+record that in your reasoning, escalate nothing on it, and let the baseline
+establish itself. **A first observation is never a delta.**
 
 ### B4. Sample the sources
 
@@ -86,7 +91,7 @@ Measured constraints on what actually works here, from a 2026-08-30 probe:
 ### B5. Record every observation
 
 ```
-scripts/evidence-append.sh SYMBOL <YYYY-MM-DD> '<json>'
+mcp__engine__evidence_append(symbol=SYMBOL, date=<YYYY-MM-DD>, record={...})
 ```
 
 Required: `claim`, `url`, `source_type`, `observed`, `independence`.
@@ -96,9 +101,9 @@ scored right or wrong. `independence` is your stated reason this source is not
 a restatement of another one you recorded; "separate user reports, not derived
 from the press release above" is a reason, "different website" is not.
 
-Record what you found even when it clears nothing. The ledger's value is
-longitudinal: a null result this quarter is what makes next quarter's change
-visible.
+Record what you found even when it clears nothing, for **every** observation,
+including nulls. The ledger's value is longitudinal: a null result this
+quarter is what makes next quarter's change visible.
 
 ## §C — The escalation test
 
@@ -118,24 +123,28 @@ not a fourth way to clear the bar.
 On a clear:
 
 ```
-scripts/escalation-log.sh raise SYMBOL <YYYY-MM-DD> '<json>'
+mcp__engine__escalation_raise(symbol=SYMBOL, date=<YYYY-MM-DD>, record={...})
 ```
 
 with `claim`, `direction` (`up`|`down`), `event_date`, and `source_types`.
 Recording the prediction **before** the outcome is the entire point — it is
-what makes a hit rate exist rather than a story told afterward. The writer
+what makes a hit rate exist rather than a story told afterward. The tool
 refuses a raise carrying an outcome, and refuses fewer than two distinct valid
 types.
 
 ## §D — Return
 
-One line, plus one `ESCALATE:` line per clear. The wrapper relays escalations
-to Discord; a clean pass relays nothing, because a scout that reports daily
-that it found nothing trains its reader to stop looking.
+Exactly one JSON object matching the `ScoutVerdict` schema: `cohort`,
+`observed`, `escalations[]` (each `{symbol, claim, evidence_ids}`), and
+`summary` in the form:
 
 ```
 SCOUT 2026-09-01 | cohort 14 | observed 3 | escalated 0 | -
 ```
+
+A clean pass still returns `escalations: []` — the engine relays one Discord
+line per escalation and none when the list is empty, because a scout that
+reports daily that it found nothing trains its reader to stop looking.
 
 ## §E — What this pass must not do
 
