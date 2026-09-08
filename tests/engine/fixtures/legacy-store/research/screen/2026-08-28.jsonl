@@ -1,0 +1,5 @@
+{"symbol":"SYNA","t":"16:42:00","src":"screener","rank":1,"price":15.05}
+{"symbol":"SYNB","t":"16:42:00","src":"screener","rank":2,"price":22.10}
+{"symbol":"SYNC","t":"16:42:00","rank":3,"price":9.90}
+{"symbol":"SYND","t":"16:42:00","src":"movers","rank":4,"price":55.66}
+this line was never JSON

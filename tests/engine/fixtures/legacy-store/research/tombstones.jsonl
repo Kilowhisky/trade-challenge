@@ -1,0 +1,3 @@
+{"symbol":"SYNA","date":"2026-08-28","gate":"gap-and-hold","reason":"synthetic refusal","ref_price":88.50}
+{"symbol":"SYNB","date":"2026-08-28","gate":"atr-ceiling","reason":"synthetic refusal","ref_price":41.10}
+{"symbol":"SYNC","date":"2026-08-28","gate":"liquidity","reason":"synthetic refusal, no ref_price"}

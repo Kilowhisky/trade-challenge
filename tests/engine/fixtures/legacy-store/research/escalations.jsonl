@@ -1,0 +1,4 @@
+{"claim":"synthetic escalation, two independent source types","direction":"up","event_date":"2026-09-18","source_types":["end-user","employee"],"id":"SYNA-2026-08-28-1234567890","symbol":"SYNA","raised":"2026-08-28","kind":"raise"}
+{"id":"SYNA-2026-08-28-1234567890","outcome":"right","scored":"2026-09-19","kind":"score"}
+{"id":"SYNZ-2026-08-28-9999999999","outcome":"wrong","scored":"2026-09-19","kind":"score"}
+{"claim":"synthetic escalation below the bar","direction":"up","event_date":"2026-09-18","source_types":["mainstream"],"id":"SYNB-2026-08-28-2222222222","symbol":"SYNB","raised":"2026-08-28","kind":"raise"}

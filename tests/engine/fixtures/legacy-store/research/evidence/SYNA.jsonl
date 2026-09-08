@@ -1,0 +1,3 @@
+{"claim":"synthetic observation one","url":"https://example.invalid/1","source_type":"end-user","observed":"2026-08-28","independence":"unrelated poster"}
+{"claim":"synthetic observation two","url":"https://example.invalid/2","source_type":"employee","observed":"2026-08-28","independence":"different employer"}
+{"claim":"synthetic observation three","url":"https://example.invalid/3","source_type":"astrology","observed":"2026-08-28","independence":"n/a"}

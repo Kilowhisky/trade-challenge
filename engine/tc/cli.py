@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import shutil
 import sys
+import tempfile
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
@@ -22,6 +24,8 @@ from tc.broker.token import NoAuthInProgress, TokenStore, action_for
 from tc.config import Settings, load_settings
 from tc.loops.session import seed_hwm
 from tc.main import JOBS, check_bind, run_once, serve
+from tc.research.docs import DocStore
+from tc.research.importer import ImportReport, import_research
 from tc.rules.consistency import run_checks
 from tc.shadow import ShadowDiff, diff_day
 from tc.store.db import Store
@@ -190,6 +194,66 @@ def cmd_shadow_diff(ns: argparse.Namespace) -> int:
     return 0 if result.ok else 1
 
 
+async def _import_research(db: Path, research: Path, src: Path) -> ImportReport:
+    store = Store(db)
+    try:
+        await store.open()
+        return await import_research(store, DocStore(research, store), src)
+    finally:
+        await store.close()
+
+
+def _dry_run_copy(db: Path, research: Path, scratch: Path) -> tuple[Path, Path]:
+    """Copy the live store aside so a dry run reads real state and writes none.
+
+    The copy matters: run against an empty scratch store the report would say
+    "everything would be imported" even where everything already is, which is
+    the one question a dry run before a re-run is asked. The database is
+    copied file-wise rather than through `VACUUM INTO`, because that needs a
+    connection and opening the live store is itself a write. A copy taken
+    while the engine is mid-write can be slightly behind: a dry run is a
+    report, not the migration.
+    """
+    target_db = scratch / "engine.db"
+    for suffix in ("", "-wal", "-shm"):
+        side = db.with_name(db.name + suffix)
+        if side.exists():
+            shutil.copy2(side, target_db.with_name(target_db.name + suffix))
+    target_research = scratch / "research"
+    if research.exists():
+        shutil.copytree(research, target_research)
+    return target_db, target_research
+
+
+def cmd_import_research(ns: argparse.Namespace) -> int:
+    """Import the v2 bash store once, through the same validators the tools
+    write through. Idempotent: a second run imports nothing. A row the
+    validators refuse is listed with its reason, never stored, never fatal —
+    so the exit code is 0 whether or not anything was skipped, and 4 only
+    when the operator named a directory that is not there."""
+    s = _settings(ns)
+    src = Path(ns.store_dir)
+    if not src.is_dir():
+        print(f"tc: no legacy store at {src}", file=sys.stderr)
+        return 4
+    db = s.engine.data_dir / "engine.db"
+    research = s.engine.research_dir
+    if ns.dry_run:
+        with tempfile.TemporaryDirectory() as tmp:
+            db, research = _dry_run_copy(db, research, Path(tmp))
+            report = asyncio.run(_import_research(db, research, src))
+    else:
+        report = asyncio.run(_import_research(db, research, src))
+    for name in ImportReport.model_fields:
+        if name != "skipped":
+            print(f"{name} {getattr(report, name)}")
+    print(f"skipped {len(report.skipped)}")
+    for line in report.skipped:
+        print(f"  {line}")
+    print("IMPORT DRY-RUN" if ns.dry_run else "IMPORT OK")
+    return 0
+
+
 def cmd_run(ns: argparse.Namespace) -> int:
     """The service. `--once JOB` is the operator smoke test: start, run one
     job, stop, no HTTP surface."""
@@ -234,6 +298,11 @@ def build_parser() -> argparse.ArgumentParser:
     sh.add_argument("--value", required=True)
     sh.add_argument("--recorded-on", required=True)
     sh.set_defaults(fn=cmd_seed_hwm)
+
+    ir = sub.add_parser("import-research")
+    ir.add_argument("--store-dir", required=True)
+    ir.add_argument("--dry-run", action="store_true")
+    ir.set_defaults(fn=cmd_import_research)
 
     sd = sub.add_parser("shadow-diff")
     sd.add_argument("date")
