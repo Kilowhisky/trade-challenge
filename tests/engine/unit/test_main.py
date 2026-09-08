@@ -126,6 +126,28 @@ class RecordingNotifier(Notifier):
         return True
 
 
+class RecordingPinger(Pinger):
+    """Healthchecks, remembered. The deadman reads these pings and nothing
+    else, so which one a verdict routes to is the whole of what an unattended
+    operator learns about a job."""
+
+    def __init__(self, client: httpx.AsyncClient) -> None:
+        super().__init__(None, client)
+        self.pings: list[tuple[str, str]] = []
+
+    async def start(self, job: str) -> bool:
+        self.pings.append(("start", job))
+        return True
+
+    async def ok(self, job: str, verdict: str) -> bool:
+        self.pings.append(("ok", verdict))
+        return True
+
+    async def fail(self, job: str, verdict: str) -> bool:
+        self.pings.append(("fail", verdict))
+        return True
+
+
 class BoomBroker(FakeBroker):
     """Authorised, reachable, and broken: the non-401 `BrokerError` that
     `run_tick` deliberately does not catch (its BLIND path is for 401s only),
@@ -228,6 +250,7 @@ def _engine(
     notifier: Notifier,
     client: httpx.AsyncClient,
     jobs: JobRunner | None = None,
+    pinger: Pinger | None = None,
 ) -> Engine:
     token = TokenStore(
         settings.engine.data_dir / "token.json", settings.token, "k", "s"
@@ -238,7 +261,7 @@ def _engine(
         store=store,
         token=token,
         notifier=notifier,
-        pinger=Pinger(None, client),
+        pinger=pinger or Pinger(None, client),
         clock=clock,
         sleep_s=0.0,
         jobs=jobs,
@@ -983,6 +1006,7 @@ def _fake_runner(payload: dict[str, Any]) -> RunnerClient:
         "runner-token-not-real",
         httpx.AsyncClient(transport=httpx.MockTransport(h)),
         120.0,
+        role_token="research-token-not-real",  # noqa: S106 -- test fixture
     )
 
 
@@ -1154,3 +1178,71 @@ def test_run_once_accepts_a_claude_job(
     monkeypatch.setattr(RunnerClient, "health", fake_health)
     args = _cli_args(tmp_path, env_extra=MCP_ENV)
     assert cli.main([*args, "run", "--once", "scout"]) == 0
+
+
+CONTENT_FAILED_RESULT: dict[str, Any] = {
+    **SCOUT_RESULT, "verdict_raw": None, "result_text": "I ran out of turns"
+}
+
+
+async def test_a_job_that_returns_a_failure_pings_fail_not_ok(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    """The v2 defect, closed at the seam that matters: a research run that
+    produced nothing pinged green for weeks because only an EXCEPTION reached
+    /fail. A returned `content_failed` is as failed as a raised one, and the
+    deadman reads the ping, not the row."""
+    s = _settings(tmp_path)
+    pinger = RecordingPinger(client)
+    e = _engine(
+        s, store, FakeBroker(_fx(tmp_path), NOW), Clock(SCOUT_AT),
+        RecordingNotifier(client), client,
+        jobs=JobRunner(_fake_runner(CONTENT_FAILED_RESULT), RecordingNotifier(client),
+                       lambda: SCOUT_AT),
+        pinger=pinger,
+    )
+    assert await e.run_job("scout", SCOUT_AT) == "content_failed"
+    assert pinger.pings == [("start", "scout"), ("fail", "content_failed")]
+    # And the streak grows, so /health can see a job that never works.
+    assert e.state.consecutive_failures["scout"] == 1
+
+
+async def test_a_job_that_worked_still_pings_ok_and_clears_the_streak(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    s = _settings(tmp_path)
+    pinger = RecordingPinger(client)
+    e = _engine(
+        s, store, FakeBroker(_fx(tmp_path), NOW), Clock(SCOUT_AT),
+        RecordingNotifier(client), client,
+        jobs=JobRunner(_fake_runner(SCOUT_RESULT), RecordingNotifier(client),
+                       lambda: SCOUT_AT),
+        pinger=pinger,
+    )
+    e.state.consecutive_failures["scout"] = 3
+    assert await e.run_job("scout", SCOUT_AT) == "done"
+    assert pinger.pings == [("start", "scout"), ("ok", "done")]
+    assert e.state.consecutive_failures["scout"] == 0
+
+
+def test_run_once_exits_1_on_a_run_that_answered_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deploy script told `content_failed` was a success is a deploy script
+    that ships a research loop producing nothing."""
+    fx = _fx(tmp_path)
+    monkeypatch.setenv("TC_MODE", "paper")
+    monkeypatch.setenv("TC_FIXTURES", str(fx))
+    monkeypatch.setattr(main, "_now", lambda: SCOUT_AT)
+
+    async def fake_run(self: RunnerClient, spec: Any, *, prompt_extra: str = "") -> Any:
+        from tc.jobs.dispatch import RunnerReply, RunResultView
+
+        return RunnerReply(result=RunResultView.model_validate(CONTENT_FAILED_RESULT))
+
+    async def fake_health(self: RunnerClient) -> bool:
+        return True
+
+    monkeypatch.setattr(RunnerClient, "run", fake_run)
+    monkeypatch.setattr(RunnerClient, "health", fake_health)
+    assert cli.main([*_cli_args(tmp_path, env_extra=MCP_ENV), "run", "--once", "scout"]) == 1

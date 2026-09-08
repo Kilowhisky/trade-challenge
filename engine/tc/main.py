@@ -50,7 +50,7 @@ from tc.broker.token import TokenStore
 from tc.clock import ET, fallback_window, trading_days_between
 from tc.config import Settings
 from tc.http.app import EngineState, McpMounts, build_app
-from tc.jobs.dispatch import JobRunner, RunnerClient
+from tc.jobs.dispatch import FAILED_VERDICTS, JobRunner, RunnerClient
 from tc.jobs.spec import JOB_SPECS
 from tc.loops.expectations import digest, run_expectations
 from tc.loops.reconcile import reconcile
@@ -390,11 +390,24 @@ class Engine:
             await self._pinger.fail(fire.job, "failed")
             await self.notifier.post(f"⚠️ {fire.job} failed: {name}")
             return "failed"
-        # done/noop: the job worked, so the streak is over. A run that
-        # reaches here is the evidence /health needs that the loop is alive.
-        self.state.consecutive_failures[fire.job] = 0
+        # A job that RETURNED a failure is as failed as one that raised. The
+        # deadman watches the healthchecks ping, so routing every non-exception
+        # to /ok is precisely the v2 defect this whole task exists to end: a
+        # research run that produced nothing pinged green for weeks. `failed`,
+        # `timeout` and `content_failed` therefore ping /fail and extend the
+        # streak; only done/noop clear it.
+        failed = verdict in FAILED_VERDICTS
+        if failed:
+            self.state.consecutive_failures[fire.job] = (
+                self.state.consecutive_failures.get(fire.job, 0) + 1
+            )
+        else:
+            self.state.consecutive_failures[fire.job] = 0
         await self._record_fire(fire, started, verdict, detail)
-        await self._pinger.ok(fire.job, verdict)
+        if failed:
+            await self._pinger.fail(fire.job, verdict)
+        else:
+            await self._pinger.ok(fire.job, verdict)
         return verdict
 
     async def _record_fire(
@@ -896,5 +909,7 @@ async def run_once(settings: Settings, job: str) -> int:
             await engine.stop()
     # The operator smoke test is only a smoke test if a failed job fails the
     # command: `tc run --once tick` in a deploy script must not print a
-    # traceback into the log and then exit 0.
-    return 1 if verdict == "failed" else 0
+    # traceback into the log and then exit 0. `timeout` and `content_failed`
+    # count -- a research pass that answered nothing is not a pass, and an
+    # exit 0 is the deploy script being told it was.
+    return 1 if verdict in FAILED_VERDICTS else 0

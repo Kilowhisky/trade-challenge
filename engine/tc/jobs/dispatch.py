@@ -70,8 +70,12 @@ MAX_ERRORS = 5
 # and catalyst passes already relay per-escalation, and `research` relays per
 # hot-fresh candidate; posting their summary too would say the same pass twice.
 SUMMARY_JOBS = frozenset({"preopen", "postclose", "sector_tag"})
-# The verdicts that mean nobody got an answer. Each gets one ⚠️ line.
-BAD_VERDICTS = frozenset({"content_failed", "failed", "timeout"})
+# The verdicts that mean nobody got an answer: each gets one ⚠️ line here, and
+# `Engine._dispatch` pings healthchecks `/fail` for them rather than `/ok`.
+# One set, shared, because "the job did not work" must mean the same thing to
+# the channel and to the deadman -- v2's whole failure was a run that produced
+# nothing and pinged green.
+FAILED_VERDICTS = frozenset({"content_failed", "failed", "timeout"})
 
 
 class RunResultView(BaseModel):
@@ -145,6 +149,17 @@ class RunnerClient:
     def configured(self) -> bool:
         return bool(self._base and self._token)
 
+    @property
+    def has_role_token(self) -> bool:
+        """The bearer the runner presents BACK to the engine's MCP mount.
+
+        Separate from `configured` because it fails differently: a runner with
+        no MCP bearer would start the job, reach its first engine tool, and be
+        refused -- burning the whole budget to arrive at a 401. Better to not
+        dispatch, and to say which half of the configuration is missing.
+        """
+        return bool(self._role_token)
+
     async def health(self) -> bool:
         """The runner's own `/health`, for the engine's `/health` and the host
         probe. Never raises and never blocks startup for long: an unreachable
@@ -214,6 +229,16 @@ class RunnerClient:
             return RunnerReply(transport_error=type(e).__name__)
 
 
+def _one_line(text: str | None) -> str:
+    """Whitespace collapsed, then capped.
+
+    A model that narrated its whole session would otherwise put a hundred lines
+    into a ledger detail and a Discord message; and a newline inside a `⚠️`
+    line breaks the one-line-per-failure reading the channel is scanned with.
+    """
+    return " ".join((text or "").split())[:MAX_TEXT]
+
+
 def _validation_errors(exc: ValidationError) -> list[str]:
     """Location and error type only — never `input`.
 
@@ -251,13 +276,13 @@ def classify(
         return "failed", None, {
             "subtype": res.subtype,
             "denials": len(res.permission_denials),
-            "text": (res.result_text or "")[:MAX_TEXT],
+            "text": _one_line(res.result_text),
         }
     if res.verdict_raw is None:
         # Exit 0, turns spent, nothing structured. The v2 bug, given a name.
         return "content_failed", None, {
             "reason": "no structured output",
-            "text": (res.result_text or "")[:MAX_TEXT],
+            "text": _one_line(res.result_text),
         }
     try:
         verdict_model = spec.verdict.model_validate(res.verdict_raw)
@@ -304,6 +329,13 @@ class JobRunner:
             # deployment; a `failed` row every weekday at 07:12 for a service
             # nobody installed is how a deadman gets muted.
             return "noop", {"skipped": "no runner configured"}
+        if not self._runner.has_role_token:
+            # Half-configured, which is worse than unconfigured: the runner
+            # would take the job, spend its budget, and be 401'd at its first
+            # engine tool. Warned rather than silent -- unlike "no runner",
+            # this state is nobody's intended deployment.
+            log.warning("%s not dispatched: no MCP research token configured", job)
+            return "noop", {"skipped": "no mcp research token"}
         et = (now or self._clock()).astimezone(ET)
         start, end = spec.window
         if not start <= et.time() <= end:
@@ -335,7 +367,7 @@ class JobRunner:
         because it is in `hot_fresh`, not because the model happened to open
         its answer with a string some grep recognised.
         """
-        if verdict in BAD_VERDICTS:
+        if verdict in FAILED_VERDICTS:
             await self._notifier.post(f"⚠️ {spec.name} {verdict}: {_reason(detail)}")
             return
         if model is None:

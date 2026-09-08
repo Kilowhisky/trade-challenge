@@ -37,6 +37,7 @@ IN_WINDOW = datetime(2026, 9, 7, 11, 15, tzinfo=UTC)
 OUT_WINDOW = datetime(2026, 9, 7, 20, 0, tzinfo=UTC)  # 16:00 ET
 SLACK_S = 120.0
 TOKEN = "runner-token-not-real"  # noqa: S105 -- test fixture, not a credential
+ROLE_TOKEN = "research-token-not-real"  # noqa: S105 -- test fixture, not a credential
 
 Handler = Any
 
@@ -58,12 +59,15 @@ def notifier() -> RecordingNotifier:
     return RecordingNotifier()
 
 
-def _runner(handler: Handler, token: str | None = TOKEN) -> RunnerClient:
+def _runner(
+    handler: Handler, token: str | None = TOKEN, role_token: str | None = ROLE_TOKEN
+) -> RunnerClient:
     return RunnerClient(
         "http://runner",
         token,
         httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         SLACK_S,
+        role_token=role_token,
     )
 
 
@@ -223,6 +227,24 @@ async def test_no_runner_configured_is_a_noop_not_a_failure(
     assert detail["skipped"] == "no runner configured"
 
 
+async def test_a_runner_with_no_mcp_bearer_is_never_dispatched_to(
+    notifier: RecordingNotifier,
+) -> None:
+    """Half-configured is worse than unconfigured: the runner would take the
+    job, spend its whole budget, and be 401'd at its first engine tool."""
+    called: list[httpx.Request] = []
+
+    def h(request: httpx.Request) -> httpx.Response:
+        called.append(request)
+        return httpx.Response(200, json=GOOD)
+
+    jr = _jr(h, notifier, role_token=None)
+    verdict, detail = await jr.execute("scout", IN_WINDOW)
+    assert verdict == "noop"
+    assert detail["skipped"] == "no mcp research token"
+    assert called == []
+
+
 # --- the request ------------------------------------------------------------
 
 async def test_the_read_timeout_is_the_job_budget_plus_slack(
@@ -260,6 +282,8 @@ async def test_the_request_carries_the_spec_and_the_et_date(
     assert seen["allowed_tools"] == list(spec.allowed_tools)
     assert seen["max_turns"] == spec.max_turns
     assert seen["auth"] == f"Bearer {TOKEN}"
+    # The bearer the runner presents BACK to the engine's MCP mount.
+    assert seen["mcp_role_token"] == ROLE_TOKEN
     # additionalProperties:false travels with the schema, so the runner's own
     # structured-output mode refuses a stray field before the engine sees it.
     assert seen["output_schema"]["additionalProperties"] is False
@@ -368,6 +392,20 @@ async def test_a_deep_run_that_wrote_nothing_is_a_noop_and_says_nothing(
     verdict, _ = await _jr(_ok(payload), notifier).execute("postclose", at)
     assert verdict == "noop"
     assert notifier.posted == []
+
+
+async def test_a_runs_own_words_reach_the_ledger_on_one_line(
+    notifier: RecordingNotifier,
+) -> None:
+    """A model that narrated its whole session would otherwise put a hundred
+    lines into a detail column and break the channel's one-line-per-failure
+    reading."""
+    payload = {**GOOD, "verdict_raw": None, "result_text": "line one\nline two\n" + "x" * 500}
+    _, detail = await _jr(_ok(payload), notifier).execute("scout", IN_WINDOW)
+    assert detail["text"].startswith("line one line two ")
+    assert "\n" not in detail["text"]
+    assert len(detail["text"]) == 200
+    assert "\n" not in notifier.posted[0]
 
 
 async def test_a_failed_run_posts_exactly_one_warning(notifier: RecordingNotifier) -> None:
