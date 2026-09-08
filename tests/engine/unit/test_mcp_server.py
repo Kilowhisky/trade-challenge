@@ -31,7 +31,11 @@ import pytest
 import uvicorn
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
+from mcp.server.fastmcp import FastMCP
+from starlette.applications import Starlette
+from starlette.routing import Mount
 
+import tc.mcp.server as server_mod
 from tc.broker.fake import FakeBroker
 from tc.broker.token import TokenStore
 from tc.config import Settings, load_settings
@@ -45,6 +49,7 @@ from tc.store.db import Store
 REPO = Path(__file__).resolve().parents[3]
 FIXTURES = REPO / "tests" / "engine" / "fixtures" / "broker"
 NOW = datetime(2026, 9, 4, 17, 31, tzinfo=UTC)
+STARTUP_TIMEOUT_S = 20.0
 
 # Invented for this file. Named so a grep for a leaked real credential can
 # tell at a glance that these are not one.
@@ -90,7 +95,7 @@ def _token_store(settings: Settings, tmp_path: Path) -> TokenStore:
 
 
 @contextlib.asynccontextmanager
-async def _serve(tmp_path: Path) -> AsyncIterator[Served]:
+async def _serve(tmp_path: Path, *, under: str = "") -> AsyncIterator[Served]:
     """The real app -- routes, middleware and both MCP lifespans -- on a free
     loopback port."""
     cfg = tmp_path / "config.yml"
@@ -118,21 +123,40 @@ async def _serve(tmp_path: Path) -> AsyncIterator[Served]:
         version="0.2.0",
         shadow=True,
     )
+    # allow_stubs: tasks 8 and 9 supply the real tool bodies. These tests are
+    # about the mounting, the gate and the lifespan, so they say so explicitly
+    # rather than getting a stub-filled server by default.
     app = build_app(
-        state, mcp=McpMounts(servers=build_servers(deps), tokens=settings.mcp_tokens())
+        state,
+        mcp=McpMounts(
+            servers=build_servers(deps, allow_stubs=True), tokens=settings.mcp_tokens()
+        ),
     )
+    served_app: Starlette = app
+    if under:
+        # A parent Mount is what puts a `root_path` on the scope, which is the
+        # exact condition under which the router's path and `request.url.path`
+        # diverge.
+        served_app = Starlette(routes=[Mount(under, app=app)])
     port = _free_port()
     server = uvicorn.Server(
-        uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+        uvicorn.Config(served_app, host="127.0.0.1", port=port, log_level="warning")
     )
     task = asyncio.create_task(server.serve())
     # uvicorn.Server publishes readiness as a polled attribute and offers no
-    # event to await, so the poll is the only signal there is.
-    while not server.started:  # noqa: ASYNC110
+    # event to await, so the poll is the only signal there is. Bounded, because
+    # an unbounded one turns "the server failed to start" into a hung suite
+    # with no message.
+    deadline = asyncio.get_running_loop().time() + STARTUP_TIMEOUT_S
+    while not server.started:
+        if asyncio.get_running_loop().time() > deadline:
+            server.should_exit = True
+            await task
+            raise TimeoutError(f"uvicorn did not start within {STARTUP_TIMEOUT_S}s")
         await asyncio.sleep(0.05)
     try:
         yield (
-            f"http://127.0.0.1:{port}",
+            f"http://127.0.0.1:{port}{under}",
             {"research": RESEARCH_TOKEN, "decide": DECIDE_TOKEN},
         )
     finally:
@@ -141,10 +165,13 @@ async def _serve(tmp_path: Path) -> AsyncIterator[Served]:
         await store.close()
 
 
+Factory = Callable[..., contextlib.AbstractAsyncContextManager[Served]]
+
+
 @pytest.fixture
-def served(tmp_path: Path) -> Callable[[], contextlib.AbstractAsyncContextManager[Served]]:
-    def factory() -> contextlib.AbstractAsyncContextManager[Served]:
-        return _serve(tmp_path)
+def served(tmp_path: Path) -> Factory:
+    def factory(*, under: str = "") -> contextlib.AbstractAsyncContextManager[Served]:
+        return _serve(tmp_path, under=under)
 
     return factory
 
@@ -153,7 +180,7 @@ def served(tmp_path: Path) -> Callable[[], contextlib.AbstractAsyncContextManage
 
 
 async def test_no_bearer_is_401(
-    served: Callable[[], contextlib.AbstractAsyncContextManager[Served]],
+    served: Factory,
 ) -> None:
     async with served() as (base, _):
         async with httpx.AsyncClient() as c:
@@ -162,7 +189,7 @@ async def test_no_bearer_is_401(
 
 
 async def test_unknown_token_is_403(
-    served: Callable[[], contextlib.AbstractAsyncContextManager[Served]],
+    served: Factory,
 ) -> None:
     async with served() as (base, _):
         async with httpx.AsyncClient() as c:
@@ -174,7 +201,7 @@ async def test_unknown_token_is_403(
 
 
 async def test_research_token_on_the_decide_mount_is_403(
-    served: Callable[[], contextlib.AbstractAsyncContextManager[Served]],
+    served: Factory,
 ) -> None:
     """The decisive property: the roles are not merely different tool lists,
     they are different endpoints, and the credential names which one."""
@@ -188,7 +215,7 @@ async def test_research_token_on_the_decide_mount_is_403(
 
 
 async def test_decide_token_on_the_research_mount_is_403(
-    served: Callable[[], contextlib.AbstractAsyncContextManager[Served]],
+    served: Factory,
 ) -> None:
     async with served() as (base, tokens):
         async with httpx.AsyncClient() as c:
@@ -200,7 +227,7 @@ async def test_decide_token_on_the_research_mount_is_403(
 
 
 async def test_non_bearer_scheme_is_401(
-    served: Callable[[], contextlib.AbstractAsyncContextManager[Served]],
+    served: Factory,
 ) -> None:
     async with served() as (base, tokens):
         async with httpx.AsyncClient() as c:
@@ -212,7 +239,7 @@ async def test_non_bearer_scheme_is_401(
 
 
 async def test_health_still_answers_unauthenticated_with_mcp_mounted(
-    served: Callable[[], contextlib.AbstractAsyncContextManager[Served]],
+    served: Factory,
 ) -> None:
     """The middleware is scoped to /mcp. An unattended probe carries no
     bearer and must still read the health body."""
@@ -227,7 +254,7 @@ async def test_health_still_answers_unauthenticated_with_mcp_mounted(
 
 
 async def test_each_role_lists_exactly_its_registry(
-    served: Callable[[], contextlib.AbstractAsyncContextManager[Served]],
+    served: Factory,
 ) -> None:
     async with served() as (base, tokens):
         for role, expected in ROLE_TOOLS.items():
@@ -242,7 +269,7 @@ async def test_each_role_lists_exactly_its_registry(
 
 
 async def test_ping_answers_over_http_on_both_roles(
-    served: Callable[[], contextlib.AbstractAsyncContextManager[Served]],
+    served: Factory,
 ) -> None:
     """One live call per role. It proves the lifespan entered both session
     managers -- the failure mode that is otherwise a 500 on first use."""
@@ -259,3 +286,170 @@ async def test_ping_answers_over_http_on_both_roles(
             assert res.isError is False, role
             assert res.structuredContent is not None
             assert res.structuredContent["role"] == role
+
+
+# --- the gate cannot be walked around by a prefix ----------------------
+
+
+async def test_gate_holds_when_the_app_is_mounted_under_a_prefix(served: Factory) -> None:
+    """A parent `Mount` puts `root_path` on the scope. The router picks a
+    mount with the STRIPPED path, so a gate reading `request.url.path` sees
+    `/engine/mcp/decide/`, decides it is not an MCP request, and waves it
+    through to a mount the router still resolves. The gate must read the same
+    string the router does.
+    """
+    async with served(under="/engine") as (base, _):
+        assert base.endswith("/engine")
+        async with httpx.AsyncClient() as c:
+            r = await c.post(f"{base}/mcp/decide/", json={})
+    assert r.status_code == 401
+
+
+async def test_role_mismatch_still_403s_under_a_prefix(served: Factory) -> None:
+    async with served(under="/engine") as (base, tokens):
+        async with httpx.AsyncClient() as c:
+            r = await c.post(
+                f"{base}/mcp/decide/", json={},
+                headers={"Authorization": f"Bearer {tokens['research']}"},
+            )
+    assert r.status_code == 403
+
+
+async def test_non_ascii_bearer_is_403_not_a_500(served: Factory) -> None:
+    """`hmac.compare_digest` raises on a non-ASCII str and the attacker
+    chooses the header. ASGI decodes header bytes as latin-1, so a high byte
+    arrives as a non-ASCII Python string -- sent here as raw bytes because
+    httpx will not encode such a value from a str. A rejected credential must
+    stay a rejection, not become a 500.
+    """
+    async with served() as (base, _):
+        async with httpx.AsyncClient() as c:
+            r = await c.post(
+                f"{base}/mcp/research/", json={},
+                headers={b"Authorization": b"Bearer \xe9\xe9\xe9"},
+            )
+    assert r.status_code == 403
+
+
+# --- build-time refusals ----------------------------------------------
+
+
+def _deps(tmp_path: Path, store: Store) -> McpDeps:
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(CONFIG.format(data=tmp_path, repo=REPO, research=tmp_path / "research"))
+    env = tmp_path / ".env"
+    env.write_text(ENV)
+    return McpDeps(
+        store=store,
+        broker=FakeBroker(FIXTURES, NOW),
+        docs=DocStore(tmp_path / "research", store),
+        rules=Rules.load(REPO / "rules.yml"),
+        settings=load_settings(cfg, env),
+        clock=lambda: NOW,
+        account_hash=lambda: "HASH_REDACTED",
+    )
+
+
+@pytest.fixture
+async def deps(tmp_path: Path) -> AsyncIterator[McpDeps]:
+    store = Store(tmp_path / "e.db")
+    await store.open()
+    try:
+        yield _deps(tmp_path, store)
+    finally:
+        await store.close()
+
+
+async def test_default_build_refuses_a_declared_tool_with_no_registrar(
+    deps: McpDeps, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without this, `live == declared` is unfalsifiable: with no registrars
+    at all every declared name becomes a stub and every check goes green over
+    a server that answers nothing. Production takes the default, so an
+    unimplemented tool fails boot instead of shipping.
+
+    The missing name is injected rather than relying on the real table still
+    having a hole in it -- otherwise this test quietly stops testing anything
+    the day the last tool module lands.
+    """
+    monkeypatch.setitem(
+        ROLE_TOOLS, "research", (*ROLE_TOOLS["research"], "not_yet_built")
+    )
+    with pytest.raises(RuntimeError) as e:
+        build_servers(deps)
+    assert "declares tools no registrar supplies" in str(e.value)
+    assert "not_yet_built" in str(e.value)
+
+
+async def test_allow_stubs_stubs_exactly_the_missing_name(
+    deps: McpDeps, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        ROLE_TOOLS, "research", (*ROLE_TOOLS["research"], "not_yet_built")
+    )
+    servers = build_servers(deps, allow_stubs=True)
+    tools = {t.name: t for t in await servers["research"].list_tools()}
+    assert "not_yet_built" in tools
+    assert tools["not_yet_built"].description == "NOT IMPLEMENTED YET: not_yet_built"
+
+
+async def test_allow_stubs_is_the_only_way_to_get_a_stub_server(deps: McpDeps) -> None:
+    servers = build_servers(deps, allow_stubs=True)
+    names = {t.name for t in await servers["research"].list_tools()}
+    assert names == set(ROLE_TOOLS["research"])
+
+
+async def test_build_refuses_an_order_shaped_name_in_the_declared_table(
+    deps: McpDeps, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec §10 enforced at boot, not only in CI: the contract test and the
+    consistency check both read this table, and neither runs in the deployed
+    process."""
+    monkeypatch.setitem(ROLE_TOOLS, "research", ("ping", "cancel_order"))
+    with pytest.raises(ValueError, match="order-shaped"):
+        build_servers(deps, allow_stubs=True)
+
+
+async def test_build_refuses_an_order_shaped_name_a_registrar_added(
+    deps: McpDeps, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A registrar could add a name the table never mentioned. The undeclared
+    check would catch it too, but §10 is the louder message and must not
+    depend on which check happens to fire first."""
+
+    def bad(server: FastMCP, _deps: McpDeps, _role: Role) -> None:
+        server.add_tool(lambda: "no", name="place_order", description="x")
+
+    monkeypatch.setitem(ROLE_TOOLS, "research", ("ping", "place_order"))
+    monkeypatch.setitem(server_mod._REGISTRARS, "research", [bad])
+    with pytest.raises(ValueError, match="order-shaped"):
+        build_servers(deps, allow_stubs=True)
+
+
+async def test_build_refuses_a_registrar_that_adds_an_undeclared_tool(
+    deps: McpDeps, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def rogue(server: FastMCP, _deps: McpDeps, _role: Role) -> None:
+        server.add_tool(lambda: "hi", name="not_in_the_table", description="x")
+
+    monkeypatch.setitem(server_mod._REGISTRARS, "research", [rogue])
+    with pytest.raises(ValueError, match="undeclared"):
+        build_servers(deps, allow_stubs=True)
+
+
+async def test_a_registrar_replaces_the_stub_rather_than_adding_a_name(
+    deps: McpDeps, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The hook the wiring uses, with the signature the tool modules already
+    expose -- `(server, deps, role)`, because a module can give one role a tool
+    it does not give the other. A registered tool is the live one; the stub
+    filler skips names that already exist."""
+
+    def real_quotes(server: FastMCP, _deps: McpDeps, role: Role) -> None:
+        server.add_tool(lambda: "real", name="quotes", description=f"the real one for {role}")
+
+    monkeypatch.setitem(server_mod._REGISTRARS, "research", [real_quotes])
+    servers = build_servers(deps, allow_stubs=True)
+    tools = {t.name: t for t in await servers["research"].list_tools()}
+    assert set(tools) == set(ROLE_TOOLS["research"])
+    assert tools["quotes"].description == "the real one for research"

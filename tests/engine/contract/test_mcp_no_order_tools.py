@@ -74,7 +74,12 @@ async def engine_servers(tmp_path: Path) -> AsyncIterator[dict[Role, FastMCP]]:
         account_hash=lambda: "HASH_REDACTED",
     )
     try:
-        yield build_servers(deps)
+        # allow_stubs: tasks 8 and 9 supply the bodies. The §10 contract is
+        # about NAMES, and a stub carries its declared name exactly, so the
+        # check is meaningful before the tools exist. `build_servers` refuses
+        # a stub-filled server by default (test_mcp_server.py) precisely so
+        # nothing else gets one by accident.
+        yield build_servers(deps, allow_stubs=True)
     finally:
         await store.close()
 

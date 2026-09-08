@@ -24,13 +24,22 @@ in the table that `rules/consistency.py` and the contract test both read.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import AsyncIterator, Callable
+import hmac
+from collections.abc import AsyncIterator, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+
+# The router chooses a mount with `get_route_path`, which strips `root_path`.
+# The gate MUST match on exactly that string or it can be walked around by
+# mounting this app under a prefix, so it uses the router's own function
+# rather than a re-derivation that could drift from it. It is private; if a
+# starlette upgrade moves it this fails loudly at import, which is the right
+# failure for an auth check -- a silently divergent copy is not.
+from starlette._utils import get_route_path
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -39,7 +48,7 @@ from starlette.types import ASGIApp
 
 from tc.broker.client import Broker
 from tc.config import Settings
-from tc.mcp.registry import ROLE_TOOLS, Role
+from tc.mcp.registry import FORBIDDEN, ROLE_TOOLS, Role
 from tc.research.docs import DocStore
 from tc.rules.model import Rules
 from tc.store.db import Store
@@ -71,15 +80,21 @@ class Pong(BaseModel):
     `structuredContent` rather than a bare JSON text block
     (0c-sdk-facts.md §3.4)."""
 
+    model_config = ConfigDict(extra="forbid")
+
     ok: bool
     role: Role
     server: str
     at: datetime
 
 
-ToolRegistrar = Callable[[FastMCP, McpDeps], None]
+# `(server, deps, role)`, which is the signature the tool modules already
+# expose: several of them register a slightly different set per role (the read
+# module gives `book` to decide and not to research), so the role has to reach
+# the registrar rather than only the dispatcher.
+ToolRegistrar = Callable[[FastMCP, McpDeps, Role], None]
 
-# Filled by the tool modules at import time (`register("research", ...)`).
+# Filled by the wiring (`register("research", tools_read.register)`).
 # A list per role rather than one function per role so the read tools and the
 # research tools can be separate modules that know nothing about each other.
 _REGISTRARS: dict[Role, list[ToolRegistrar]] = {role: [] for role in ROLE_TOOLS}
@@ -121,22 +136,24 @@ def _register_ping(server: FastMCP, role: Role, deps: McpDeps) -> None:
     )
 
 
-def _register_pending(server: FastMCP, declared: tuple[str, ...]) -> None:
-    """Declare the names no registrar has supplied yet.
+def _register_pending(server: FastMCP, missing: list[str]) -> None:
+    """Declare the names no registrar has supplied yet. Opt-in only.
 
-    Plan 0c builds the roles before their tool modules exist (tasks 8 and 9).
-    A declared-but-absent name would otherwise make this task's list-tools and
-    contract tests vacuous -- they would pass over an empty server. A stub
-    that names itself and refuses keeps the surface honest in the meantime:
-    the allowlist, the registry and the live server agree, and a caller gets a
-    `ToolError` saying which tool is not built rather than a silent absence.
+    Plan 0c builds the roles before their tool modules exist (tasks 8 and 9),
+    and a declared-but-absent name would otherwise make the list-tools and
+    contract tests pass over an empty server. But stubbing by default makes
+    `live == declared` unfalsifiable -- with no registrars at all, every
+    declared name becomes a stub and every check goes green over a server that
+    does nothing. So stubbing is reachable only through
+    `build_servers(..., allow_stubs=True)`, which the tests of the mounting
+    itself pass and production never does.
 
     `ToolError`, not a bare exception: FastMCP returns it to the caller as an
     ordinary `isError` result with the message intact and logs it at INFO,
     where any other exception is treated as a crash and the caller sees only
     "Error executing tool <name>" (0c-sdk-facts.md §3.4).
     """
-    for name in sorted(set(declared) - _names(server)):
+    for name in missing:
         server.add_tool(
             _stub(name), name=name, description=f"NOT IMPLEMENTED YET: {name}"
         )
@@ -157,14 +174,44 @@ def _stub(name: str) -> Callable[[], str]:
     return stub
 
 
-def build_servers(deps: McpDeps) -> dict[Role, FastMCP]:
+def _refuse_order_shaped(role: Role, names: Iterable[str], where: str) -> None:
+    """Spec §10, enforced at boot rather than only in CI.
+
+    The contract test and `rules/consistency.check_tool_registry` both read the
+    declared table; neither runs in the deployed process. This does, on every
+    build, over both the table and what the registrars actually put on the
+    server -- so an order-shaped tool cannot become reachable on a machine
+    where nobody ran the gate.
+    """
+    offenders = sorted(n for n in names if FORBIDDEN.search(n))
+    if offenders:
+        raise ValueError(
+            f"role {role!r} {where} order-shaped tools {offenders}: spec §10 forbids "
+            f"any tool name matching {FORBIDDEN.pattern!r}"
+        )
+
+
+def build_servers(deps: McpDeps, *, allow_stubs: bool = False) -> dict[Role, FastMCP]:
+    """One FastMCP per role, carrying exactly the names the registry declares.
+
+    `allow_stubs` is the difference between a server and a promise of one. The
+    default refuses to build a role whose declared tools nobody registered,
+    because a stub-filled server satisfies every "live matches declared" check
+    while answering nothing -- so an unimplemented tool must fail boot, not
+    ship. Only the tests of the mounting itself (which need a live server
+    before the tool modules exist) pass `allow_stubs=True`, and they pass it
+    explicitly.
+    """
     servers: dict[Role, FastMCP] = {}
     for role, declared in ROLE_TOOLS.items():
+        _refuse_order_shaped(role, declared, "declares")
         server = FastMCP(name=SERVER_NAME, streamable_http_path="/", stateless_http=False)
         _register_ping(server, role, deps)
         for fn in _REGISTRARS[role]:
-            fn(server, deps)
-        undeclared = sorted(_names(server) - set(declared))
+            fn(server, deps, role)
+        registered = _names(server)
+        _refuse_order_shaped(role, registered, "registered")
+        undeclared = sorted(registered - set(declared))
         if undeclared:
             # Fail the build, not the review. A tool reachable by a role that
             # never declared it is invisible to both the §10 consistency check
@@ -173,7 +220,14 @@ def build_servers(deps: McpDeps) -> dict[Role, FastMCP]:
                 f"role {role!r} registered undeclared tools {undeclared}: "
                 "add them to tc/mcp/registry.py or do not register them"
             )
-        _register_pending(server, declared)
+        missing = sorted(set(declared) - registered)
+        if missing and not allow_stubs:
+            raise RuntimeError(
+                f"role {role!r} declares tools no registrar supplies: {missing}. "
+                "Register them, remove them from tc/mcp/registry.py, or pass "
+                "allow_stubs=True if you are testing the mounting itself."
+            )
+        _register_pending(server, missing)
         servers[role] = server
     return servers
 
@@ -195,16 +249,35 @@ class RoleAuthMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._tokens = tokens
 
+    def _role_for(self, presented: str) -> str | None:
+        """Constant-time over the (at most two) configured bearers.
+
+        `compare_digest` raises on non-ASCII, and an attacker chooses the
+        header, so a non-ASCII bearer is answered rather than allowed to become
+        a 500 -- it cannot match a configured token in any case.
+        """
+        if not presented.isascii():
+            return None
+        for token, role in self._tokens.items():
+            if hmac.compare_digest(token, presented):
+                return role
+        return None
+
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
-        path = request.url.path
+        # NOT `request.url.path`: that keeps `root_path`, while the router
+        # matches the stripped path. Mount this app under any prefix and the
+        # two diverge -- `/engine/mcp/decide/` does not start with `/mcp/`, so
+        # a raw-path gate would wave it through unauthenticated to a mount the
+        # router still resolves.
+        path = get_route_path(request.scope)
         if not path.startswith("/mcp/"):
             return await call_next(request)
         auth = request.headers.get("authorization", "")
         if not auth.lower().startswith("bearer "):
             return JSONResponse({"error": "missing bearer"}, status_code=401)
-        role = self._tokens.get(auth.split(" ", 1)[1].strip())
+        role = self._role_for(auth.split(" ", 1)[1].strip())
         if role is None:
             return JSONResponse({"error": "bad token"}, status_code=403)
         parts = path.strip("/").split("/")
