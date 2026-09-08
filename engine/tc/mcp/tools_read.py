@@ -33,6 +33,7 @@ what `universe.md` is for, and it does not travel through a per-symbol quote.
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections.abc import Iterator, Sequence
 from datetime import UTC, date, time
 from decimal import Decimal
@@ -44,9 +45,18 @@ from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field
 
 from tc.broker.client import BrokerError, BrokerUnauthorized, ContractType, MoverDirection
-from tc.broker.models import Expiration, Instrument, Mover, OptionChainView, Position
+from tc.broker.models import (
+    Expiration,
+    Instrument,
+    Mover,
+    OptionChainView,
+    Position,
+    VerboseQuote,
+)
 from tc.mcp.registry import Role
 from tc.mcp.server import McpDeps
+
+log = logging.getLogger(__name__)
 
 ET = ZoneInfo("America/New_York")
 
@@ -106,9 +116,13 @@ class QuoteOut(BaseModel):
     ask: str
     quote_time: str
     description: str
-    # From the reference/quote blocks of the same read, absent when the
-    # symbol answered the compact read but not the fielded one. None means
-    # "not reported", never "no" — §1.4 and §3.2 turn on `optionable`.
+    # From the reference/quote blocks of a second, fielded read of the same
+    # endpoint. `None` is a statement about the SYMBOL: the fielded read
+    # returned no row for it, or (see `partial`) did not run at all. It is
+    # not a per-field "unknown" -- within a row that did come back,
+    # `VerboseQuote` collapses a missing `optionable` to False and a missing
+    # 52-week high to 0, so a False here can mean "not optionable" or "the
+    # payload said nothing", and only the broker can tell them apart.
     week52_high: str | None
     optionable: bool | None
 
@@ -119,6 +133,12 @@ class Quotes(BaseModel):
     # Named, not dropped: Schwab omits a symbol it does not know rather than
     # erroring, and a silently short list reads as "I checked them all".
     missing: list[str]
+    # True when the reference read failed and every `week52_high` /
+    # `optionable` is therefore null. The prices are real and the answer is
+    # usable; a screen that turns on `optionable` is not, and has to ask
+    # again. Two reads, two failure domains: losing the second one must not
+    # throw away the first.
+    partial: bool = False
 
 
 class BarOut(BaseModel):
@@ -344,7 +364,8 @@ def register(server: FastMCP, deps: McpDeps, role: Role) -> None:
         description=(
             "Compact quotes for up to 50 symbols: price, bid/ask, the quote "
             "timestamp, and whether the name is optionable. Symbols the broker "
-            "did not answer for come back under `missing`."
+            "did not answer for come back under `missing`. `partial` true means "
+            "the prices are good but no reference field was available."
         ),
     )
     async def quotes(
@@ -355,11 +376,28 @@ def register(server: FastMCP, deps: McpDeps, role: Role) -> None:
         wanted = _checked_symbols(symbols)
         with _broker_faults("quote read"):
             got = await deps.broker.quotes(wanted)
-            # The same endpoint with the fielded request. Two typed views over
-            # it exist because the universe sweep needs the fundamentals and
-            # this tool must not carry them; neither view alone holds both the
-            # quote timestamp (the §4.10 stale-quote gate) and `optionable`.
+        # The same endpoint with the fielded request, in its OWN failure
+        # domain. Two typed views over it exist because the universe sweep
+        # needs the fundamentals and this tool must not carry them; neither
+        # view alone holds both the quote timestamp (the stale-quote gate)
+        # and `optionable`. If the second read fails, the first read's
+        # prices are still the answer to most of the question, so they are
+        # returned with `partial` set rather than discarded.
+        reference: dict[str, VerboseQuote] = {}
+        partial = False
+        try:
             reference = await deps.broker.quotes_verbose(wanted)
+        except BrokerUnauthorized:
+            # Not degraded -- blind. The token is dead, the next read will
+            # fail too, and a caller told "partial" would carry on.
+            raise ToolError("broker blind: token absent/dead") from None
+        except BrokerError as e:
+            partial = True
+            log.warning(
+                "quotes: reference read failed (%s); returning prices only for %s",
+                type(e).__name__,
+                ",".join(wanted),
+            )
         out: list[QuoteOut] = []
         for symbol in wanted:
             q = got.get(symbol)
@@ -378,7 +416,9 @@ def register(server: FastMCP, deps: McpDeps, role: Role) -> None:
                     optionable=None if v is None else v.optionable,
                 )
             )
-        return Quotes(quotes=out, missing=[s for s in wanted if s not in got])
+        return Quotes(
+            quotes=out, missing=[s for s in wanted if s not in got], partial=partial
+        )
 
     @server.tool(
         name="price_history",

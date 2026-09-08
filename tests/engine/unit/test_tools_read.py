@@ -13,8 +13,9 @@ test asserting a price is asserting against a payload Schwab actually sent.
 from __future__ import annotations
 
 import json
+import logging
 import shutil
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal as D  # noqa: N817 -- brevity in a Decimal-heavy fixture table
 from pathlib import Path
@@ -24,9 +25,9 @@ import pytest
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 
-from tc.broker.client import BrokerError, MoverDirection
+from tc.broker.client import BrokerError, BrokerUnauthorized, MoverDirection
 from tc.broker.fake import FakeBroker
-from tc.broker.models import AccountSnapshot, Mover, OrderRow
+from tc.broker.models import AccountSnapshot, Mover, OrderRow, VerboseQuote
 from tc.config import Settings, load_settings
 from tc.mcp import tools_read
 from tc.mcp.registry import DECIDE_ONLY_READ_TOOLS, READ_TOOLS, Role
@@ -274,6 +275,50 @@ async def test_quotes_do_not_invent_reference_fields_they_did_not_get(
     out = await tool(read_server, "quotes")(symbols=["AMH"])
     assert out.quotes[0].week52_high is None
     assert out.quotes[0].optionable is None
+
+
+async def test_a_failed_reference_read_still_returns_the_prices(
+    store: Store, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Two reads, two failure domains. Losing the reference block must not
+    throw away the price and the timestamp already in hand -- those are what
+    the stale-quote gate and every entry check actually run on."""
+
+    class HalfBlind(FakeBroker):
+        async def quotes_verbose(self, symbols: Sequence[str]) -> dict[str, VerboseQuote]:
+            raise BrokerError("500: reference service unavailable")
+
+    server = _server(store, HalfBlind(FIX, NOW), tmp_path, "research")
+    with caplog.at_level(logging.WARNING):
+        out = await tool(server, "quotes")(symbols=["AMH"])
+    assert out.partial is True
+    assert out.quotes[0].last == "34.16"
+    assert out.quotes[0].week52_high is None and out.quotes[0].optionable is None
+    assert "BrokerError" in caplog.text
+
+
+async def test_a_blind_reference_read_is_a_refusal_not_a_partial(
+    store: Store, tmp_path: Path
+) -> None:
+    """Degraded and blind are different answers. A dead token will fail the
+    next read too, and a caller told "partial" would carry on regardless."""
+
+    class BlindReference(FakeBroker):
+        async def quotes_verbose(self, symbols: Sequence[str]) -> dict[str, VerboseQuote]:
+            raise BrokerUnauthorized("401")
+
+    server = _server(store, BlindReference(FIX, NOW), tmp_path, "research")
+    with pytest.raises(ToolError) as e:
+        await tool(server, "quotes")(symbols=["AMH"])
+    assert str(e.value) == "broker blind: token absent/dead"
+
+
+async def test_quotes_are_not_partial_when_both_reads_answer(
+    store: Store, merged_quote_fixtures: Path, tmp_path: Path
+) -> None:
+    server = _server(store, FakeBroker(merged_quote_fixtures, NOW), tmp_path, "research")
+    out = await tool(server, "quotes")(symbols=["AMH"])
+    assert out.partial is False
 
 
 async def test_quotes_refuse_an_unbounded_symbol_list(read_server: FastMCP) -> None:
