@@ -31,6 +31,17 @@ schedule:                      # ET. weekdays = trading days per get_market_hour
   expectations:  "at 07:30 daily"
   backup:        "at 23:30 daily"
   weekly_universe: "at 07:40 sat"   # the market is shut; the regular-session close is the screening price
+  # Task 12 (jobs/spec.py): the six research-role jobs, unchanged from the v2
+  # docker/crontab times (scout 07:12, catalyst 18:33, preopen 08:17,
+  # postclose 16:22, sector_tag Sat 09:40). `research` keeps its "hourly at
+  # :57" semantics as `every 60m 09:57-14:57 weekdays` — check-consistency.sh
+  # greps research.md for that phrase and for "hours 9-14" directly.
+  scout:      "at 07:12 weekdays"
+  catalyst:   "at 18:33 weekdays"
+  preopen:    "at 08:17 weekdays"
+  postclose:  "at 16:22 weekdays"
+  research:   "every 60m 09:57-14:57 weekdays"
+  sector_tag: "at 09:40 sat"
 expectations:                  # spec §7 layer 3 — declarative anomaly checks over the store
   - name: ticks_per_session_min
     check: ticks_per_session_min
