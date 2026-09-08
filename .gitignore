@@ -41,8 +41,11 @@ docker/.deployed-digest
 # subagent-driven-development scratch (ledgers, briefs, review packages)
 .superpowers/
 
-# v3 engine virtualenv — not source, recreated by `python3.12 -m venv .venv`
+# v3 virtualenvs — not source, recreated by `python3.12 -m venv .venv`. The
+# runner is a separate package with its own venv: it installs claude-agent-sdk,
+# whose wheel carries a 200 MB bundled CLI binary.
 engine/.venv/
+runner/.venv/
 
 # Python build/cache artifacts (engine/)
 __pycache__/

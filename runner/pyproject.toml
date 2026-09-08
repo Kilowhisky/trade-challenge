@@ -1,0 +1,51 @@
+[project]
+name = "tc-runner"
+version = "0.1.0"
+description = "trade-challenge v3 Claude runner"
+requires-python = ">=3.12"
+dependencies = [
+  # Pinned as ONE unit with Claude Code CLI 2.1.234 in docker/Dockerfile: the
+  # SDK tracks the CLI closely and `cli_path` pins the CLI, so bumping either
+  # alone is how you get a flag the other does not have.
+  "claude-agent-sdk==0.2.152",
+  "pydantic>=2.10,<3",
+  "starlette>=0.40",
+  "uvicorn>=0.30",
+  "httpx>=0.28",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "httpx>=0.28", "mypy>=1.10", "ruff>=0.5"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["tc_runner*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "ASYNC", "S", "RUF"]
+ignore = ["S101"]  # asserts in tests
+
+[tool.ruff.lint.per-file-ignores]
+# Tests: wide fixture literals read better on one line than wrapped. Only E501
+# is relaxed — every real lint still applies to the suite as it does to
+# tc_runner/.
+"../tests/runner/**/*.py" = ["E501"]
+
+[tool.mypy]
+strict = true
+# The tests are checked too: they are the only executable statement of what the
+# runner promises, and an untyped test can assert a shape mypy would reject.
+files = ["tc_runner", "../tests/runner"]
+python_version = "3.12"
+ignore_missing_imports = true  # claude-agent-sdk ships no py.typed for every module
+
+[tool.pytest.ini_options]
+testpaths = ["../tests/runner"]
+asyncio_mode = "auto"
