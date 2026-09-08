@@ -33,7 +33,7 @@ watched only by the GTC stops resting at Schwab (AMH, CSX, USB, IQV).
 3. **Tailscale is DONE** (2026-09-07 13:20 ET): the Pi is `brewmaster.tail14458e.ts.net`,
    HTTPS certs enabled, `tailscale serve` fronts the engine on **port 8443**
    (443 is Pi-hole). The phone callback to register on the Schwab app is
-   `https://brewhouse.wetzelrice.com:8443/oauth/callback`; changing an
+   `https://brewmaster.tail14458e.ts.net:8443/oauth/callback (Chris's choice for now; brewhouse.wetzelrice.com via Caddy later)`; changing an
    app's callback triggers Schwab re-approval (1–3 days), so either register
    it on a NEW app and switch keys when approved, or accept a possible pause.
 

@@ -11,13 +11,12 @@ engine:
 token:
   reauth_after_days: 5         # engine posts the auth URL to Discord at this age
   hard_expiry_days: 7          # Schwab's absolute refresh-token lifetime (verified 2026-09-02)
-  # The callback registered on the ONE Schwab app (schwab-mcp's default). Schwab
-  # matches it exactly; a browser cannot load it, which is fine: the operator
-  # copies the redirected URL and runs `tc auth-complete '<url>'`. Move it to
-  # https://brewhouse.wetzelrice.com:8443/oauth/callback (tailscale serve on
-  # 8443; 443 is Pi-hole) once Tailscale is up and
-  # the app's callback has been changed in the developer portal (re-approval).
-  callback_url: https://127.0.0.1:8182
+  # Must equal the callback registered on the Schwab app EXACTLY. The engine
+  # serves /oauth/callback behind `tailscale serve` on 8443 (443 is Pi-hole),
+  # tailnet-only: the phone/laptop completing the login must be on the tailnet.
+  # Chris (2026-09-07): use the ts.net name for now; the custom domain
+  # (brewhouse.wetzelrice.com, Caddy) can replace it later.
+  callback_url: https://brewmaster.tail14458e.ts.net:8443/oauth/callback
 shadow:
   enabled: true                # Phase 0: shadow webhook only, no #llm-yolo, no orders
 schedule:                      # ET. weekdays = trading days per get_market_hours
