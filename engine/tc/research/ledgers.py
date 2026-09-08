@@ -192,7 +192,10 @@ async def escalation_score(
         {
             "id": escalation_id_,
             "kind": "score",
-            "symbol": escalation_id_.split("-")[0],
+            # rsplit, not split: the id is "<symbol>-<YYYY>-<MM>-<DD>-<crc>" and
+            # a symbol may itself carry a hyphen, so the LAST four fields are
+            # the fixed suffix. split("-")[0] read BRK-B as BRK.
+            "symbol": escalation_id_.rsplit("-", 4)[0],
             "at": d.isoformat(),
             "record": {"outcome": outcome},
         }

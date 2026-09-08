@@ -254,3 +254,12 @@ async def test_tombstone_keeps_decimals_exact_and_omits_absent_hypotheticals(
 async def test_tombstone_refuses_a_bad_symbol(store: Store) -> None:
     with pytest.raises(LedgerError):
         await tombstone(store, "MN DY", D7, "gate", "reason", Decimal("1.00"))
+
+
+async def test_a_hyphenated_ticker_keeps_its_symbol_on_the_score_row(store: Store) -> None:
+    # The id is "<symbol>-<YYYY>-<MM>-<DD>-<crc>"; a leading split on "-" read
+    # BRK-B as BRK and filed the outcome under a name nobody predicted.
+    eid = (await escalation_raise(store, "BRK-B", D7, RAISE))["id"]
+    await escalation_score(store, eid, "right", D7)
+    assert [r["symbol"] for r in await store.escalations("BRK-B")] == ["BRK-B"]
+    assert (await store.escalations("BRK-B"))[0]["latest_outcome"] == "right"
