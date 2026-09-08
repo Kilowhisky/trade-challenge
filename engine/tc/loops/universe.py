@@ -91,6 +91,20 @@ class DirectoryUnavailable(UniverseUnavailable):
     """The symbol directory could not be read, or read back as implausible."""
 
 
+class PartialSweep(UniverseUnavailable):
+    """Too much of the market went unquoted to call the result a universe.
+
+    `EmptyUniverse` catches the total failure; this catches the one that still
+    qualifies thousands of names and is therefore invisible downstream. The
+    sweep absorbs a failed chunk on purpose -- 74 good chunks are a universe
+    and an aborted sweep is none -- but every absorbed chunk is a slice of the
+    market that reads as "did not qualify" rather than "was never asked", and
+    the scout's cohort is a join against exactly that set. Above the
+    `strategy.universe_max_failed_chunk_pct` ceiling the honest answer is last
+    week's universe, which is stale and says so.
+    """
+
+
 class EmptyUniverse(UniverseUnavailable):
     """The directory was fine and the quotes were not.
 
@@ -374,6 +388,18 @@ async def run_weekly_universe(
             # aborted sweep is none.
             chunks_failed += 1
             log.warning("weekly universe: chunk %d of %d failed: %s", chunks, len(symbols), e)
+
+    # Before the gate, before the rank, before any write: a sweep that lost too
+    # much of the market did not produce a narrower universe, it produced an
+    # unknown one, and installing it would stamp today's date on it.
+    max_failed_pct = rules.get("strategy", "universe_max_failed_chunk_pct")
+    failed_pct = Decimal(chunks_failed) * 100 / Decimal(chunks) if chunks else Decimal(0)
+    if failed_pct > max_failed_pct:
+        raise PartialSweep(
+            f"{chunks_failed} of {chunks} chunks failed ({failed_pct:.1f}% >"
+            f" {max_failed_pct}% allowed) — refusing to install a universe missing"
+            " that much of the market; last week's stands"
+        )
 
     rows, counts = filter_universe(quotes, rules, rank_top=0)   # 0: the whole qualified set
     if not rows:

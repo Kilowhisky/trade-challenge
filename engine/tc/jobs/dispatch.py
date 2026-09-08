@@ -321,8 +321,17 @@ class JobRunner:
         return await self._runner.health()
 
     async def execute(
-        self, job: str, now: datetime | None = None
+        self, job: str, now: datetime | None = None, *, ignore_window: bool = False
     ) -> tuple[Verdict, dict[str, Any]]:
+        """`ignore_window` is the operator's `tc run --once --ignore-window`.
+
+        Never the scheduler's: a fire dispatched hours late is a job whose
+        premise expired (below), and the whole point of the gate is that
+        nothing in the engine can decide to run one anyway. A human bootstrapping
+        the chain at 21:00 is the opposite case -- they know the window has
+        passed and are asking for the run regardless -- so the override is a
+        keyword the CLI passes and no scheduled path can reach.
+        """
         spec = JOB_SPECS[job]
         if not self._runner.configured:
             # Not a failure. An engine with no runner is a supported
@@ -338,7 +347,7 @@ class JobRunner:
             return "noop", {"skipped": "no mcp research token"}
         et = (now or self._clock()).astimezone(ET)
         start, end = spec.window
-        if not start <= et.time() <= end:
+        if not ignore_window and not start <= et.time() <= end:
             # A fire dispatched hours late (a restart, a long-held lock) is a
             # job whose whole premise has expired: a "pre-open" brief written
             # at noon is worse than no brief. The runner is never called.

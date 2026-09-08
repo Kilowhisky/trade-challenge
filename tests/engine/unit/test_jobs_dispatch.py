@@ -121,6 +121,48 @@ async def test_outside_the_window_is_a_noop_and_never_calls_the_runner(
     assert called == []
 
 
+async def test_ignore_window_dispatches_a_job_whose_window_has_passed(
+    notifier: RecordingNotifier,
+) -> None:
+    """The operator's `tc run --once JOB --ignore-window`: bootstrapping
+    happens whenever it happens, and without this every seeding run outside
+    business hours is a `noop` that looks like a broken chain."""
+    called: list[httpx.Request] = []
+
+    def h(request: httpx.Request) -> httpx.Response:
+        called.append(request)
+        return httpx.Response(200, json=GOOD)
+
+    verdict, detail = await _jr(h, notifier).execute(
+        "scout", OUT_WINDOW, ignore_window=True
+    )
+    assert verdict == "done"
+    assert detail["observed"] == 3
+    assert len(called) == 1
+
+
+async def test_ignore_window_does_not_bypass_the_other_refusals(
+    notifier: RecordingNotifier,
+) -> None:
+    """It overrides the CLOCK and nothing else: an unconfigured runner and a
+    missing MCP bearer are still noops, because neither is about the hour."""
+    verdict, detail = await JobRunner(
+        RunnerClient(None, None, httpx.AsyncClient(), SLACK_S), notifier, lambda: OUT_WINDOW
+    ).execute("scout", OUT_WINDOW, ignore_window=True)
+    assert (verdict, detail["skipped"]) == ("noop", "no runner configured")
+    verdict, detail = await _jr(_ok(GOOD), notifier, role_token=None).execute(
+        "scout", OUT_WINDOW, ignore_window=True
+    )
+    assert (verdict, detail["skipped"]) == ("noop", "no mcp research token")
+
+
+async def test_the_window_gate_is_still_the_default(notifier: RecordingNotifier) -> None:
+    """No scheduled path passes `ignore_window`, so its default must be the
+    gate: a fire dispatched hours late is a job whose premise has expired."""
+    verdict, _ = await _jr(_ok(GOOD), notifier).execute("scout", OUT_WINDOW)
+    assert verdict == "noop"
+
+
 async def test_empty_cohort_is_noop_not_done(notifier: RecordingNotifier) -> None:
     payload = {
         **GOOD,

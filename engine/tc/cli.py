@@ -256,10 +256,16 @@ def cmd_import_research(ns: argparse.Namespace) -> int:
 
 def cmd_run(ns: argparse.Namespace) -> int:
     """The service. `--once JOB` is the operator smoke test: start, run one
-    job, stop, no HTTP surface."""
+    job, stop, no HTTP surface. `--ignore-window` belongs to `--once` alone."""
+    if ns.ignore_window and not ns.once:
+        # Refused rather than ignored: `--ignore-window` on a service start
+        # reads as "the schedule's windows do not apply", which is the one
+        # thing it must never mean.
+        print("tc: --ignore-window is only meaningful with --once", file=sys.stderr)
+        return 4
     s = _settings(ns)
     if ns.once:
-        rc: int = asyncio.run(run_once(s, ns.once))
+        rc: int = asyncio.run(run_once(s, ns.once, ignore_window=bool(ns.ignore_window)))
         return rc
     # Checked here rather than inside serve() so a bad bind costs nothing: no
     # store, no broker, no token read.
@@ -292,6 +298,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run")
     run.add_argument("--once", default=None, metavar="JOB", help=f"one of: {', '.join(JOBS)}")
+    run.add_argument(
+        "--ignore-window",
+        action="store_true",
+        help=(
+            "with --once: run a Claude job even outside its ET window. For "
+            "bootstrapping, where the operator knows the window has passed and "
+            "is asking anyway; the scheduler can never reach this."
+        ),
+    )
     run.set_defaults(fn=cmd_run)
 
     sh = sub.add_parser("seed-hwm")

@@ -26,6 +26,7 @@ from tc.loops.universe import (
     Counts,
     DirectoryUnavailable,
     EmptyUniverse,
+    PartialSweep,
     UniverseUnavailable,
     fetch_symbols,
     filter_universe,
@@ -398,14 +399,22 @@ def test_the_counts_line_states_what_was_dropped(
 class _StubBroker:
     """Only `quotes_verbose`, which is all `run_weekly_universe` is given."""
 
-    def __init__(self, quotes: dict[str, VerboseQuote], fail_on: int | None = None) -> None:
+    def __init__(
+        self,
+        quotes: dict[str, VerboseQuote],
+        fail_on: int | None = None,
+        fail_first: int = 0,
+    ) -> None:
         self._quotes = quotes
         self._fail_on = fail_on
+        self._fail_first = fail_first
         self.chunks: list[list[str]] = []
 
     async def quotes_verbose(self, symbols: Sequence[str]) -> dict[str, VerboseQuote]:
         self.chunks.append(list(symbols))
         if self._fail_on is not None and len(self.chunks) == self._fail_on:
+            raise RuntimeError("schwab said no")
+        if len(self.chunks) <= self._fail_first:
             raise RuntimeError("schwab said no")
         return {s: self._quotes[s] for s in symbols if s in self._quotes}
 
@@ -542,11 +551,53 @@ async def test_every_chunk_failing_keeps_last_weeks_universe(sweep_ctx: dict[str
     assert (await sweep_ctx["docs"].read("universe")).exists is False
 
 
+async def test_too_many_failed_chunks_keeps_last_weeks_universe(
+    sweep_ctx: dict[str, Any],
+) -> None:
+    """A sweep that lost a quarter of the market did not produce a narrower
+    universe, it produced an unknown one. Downstream cannot tell the
+    difference: the scout's cohort is a join against the universe table, so a
+    name that was never quoted reads as a name that does not qualify."""
+    store: Store = sweep_ctx["store"]
+    await store.replace_universe(date(2026, 9, 5), [_old_row()])
+    # 9 chunks; 3 failed is 33% against the 20% ceiling.
+    sweep_ctx["broker"] = _StubBroker(sweep_ctx["broker"]._quotes, fail_first=3)
+    with pytest.raises(PartialSweep) as exc:
+        await run_weekly_universe(**sweep_ctx)
+    assert "3 of 9 chunks failed" in str(exc.value)
+    assert "33.3%" in str(exc.value)
+    # Refused BEFORE any write: last week's rows and asof both stand.
+    assert await store.universe_asof() == date(2026, 9, 5)
+    assert [r["symbol"] for r in await store.universe_rows()] == ["OLD"]
+    assert (await sweep_ctx["docs"].read("universe")).exists is False
+
+
+async def test_a_sweep_at_the_ceiling_still_installs(sweep_ctx: dict[str, Any]) -> None:
+    """The ceiling is a `>` test, not `>=`: exactly at the threshold the sweep
+    still counts as a sweep, and the counts line says how partial it was."""
+    sweep_ctx["rules"] = _rules_with(universe_max_failed_chunk_pct=D("33.4"))
+    sweep_ctx["broker"] = _StubBroker(sweep_ctx["broker"]._quotes, fail_first=3)
+    counts = await run_weekly_universe(**sweep_ctx)
+    assert counts.chunks_failed == 3 and counts.chunks == 9
+    assert (await sweep_ctx["docs"].read("universe")).exists is True
+
+
+async def test_the_ceiling_comes_from_the_rules_file_not_the_code(
+    sweep_ctx: dict[str, Any],
+) -> None:
+    """Tightening it in rules.yml must refuse a sweep the default allows."""
+    sweep_ctx["rules"] = _rules_with(universe_max_failed_chunk_pct=D(5))
+    sweep_ctx["broker"] = _StubBroker(sweep_ctx["broker"]._quotes, fail_on=2)  # 1 of 9 = 11%
+    with pytest.raises(PartialSweep):
+        await run_weekly_universe(**sweep_ctx)
+
+
 def test_both_abort_reasons_share_the_base_the_caller_catches() -> None:
     """`main.py` catches one type. A new reason to abort must not be able to
     escape it."""
     assert issubclass(DirectoryUnavailable, UniverseUnavailable)
     assert issubclass(EmptyUniverse, UniverseUnavailable)
+    assert issubclass(PartialSweep, UniverseUnavailable)
 
 
 async def test_a_rerun_of_the_same_week_is_idempotent(sweep_ctx: dict[str, Any]) -> None:

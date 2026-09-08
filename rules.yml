@@ -158,6 +158,16 @@ strategy:
   # range as evidence that a name is not a deal target.
   min_session_range_pct: 0.75
 
+  # Weekly sweep — the most of the market that may go unquoted before the
+  # sweep refuses to install what it did get. A chunk failure is absorbed (one
+  # bad chunk must not cost the week's universe), but absorbing them without a
+  # ceiling turns a token that lapsed mid-sweep into a NARROWED universe that
+  # every downstream tier then treats as the whole market: the scout's cohort
+  # is a join against it, so names that simply went unquoted read as names
+  # that do not qualify. Last week's universe is stale and says so; a quarter
+  # of the market silently missing does not.
+  universe_max_failed_chunk_pct: 20
+
   # Size of the weekly working universe handed to the daily tier. Chosen to
   # match what the daily run can deep-vet, not everything that qualifies;
   # universe-filter reports how many it dropped so this can be tuned on

@@ -1039,6 +1039,39 @@ async def test_a_claude_job_dispatches_through_the_job_runner(
     assert rows[0][1] == "done"
 
 
+async def test_run_job_can_ignore_the_window_and_does_not_by_default(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    """`tc run --once JOB --ignore-window` threads to `JobRunner.execute`, and
+    only from there: nothing on the scheduled path passes it, so the default
+    stays the gate."""
+    s = _settings(tmp_path)
+    out_of_window = SCOUT_AT + timedelta(hours=8)
+
+    def build() -> Engine:
+        return _engine(
+            s, store, FakeBroker(_fx(tmp_path), NOW), Clock(out_of_window),
+            RecordingNotifier(client), client, jobs=JobRunner(
+                _fake_runner(SCOUT_RESULT), RecordingNotifier(client), lambda: out_of_window
+            ),
+        )
+
+    assert await build().run_job("scout", out_of_window) == "noop"
+    assert await build().run_job("scout", out_of_window, ignore_window=True) == "done"
+
+
+def test_the_cli_refuses_ignore_window_without_once(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Refused rather than ignored: on a service start it would read as "the
+    schedule's windows do not apply", which is the one thing it must not mean.
+    """
+    from tc.cli import main as cli_main
+
+    assert cli_main(["run", "--ignore-window"]) == 4
+    assert "only meaningful with --once" in capsys.readouterr().err
+
+
 async def test_a_claude_job_with_no_runner_is_a_noop_row_not_a_failure(
     tmp_path: Path, store: Store, client: httpx.AsyncClient
 ) -> None:
@@ -1050,6 +1083,54 @@ async def test_a_claude_job_with_no_runner_is_a_noop_row_not_a_failure(
                 RecordingNotifier(client), client)
     assert await e.run_job("scout", SCOUT_AT) == "noop"
     assert (await _job_runs(store))[0][1] == "noop"
+
+
+async def test_token_check_refreshes_the_runners_health(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    """`runner_ok` was read once, at start, and then never again: a runner that
+    died an hour later was reported healthy by /health and by the host probe
+    until the engine itself restarted. `token_check` runs on a short cycle and
+    holds no broker read, so it is where the other container's liveness gets
+    refreshed."""
+    alive = {"ok": True}
+
+    def h(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/health"):
+            return httpx.Response(200, json={"ok": alive["ok"], "busy": False})
+        return httpx.Response(200, json=SCOUT_RESULT)
+
+    runner = RunnerClient(
+        "http://runner", "runner-token-not-real",
+        httpx.AsyncClient(transport=httpx.MockTransport(h)), 120.0,
+        role_token="research-token-not-real",  # noqa: S106 -- test fixture
+    )
+    s = _settings(tmp_path)
+    e = _engine(s, store, FakeBroker(_fx(tmp_path), NOW), Clock(NOW),
+                RecordingNotifier(client), client,
+                jobs=JobRunner(runner, RecordingNotifier(client), lambda: NOW))
+    e.state.runner_ok = True
+    alive["ok"] = False
+    assert await e.run_job("token_check", NOW) == "done"
+    assert e.state.runner_ok is False
+    rows = await store.fetchall(
+        "SELECT detail_json FROM job_runs WHERE job='token_check' ORDER BY id DESC LIMIT 1"
+    )
+    assert json.loads(rows[0]["detail_json"])["runner_ok"] is False
+    # And it recovers on its own, without a restart.
+    alive["ok"] = True
+    assert await e.run_job("token_check", NOW) == "done"
+    assert e.state.runner_ok is True
+
+
+async def test_token_check_leaves_runner_ok_alone_when_no_runner_is_configured(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    s = _settings(tmp_path)
+    e = _engine(s, store, FakeBroker(_fx(tmp_path), NOW), Clock(NOW),
+                RecordingNotifier(client), client)
+    assert await e.run_job("token_check", NOW) == "done"
+    assert e.state.runner_ok is None  # never claimed either way
 
 
 async def test_start_mounts_the_mcp_surface_and_reads_the_runners_health(

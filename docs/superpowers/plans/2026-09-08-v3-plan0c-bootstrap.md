@@ -177,22 +177,51 @@ docker compose -f docker/docker-compose.yml exec engine \
   run --once weekly_universe          # ~11k fetched, ~3k qualified. Minutes, not seconds.
 docker compose -f docker/docker-compose.yml exec engine \
   tc --config /app/repo/config.yml --env /srv/tc/.env \
-  run --once sector_tag                # tags the qualified names (needs the runner)
+  run --once sector_tag --ignore-window   # tags the qualified names (needs the runner)
 ```
+
+`weekly_universe` sweeps the market in chunks and absorbs a chunk that fails,
+because 74 good chunks are a universe and an aborted sweep is none — but only
+up to **20**<!--rule:strategy_universe_max_failed_chunk_pct-->% of chunks.
+Above that it raises `PartialSweep` and keeps last week's universe rather than
+installing one that is silently missing a quarter of the market: the scout's
+cohort is a join against the universe table, so a name that went unquoted
+would read as a name that does not qualify. A `failed` verdict naming
+`PartialSweep` therefore means "re-run it", usually after checking the token.
 
 `sector_tag` is a Claude job (`agent="sector-tagger"` in `JOB_SPECS`) — it
 needs the runner from steps 2–3, not just the broker. `run --once` exits 1
 only if the job's own verdict is `failed`; `noop` and `content_failed` both
 exit 0, so check the verdict itself (§6 below), not just the shell exit code.
 
-Then one deep run — `postclose` after 16:22 ET (its scheduled window closes
-at 18:00, per `JOB_SPECS["postclose"].window`), or `research` during
-09:45–15:15 ET if bootstrapping mid-session:
+**Every Claude job is window-gated, and bootstrapping happens whenever it
+happens.** `JobRunner.execute` returns `noop` with `skipped: outside window`
+rather than dispatching a job whose premise has expired — a "pre-open" brief
+written at noon is worse than no brief. Their windows (ET, from
+`JOB_SPECS[...].window` in `engine/tc/jobs/spec.py`):
+
+| job | window (ET) | scheduled |
+|---|---|---|
+| `scout` | 07:00–08:00 | 07:12 weekdays |
+| `preopen` | 08:00–09:15 | 08:17 weekdays |
+| `research` | 09:45–15:15 | hourly at :57 |
+| `postclose` | 16:15–18:00 | 16:22 weekdays |
+| `catalyst` | 18:00–19:30 | 18:33 weekdays |
+| `sector_tag` | 09:00–13:00 | Sat 09:40 |
+
+Pass **`--ignore-window`** on every `run --once` of a Claude job during this
+bootstrap. It is an operator override only: it is a keyword argument the CLI
+threads to `JobRunner.execute`, and nothing on the scheduled path can reach
+it, so the gate still holds for every real fire. Without it a bootstrap run
+outside the hours above is a `noop` that looks like a broken chain.
+
+Then one deep run — `postclose` (its scheduled window is 16:15–18:00 ET), or
+`research` if bootstrapping mid-session:
 
 ```
 docker compose -f docker/docker-compose.yml exec engine \
   tc --config /app/repo/config.yml --env /srv/tc/.env \
-  run --once postclose      # or: run --once research
+  run --once postclose --ignore-window      # or: run --once research --ignore-window
 ```
 
 ## 6. Verify the cohort is non-empty
@@ -229,7 +258,7 @@ read its verdict the same way:
 ```
 docker compose -f docker/docker-compose.yml exec engine \
   tc --config /app/repo/config.yml --env /srv/tc/.env \
-  run --once scout
+  run --once scout --ignore-window
 docker compose -f docker/docker-compose.yml exec engine python3 -c "
 import sqlite3, json
 c = sqlite3.connect('/data/engine.db')

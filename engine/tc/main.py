@@ -293,13 +293,19 @@ class Engine:
         if iterations is not None:
             await self._drain()
 
-    async def run_job(self, job: str, at: datetime | None = None) -> Verdict:
+    async def run_job(
+        self, job: str, at: datetime | None = None, *, ignore_window: bool = False
+    ) -> Verdict:
         """One job, now, outside the schedule — `tc run --once` and tests.
         Returns the recorded verdict so a caller can exit non-zero on
-        `failed`."""
+        `failed`.
+
+        `ignore_window` reaches only the Claude jobs, which are the only ones
+        that carry a window; it is threaded explicitly rather than held as
+        engine state so that no scheduled fire can ever pick it up."""
         if job not in JOBS:
             raise ValueError(f"unknown job {job!r} (one of {', '.join(JOBS)})")
-        return await self._dispatch(Fire(job, at or self._clock()))
+        return await self._dispatch(Fire(job, at or self._clock()), ignore_window=ignore_window)
 
     # --- the loop ----------------------------------------------------------
 
@@ -370,11 +376,13 @@ class Engine:
         async with lock:
             return await self._dispatch(fire)
 
-    async def _dispatch(self, fire: Fire) -> Verdict:
+    async def _dispatch(self, fire: Fire, *, ignore_window: bool = False) -> Verdict:
         started = self._clock()
         await self._pinger.start(fire.job)
         try:
-            verdict, detail = await self._execute(fire.job, started)
+            verdict, detail = await self._execute(
+                fire.job, started, ignore_window=ignore_window
+            )
         except Exception as e:
             # Every failure mode of every loop lands here, a non-401
             # BrokerError included (run_tick's BLIND path covers 401s only).
@@ -428,7 +436,9 @@ class Engine:
             {**detail, "dispatched_at": dispatched.isoformat(), "ended_at": ended.isoformat()},
         )
 
-    async def _execute(self, job: str, now: datetime) -> tuple[Verdict, dict[str, Any]]:
+    async def _execute(
+        self, job: str, now: datetime, *, ignore_window: bool = False
+    ) -> tuple[Verdict, dict[str, Any]]:
         if job == "tick":
             return await self._job_tick(now)
         if job == "session_close":
@@ -442,13 +452,15 @@ class Engine:
         if job == "weekly_universe":
             return await self._job_weekly_universe(now)
         if job in CLAUDE_JOBS:
-            return await self._job_claude(job, now)
+            return await self._job_claude(job, now, ignore_window=ignore_window)
         raise ValueError(f"unknown job {job!r}")
 
-    async def _job_claude(self, job: str, now: datetime) -> tuple[Verdict, dict[str, Any]]:
+    async def _job_claude(
+        self, job: str, now: datetime, *, ignore_window: bool = False
+    ) -> tuple[Verdict, dict[str, Any]]:
         if self._jobs is None:
             return "noop", {"skipped": "no runner configured"}
-        return await self._jobs.execute(job, now)
+        return await self._jobs.execute(job, now, ignore_window=ignore_window)
 
     # --- jobs --------------------------------------------------------------
 
@@ -544,7 +556,20 @@ class Engine:
         # The loop posts for itself (it owns the dedupe and the standing
         # alert), so nothing is posted here.
         rep = await token_check(self._token, self._store, self.notifier, now)
-        return "done", {"state": rep.state, "days_until_dead": rep.days_until_dead}
+        detail: dict[str, Any] = {"state": rep.state, "days_until_dead": rep.days_until_dead}
+        # `runner_ok` was read once, at `start()`, and then never again: a
+        # runner that died an hour after boot was reported healthy by /health
+        # and by the host probe until the engine itself restarted, and the
+        # only other evidence was a `failed` row at the next job's scheduled
+        # hour -- up to a day later. This job already runs on a short cycle,
+        # holds no broker read and answers in milliseconds, so it is where the
+        # other container's liveness gets refreshed. Not fatal, exactly as at
+        # start: an engine whose runner is down still ticks, and saying so is
+        # the whole point of the field.
+        if self._jobs is not None:
+            self.state.runner_ok = await self._jobs.health()
+            detail["runner_ok"] = self.state.runner_ok
+        return "done", detail
 
     async def _job_expectations(self, now: datetime) -> tuple[Verdict, dict[str, Any]]:
         results = await run_expectations(
@@ -893,7 +918,7 @@ async def serve(settings: Settings) -> None:
             await engine.stop()
 
 
-async def run_once(settings: Settings, job: str) -> int:
+async def run_once(settings: Settings, job: str, *, ignore_window: bool = False) -> int:
     """`tc run --once JOB`: start, one job, stop. No HTTP, no schedule."""
     if job not in JOBS:
         raise ValueError(f"unknown job {job!r} (one of {', '.join(JOBS)})")
@@ -903,7 +928,7 @@ async def run_once(settings: Settings, job: str) -> int:
         engine = build_engine(settings, broker=broker, clock=_now, client=client)
         await engine.start()
         try:
-            verdict = await engine.run_job(job)
+            verdict = await engine.run_job(job, ignore_window=ignore_window)
         finally:
             await engine.stop()
     # The operator smoke test is only a smoke test if a failed job fails the
