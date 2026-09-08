@@ -388,12 +388,16 @@ def register(server: FastMCP, deps: McpDeps, role: Role) -> None:
         symbol: Annotated[str, Field(min_length=1, max_length=12)],
         days: Annotated[int, Field(ge=1, le=MAX_HISTORY_DAYS, description="Sessions")],
     ) -> Bars:
+        # Bounded here as well as in the schema, for the same reason
+        # `_checked_symbols` is: the annotation is what the model is told, and
+        # a direct caller never passes through it.
         if not 1 <= days <= MAX_HISTORY_DAYS:
             raise ToolError(f"days must be between 1 and {MAX_HISTORY_DAYS}")
+        clean = symbol.strip().upper()
         with _broker_faults("price history read"):
-            bars = await deps.broker.daily_bars(symbol.strip().upper(), days)
+            bars = await deps.broker.daily_bars(clean, days)
         return Bars(
-            symbol=symbol.strip().upper(),
+            symbol=clean,
             bars=[
                 BarOut(
                     date=b.date.isoformat(),
