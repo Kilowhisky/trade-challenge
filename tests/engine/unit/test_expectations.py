@@ -210,8 +210,9 @@ def test_digest_never_empty_with_no_results() -> None:
 def test_load_settings_parses_expectations_list(tmp_path: Path) -> None:
     cfg = tmp_path / "config.yml"
     cfg.write_text(
-        "engine: {data_dir: /d, repo_dir: /r}\n"
+        "engine: {data_dir: /d, repo_dir: /r, research_dir: /d/research}\n"
         "token: {reauth_after_days: 5, hard_expiry_days: 7, callback_url: https://x.ts.net/oauth/callback}\n"
+        "runner: {url: 'http://127.0.0.1:8090'}\n"
         "expectations:\n"
         "  - name: ticks_per_session_min\n"
         "    check: ticks_per_session_min\n"
@@ -243,8 +244,9 @@ def test_load_settings_parses_expectations_list(tmp_path: Path) -> None:
 def test_expectations_defaults_to_empty_list(tmp_path: Path) -> None:
     cfg = tmp_path / "config.yml"
     cfg.write_text(
-        "engine: {data_dir: /d, repo_dir: /r}\n"
+        "engine: {data_dir: /d, repo_dir: /r, research_dir: /d/research}\n"
         "token: {reauth_after_days: 5, hard_expiry_days: 7, callback_url: https://x.ts.net/oauth/callback}\n"
+        "runner: {url: 'http://127.0.0.1:8090'}\n"
     )
     env = tmp_path / ".env"
     env.write_text(

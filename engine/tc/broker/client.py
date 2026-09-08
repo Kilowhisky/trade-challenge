@@ -11,7 +11,18 @@ import httpx
 from schwab import auth as schwab_auth
 from schwab.client import AsyncClient
 
-from tc.broker.models import AccountSnapshot, DailyBar, MarketWindow, OrderRow, Quote
+from tc.broker.models import (
+    AccountSnapshot,
+    DailyBar,
+    Expiration,
+    Instrument,
+    MarketWindow,
+    Mover,
+    OptionChainView,
+    OrderRow,
+    Quote,
+    VerboseQuote,
+)
 from tc.broker.token import TokenStore
 
 
@@ -30,6 +41,18 @@ class Broker(Protocol):
         self, account_hash: str, from_dt: datetime, to_dt: datetime
     ) -> list[OrderRow]: ...
     async def quotes(self, symbols: Sequence[str]) -> dict[str, Quote]: ...
+    async def quotes_verbose(self, symbols: Sequence[str]) -> dict[str, VerboseQuote]: ...
+    async def option_chain(
+        self,
+        symbol: str,
+        from_date: date,
+        to_date: date,
+        strike_count: int,
+        contract_type: str,
+    ) -> OptionChainView: ...
+    async def expiration_chain(self, symbol: str) -> list[Expiration]: ...
+    async def instruments(self, query: str, projection: str) -> list[Instrument]: ...
+    async def movers(self, index: str, direction: str) -> list[Mover]: ...
     async def market_window(self, d: date) -> MarketWindow: ...
     async def daily_bars(self, symbol: str, days: int) -> list[DailyBar]: ...
     def now(self) -> datetime: ...
@@ -135,6 +158,73 @@ class SchwabBroker:
         data = await self._guard(await self._c().get_quotes(list(symbols)))
         assert isinstance(data, dict)
         return {s: Quote.from_payload(s, q) for s, q in data.items() if "quote" in q}
+
+    async def quotes_verbose(self, symbols: Sequence[str]) -> dict[str, VerboseQuote]:
+        """Every field the universe screen needs, in one call.
+
+        v2 could not ask for these: the schwab-mcp wrapper ignored `fields=`,
+        so the only way to get avg10DaysVolume / fundLeverageFactor / the
+        `regular` block was a verbose response whose ~260KB body had to be
+        written to a file and parsed by a script the model was forbidden to
+        read. Here it is an ordinary typed read the model never sees at all.
+        """
+        if not symbols:
+            return {}
+        c = self._c()
+        fields = [
+            c.Quote.Fields.QUOTE,
+            c.Quote.Fields.FUNDAMENTAL,
+            c.Quote.Fields.REFERENCE,
+            c.Quote.Fields.REGULAR,
+        ]
+        data = await self._guard(await c.get_quotes(list(symbols), fields=fields))
+        assert isinstance(data, dict)
+        return {s: VerboseQuote.from_payload(s, b) for s, b in data.items()}
+
+    async def option_chain(
+        self,
+        symbol: str,
+        from_date: date,
+        to_date: date,
+        strike_count: int,
+        contract_type: str,
+    ) -> OptionChainView:
+        c = self._c()
+        data = await self._guard(
+            await c.get_option_chain(
+                symbol,
+                contract_type=c.Options.ContractType[contract_type],
+                strike_count=strike_count,
+                from_date=from_date,
+                to_date=to_date,
+            )
+        )
+        assert isinstance(data, dict)
+        return OptionChainView.from_payload(symbol, data)
+
+    async def expiration_chain(self, symbol: str) -> list[Expiration]:
+        data = await self._guard(await self._c().get_option_expiration_chain(symbol))
+        assert isinstance(data, dict)
+        return [Expiration.from_payload(e) for e in data.get("expirationList", [])]
+
+    async def instruments(self, query: str, projection: str) -> list[Instrument]:
+        c = self._c()
+        data = await self._guard(
+            await c.get_instruments(query, c.Instrument.Projection(projection))
+        )
+        assert isinstance(data, dict)
+        return [Instrument.from_payload(i) for i in data.get("instruments", [])]
+
+    async def movers(self, index: str, direction: str) -> list[Mover]:
+        c = self._c()
+        order = (
+            c.Movers.SortOrder.PERCENT_CHANGE_UP
+            if direction == "up"
+            else c.Movers.SortOrder.PERCENT_CHANGE_DOWN
+        )
+        data = await self._guard(await c.get_movers(c.Movers.Index(index), sort_order=order))
+        assert isinstance(data, dict)
+        return [Mover.from_payload(m) for m in data.get("screeners", [])]
 
     async def market_window(self, d: date) -> MarketWindow:
         c = self._c()

@@ -10,12 +10,15 @@ engine:
   timezone: America/New_York
   data_dir: /opt/tc/data
   repo_dir: /opt/tc/repo
+  research_dir: /opt/tc/data/research
   http_bind: 127.0.0.1:8080
   reserve_usd: "900.00"
 token:
   reauth_after_days: 5
   hard_expiry_days: 7
   callback_url: https://pi.example.ts.net/oauth/callback
+runner:
+  url: http://127.0.0.1:8090
 """
 
 ENV = """
@@ -94,8 +97,9 @@ def test_schedule_and_shadow_sections(
 ) -> None:
     cfg = tmp_path / "config.yml"
     cfg.write_text(
-        "engine: {data_dir: /d, repo_dir: /r}\n"
+        "engine: {data_dir: /d, repo_dir: /r, research_dir: /d/research}\n"
         "token: {reauth_after_days: 5, hard_expiry_days: 7, callback_url: https://x.ts.net/oauth/callback}\n"
+        "runner: {url: 'http://127.0.0.1:8090'}\n"
         "schedule: {tick: 'every 15m 09:32-15:47 weekdays', session_close: 'at 16:04 weekdays'}\n"
         "shadow: {enabled: true}\n"
     )
@@ -115,8 +119,9 @@ def test_engine_loads_without_any_discord_webhook(tmp_path: Path, monkeypatch: p
     """No Discord configured is a valid (quiet) engine, not a startup failure."""
     cfg = tmp_path / "config.yml"
     cfg.write_text(
-        "engine: {data_dir: /d, repo_dir: /r}\n"
+        "engine: {data_dir: /d, repo_dir: /r, research_dir: /d/research}\n"
         "token: {reauth_after_days: 5, hard_expiry_days: 7, callback_url: https://x.ts.net/oauth/callback}\n"
+        "runner: {url: 'http://127.0.0.1:8090'}\n"
     )
     for k in ("TC_DISCORD_WEBHOOK_URL", "TC_DISCORD_SHADOW_WEBHOOK_URL"):
         monkeypatch.delenv(k, raising=False)
@@ -125,3 +130,44 @@ def test_engine_loads_without_any_discord_webhook(tmp_path: Path, monkeypatch: p
     from tc.config import load_settings
     s = load_settings(cfg, env_file=tmp_path / "no-such-env")
     assert s.discord_webhook_url is None and s.discord_shadow_webhook_url is None
+
+
+def test_runner_and_mcp_sections(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "engine: {data_dir: /d, repo_dir: /r, research_dir: /d/research}\n"
+        "token: {reauth_after_days: 5, hard_expiry_days: 7, callback_url: https://x.ts.net/oauth/callback}\n"
+        "runner: {url: 'http://127.0.0.1:8090'}\n"
+        "schedule: {scout: 'at 07:12 weekdays'}\n"
+    )
+    monkeypatch.setenv("TC_SCHWAB_APP_KEY", "k")
+    monkeypatch.setenv("TC_SCHWAB_APP_SECRET", "s")
+    monkeypatch.setenv("TC_RUNNER_TOKEN", "runner-secret")
+    monkeypatch.setenv("TC_MCP_RESEARCH_TOKEN", "research-secret")
+    monkeypatch.setenv("TC_MCP_DECIDE_TOKEN", "decide-secret")
+    from tc.config import load_settings
+
+    s = load_settings(cfg)
+    assert s.engine.research_dir == Path("/d/research")
+    assert str(s.runner.url).rstrip("/") == "http://127.0.0.1:8090"
+    assert s.runner.slack_s == 120.0
+    assert s.runner_token == "runner-secret"  # noqa: S105 -- a fixture bearer, not a real secret
+    assert s.mcp_tokens() == {"research-secret": "research", "decide-secret": "decide"}
+
+
+def test_mcp_tokens_empty_when_unset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "engine: {data_dir: /d, repo_dir: /r, research_dir: /d/research}\n"
+        "token: {reauth_after_days: 5, hard_expiry_days: 7, callback_url: https://x.ts.net/oauth/callback}\n"
+        "runner: {url: 'http://127.0.0.1:8090'}\n"
+    )
+    monkeypatch.setenv("TC_SCHWAB_APP_KEY", "k")
+    monkeypatch.setenv("TC_SCHWAB_APP_SECRET", "s")
+    for k in ("TC_RUNNER_TOKEN", "TC_MCP_RESEARCH_TOKEN", "TC_MCP_DECIDE_TOKEN"):
+        monkeypatch.delenv(k, raising=False)
+    from tc.config import load_settings
+
+    s = load_settings(cfg)
+    assert s.mcp_tokens() == {}
+    assert s.runner_token is None

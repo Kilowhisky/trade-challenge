@@ -1,0 +1,22 @@
+{
+ "MPC": {"assetSubType": "", "quote": {"lastPrice": 368.83, "highPrice": 374.10, "lowPrice": 368.10,
+          "52WeekHigh": 369.12, "netPercentChange": 0.42},
+         "fundamental": {"avg10DaysVolume": 2349452, "fundLeverageFactor": 0.0,
+          "lastEarningsDate": "2026-08-04T00:00:00.000Z"},
+         "reference": {"optionable": true, "description": "Marathon Petroleum Corp"},
+         "regular": {"regularMarketLastPrice": 368.83},
+         "extended": {"lastPrice": 999.99}},
+ "TQQQ": {"assetSubType": "ETF", "quote": {"lastPrice": 90.00, "highPrice": 91.0, "lowPrice": 88.0,
+          "52WeekHigh": 100.0, "netPercentChange": 1.1},
+          "fundamental": {"avg10DaysVolume": 30000000, "fundLeverageFactor": 300.0,
+           "lastEarningsDate": ""},
+          "reference": {"optionable": true, "description": "ProShares UltraPro QQQ"},
+          "regular": {"regularMarketLastPrice": 90.00}},
+ "SPY": {"assetSubType": "ETF", "quote": {"lastPrice": 640.00, "highPrice": 0, "lowPrice": 0,
+          "52WeekHigh": 645.0, "netPercentChange": 0.2},
+         "fundamental": {"avg10DaysVolume": 34400000, "fundLeverageFactor": 100.0,
+          "lastEarningsDate": ""},
+         "reference": {"optionable": true, "description": "SPDR S&P 500 ETF Trust"},
+         "regular": {"regularMarketLastPrice": 640.00}},
+ "NOPRICE": {"assetSubType": "", "quote": {}, "fundamental": {}, "reference": {}, "regular": {}}
+}

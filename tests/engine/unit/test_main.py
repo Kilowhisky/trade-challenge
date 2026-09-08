@@ -65,6 +65,7 @@ engine:
   timezone: America/New_York
   data_dir: "{data}"
   repo_dir: "{repo}"
+  research_dir: "{data}/research"
   http_bind: "{bind}"
   reserve_usd: "900.00"
   orders_from: 2026-08-14
@@ -73,6 +74,8 @@ token:
   reauth_after_days: 5
   hard_expiry_days: 7
   callback_url: https://pi.example.ts.net/oauth/callback
+runner:
+  url: http://127.0.0.1:8090
 shadow:
   enabled: true
 schedule:

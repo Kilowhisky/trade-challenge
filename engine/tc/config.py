@@ -29,6 +29,26 @@ class EngineConfig(BaseModel):
     # list, not a lookup: nothing in the broker payload says "3x". Plan 0c's
     # universe table replaces it.
     leveraged_symbols: list[str] = Field(default_factory=list)
+    # Documents Claude reads whole (spec §6): candidates, standing, scorecard,
+    # the pre-open brief, the roster, universe.md. Under /data, outside any
+    # checkout, which is what kills the Glob-on-a-gitignored-path failure.
+    research_dir: Path
+
+
+class RunnerConfig(BaseModel):
+    """Where the Claude runner lives and how long the engine waits on it.
+
+    `slack_s` is added to a job's own timeout to form the engine's HTTP read
+    timeout, so the runner's deadline always fires first: the SDK reaps its
+    child process *after* the cancel and a 6s deadline measured 11.5s wall
+    clock, so a tighter engine timeout would turn every long job into a dead
+    socket instead of a structured `timeout` verdict.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    url: AnyHttpUrl
+    connect_timeout_s: float = 10.0
+    slack_s: float = 120.0
 
 
 class ShadowConfig(BaseModel):
@@ -73,6 +93,7 @@ class FileConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     engine: EngineConfig
     token: TokenConfig
+    runner: RunnerConfig
     schedule: dict[str, str] = Field(default_factory=dict)
     shadow: ShadowConfig = Field(default_factory=ShadowConfig)
     expectations: list[Expectation] = Field(default_factory=list)
@@ -90,6 +111,12 @@ class Secrets(BaseSettings):
     discord_webhook_url: AnyHttpUrl | None = None
     discord_shadow_webhook_url: AnyHttpUrl | None = None
     healthchecks_base_url: AnyHttpUrl | None = None
+    # The runner's inbound bearer, and one bearer per MCP role. All optional:
+    # an engine with no runner still ticks, closes the session and serves
+    # /health -- it simply dispatches no Claude job (jobs/dispatch.py).
+    runner_token: str | None = None
+    mcp_research_token: str | None = None
+    mcp_decide_token: str | None = None
 
 
 class Settings(BaseModel):
@@ -107,6 +134,7 @@ class Settings(BaseModel):
     secrets: Secrets
     engine: EngineConfig
     token: TokenConfig
+    runner: RunnerConfig
     schedule: dict[str, str]
     shadow: ShadowConfig
     expectations: list[Expectation]
@@ -133,6 +161,28 @@ class Settings(BaseModel):
     def healthchecks_base_url(self) -> AnyHttpUrl | None:
         return self.secrets.healthchecks_base_url
 
+    @property
+    def runner_token(self) -> str | None:
+        return self.secrets.runner_token
+
+    @property
+    def mcp_research_token(self) -> str | None:
+        return self.secrets.mcp_research_token
+
+    @property
+    def mcp_decide_token(self) -> str | None:
+        return self.secrets.mcp_decide_token
+
+    def mcp_tokens(self) -> dict[str, str]:
+        """Bearer -> role. A role with no token configured is simply not
+        reachable: the middleware answers 403 rather than defaulting to a role,
+        because a default role is a way to reach tools without a credential."""
+        pairs = (
+            (self.mcp_research_token, "research"),
+            (self.mcp_decide_token, "decide"),
+        )
+        return {t: role for t, role in pairs if t}
+
 
 def _read_yaml(path: Path) -> dict[str, Any]:
     with path.open() as fh:
@@ -149,6 +199,7 @@ def load_settings(config_path: Path, env_file: Path | None = None) -> Settings:
         secrets=secrets,
         engine=file_cfg.engine,
         token=file_cfg.token,
+        runner=file_cfg.runner,
         schedule=file_cfg.schedule,
         shadow=file_cfg.shadow,
         expectations=file_cfg.expectations,

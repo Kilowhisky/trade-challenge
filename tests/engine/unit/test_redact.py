@@ -87,9 +87,44 @@ class _MarketHours:
     Market = _Market
 
 
+class _QuoteFields:
+    QUOTE = "quote"
+    FUNDAMENTAL = "fundamental"
+    REFERENCE = "reference"
+    REGULAR = "regular"
+
+
+class _Quote:
+    Fields = _QuoteFields
+
+
+class _Index:
+    EQUITY_ALL = "EQUITY_ALL"
+
+
+class _SortOrder:
+    PERCENT_CHANGE_UP = "PERCENT_CHANGE_UP"
+
+
+class _Movers:
+    Index = _Index
+    SortOrder = _SortOrder
+
+
+class _Projection:
+    SYMBOL_SEARCH = "symbol-search"
+
+
+class _InstrumentNS:
+    Projection = _Projection
+
+
 class _StubClient:
     Account = _Account
     MarketHours = _MarketHours
+    Quote = _Quote
+    Movers = _Movers
+    Instrument = _InstrumentNS
 
     def __init__(self, account_number: str, hash_value: str) -> None:
         self._account_number = account_number
@@ -108,10 +143,22 @@ class _StubClient:
     async def get_orders_for_account(self, account_hash: str, **kw: Any) -> _StubResp:
         return _StubResp([{"orderId": 1, "hashValue": self._hash_value}])
 
-    async def get_quotes(self, symbols: list[str]) -> _StubResp:
+    async def get_quotes(self, symbols: list[str], **kw: Any) -> _StubResp:
         return _StubResp(
             {s: {"quote": {"lastPrice": 1.0}, "accountId": self._account_number} for s in symbols}
         )
+
+    async def get_movers(self, index: Any, **kw: Any) -> _StubResp:
+        return _StubResp({"screeners": [], "hashValue": self._hash_value})
+
+    async def get_option_chain(self, symbol: str, **kw: Any) -> _StubResp:
+        return _StubResp({"callExpDateMap": {}, "putExpDateMap": {}, "hashValue": self._hash_value})
+
+    async def get_option_expiration_chain(self, symbol: str) -> _StubResp:
+        return _StubResp({"expirationList": [], "hashValue": self._hash_value})
+
+    async def get_instruments(self, symbols: Any, projection: Any) -> _StubResp:
+        return _StubResp({"instruments": [], "hashValue": self._hash_value})
 
     async def get_market_hours(self, markets: Any, date: Any = None) -> _StubResp:
         return _StubResp({"equity": {"EQ": {"hashValue": self._hash_value}}})
@@ -139,7 +186,9 @@ async def test_recorder_writes_only_redacted_payloads(tmp_path: Path) -> None:
     await Recorder(stub, tmp_path).record(["AMH"], date(2026, 9, 2))
 
     written = _json_files(tmp_path)
-    assert len(written) == 5  # account, orders, quotes, hours, bars-AMH
+    # account, orders, quotes, hours, quotes-verbose, movers, plus four
+    # per-symbol files (bars, chain, expirations, instruments) for AMH.
+    assert len(written) == 10
 
     for p in written:
         text = _read(p)

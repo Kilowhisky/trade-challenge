@@ -12,6 +12,9 @@ dependencies = [
   "httpx>=0.28",
   "starlette>=0.40",
   "uvicorn>=0.30",
+  # 1.30.0, not 2.x: mcp 2 renamed FastMCP to MCPServer and removed
+  # mcp.server.fastmcp entirely. Pinned exactly, not floated.
+  "mcp==1.30.0",
 ]
 
 [project.optional-dependencies]

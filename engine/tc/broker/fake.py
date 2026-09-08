@@ -16,7 +16,18 @@ from tc.broker.client import (
     SchwabBroker,
     _raise_for,
 )
-from tc.broker.models import AccountSnapshot, DailyBar, MarketWindow, OrderRow, Quote
+from tc.broker.models import (
+    AccountSnapshot,
+    DailyBar,
+    Expiration,
+    Instrument,
+    MarketWindow,
+    Mover,
+    OptionChainView,
+    OrderRow,
+    Quote,
+    VerboseQuote,
+)
 
 HASH_RE = re.compile(r"\b[0-9A-F]{32,}\b")
 
@@ -57,6 +68,41 @@ class FakeBroker:
             if s in data and "quote" in data[s]
         }
 
+    async def quotes_verbose(self, symbols: Sequence[str]) -> dict[str, VerboseQuote]:
+        """One fixture holds the whole recorded sweep; a call takes its slice.
+
+        Filtering rather than raising mirrors the real read: Schwab simply
+        omits a symbol it does not know, and a fake that raised instead would
+        make an unknown ticker a crash in tests and a skip in production.
+        """
+        data = self._load("quotes-verbose.json")
+        return {s: VerboseQuote.from_payload(s, data[s]) for s in symbols if s in data}
+
+    async def option_chain(
+        self,
+        symbol: str,
+        from_date: date,
+        to_date: date,
+        strike_count: int,
+        contract_type: str,
+    ) -> OptionChainView:
+        # The date window, strike count and contract type are the recording's,
+        # not the caller's: a fixture is one already-served response, and
+        # re-filtering it here would test this filter instead of the caller.
+        return OptionChainView.from_payload(symbol, self._load(f"chain-{symbol}.json"))
+
+    async def expiration_chain(self, symbol: str) -> list[Expiration]:
+        data = self._load(f"expirations-{symbol}.json")
+        return [Expiration.from_payload(e) for e in data.get("expirationList", [])]
+
+    async def instruments(self, query: str, projection: str) -> list[Instrument]:
+        data = self._load(f"instruments-{query}.json")
+        return [Instrument.from_payload(i) for i in data.get("instruments", [])]
+
+    async def movers(self, index: str, direction: str) -> list[Mover]:
+        data = self._load(f"movers-{index}.json")
+        return [Mover.from_payload(m) for m in data.get("screeners", [])]
+
     async def market_window(self, d: date) -> MarketWindow:
         return MarketWindow.from_payload(d, self._load(f"hours-{d.isoformat()}.json"))
 
@@ -95,8 +141,18 @@ def _check_shape(name: str, payload: dict[str, Any] | list[Any]) -> None:
         ok = isinstance(payload, list)
     elif name == "quotes.json":
         ok = isinstance(payload, dict)
+    elif name == "quotes-verbose.json":
+        ok = isinstance(payload, dict)
     elif name.startswith("hours-"):
         ok = isinstance(payload, dict) and "equity" in payload
+    elif name.startswith("chain-"):
+        ok = isinstance(payload, dict) and "callExpDateMap" in payload
+    elif name.startswith("expirations-"):
+        ok = isinstance(payload, dict) and "expirationList" in payload
+    elif name.startswith("instruments-"):
+        ok = isinstance(payload, dict) and "instruments" in payload
+    elif name.startswith("movers-"):
+        ok = isinstance(payload, dict) and "screeners" in payload
     else:  # bars-<symbol>.json
         ok = isinstance(payload, dict) and "candles" in payload
     if not ok:
@@ -127,9 +183,33 @@ class Recorder:
             f"hours-{d.isoformat()}.json": _raise_for(
                 await c.get_market_hours([c.MarketHours.Market.EQUITY], date=d)
             ),
+            "quotes-verbose.json": _raise_for(
+                await c.get_quotes(
+                    list(symbols),
+                    fields=[
+                        c.Quote.Fields.QUOTE,
+                        c.Quote.Fields.FUNDAMENTAL,
+                        c.Quote.Fields.REFERENCE,
+                        c.Quote.Fields.REGULAR,
+                    ],
+                )
+            ),
+            "movers-EQUITY_ALL.json": _raise_for(
+                await c.get_movers(
+                    c.Movers.Index.EQUITY_ALL,
+                    sort_order=c.Movers.SortOrder.PERCENT_CHANGE_UP,
+                )
+            ),
         }
         for s in symbols:
             raw[f"bars-{s}.json"] = _raise_for(await c.get_price_history_every_day(s))
+            raw[f"chain-{s}.json"] = _raise_for(await c.get_option_chain(s))
+            raw[f"expirations-{s}.json"] = _raise_for(
+                await c.get_option_expiration_chain(s)
+            )
+            raw[f"instruments-{s}.json"] = _raise_for(
+                await c.get_instruments(s, c.Instrument.Projection.SYMBOL_SEARCH)
+            )
         for name, payload in raw.items():
             _check_shape(name, payload)
         self.out.mkdir(parents=True, exist_ok=True)
