@@ -66,3 +66,73 @@ CREATE TRIGGER IF NOT EXISTS token_events_no_update BEFORE UPDATE ON token_event
 CREATE TRIGGER IF NOT EXISTS token_events_no_delete BEFORE DELETE ON token_events BEGIN SELECT RAISE(ABORT, 'token_events is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS trade_log_no_update BEFORE UPDATE ON trade_log BEGIN SELECT RAISE(ABORT, 'trade_log is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS trade_log_no_delete BEFORE DELETE ON trade_log BEGIN SELECT RAISE(ABORT, 'trade_log is append-only'); END;
+
+-- Research ledgers (spec §6). Everything the bash writers validated as JSON or
+-- TSV becomes a row here; the documents Claude reads whole stay as files and
+-- are indexed in `artifacts`.
+CREATE TABLE IF NOT EXISTS evidence (
+  id INTEGER PRIMARY KEY, symbol TEXT NOT NULL, date TEXT NOT NULL,
+  claim TEXT NOT NULL, url TEXT NOT NULL, source_type TEXT NOT NULL,
+  observed TEXT NOT NULL, independence TEXT NOT NULL, extra_json TEXT NOT NULL,
+  written_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS evidence_symbol ON evidence(symbol, id);
+
+-- One table for raises AND scores, because scoring is append-only and an id may
+-- carry many score rows: the LAST score per id wins, and a reader that counts
+-- rows instead of reducing to the latest gets the hit rate wrong
+-- (0c-writers-contract.md §1.5, reader contract).
+CREATE TABLE IF NOT EXISTS escalations (
+  row_id INTEGER PRIMARY KEY, id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('raise','score')),
+  symbol TEXT NOT NULL, at TEXT NOT NULL, record_json TEXT NOT NULL,
+  written_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS escalations_id ON escalations(id, row_id);
+
+CREATE TABLE IF NOT EXISTS sectors (
+  symbol TEXT PRIMARY KEY, sector TEXT NOT NULL, date TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS universe (
+  asof TEXT NOT NULL, symbol TEXT NOT NULL,
+  price TEXT NOT NULL, adv10 TEXT NOT NULL, dollar_vol TEXT NOT NULL,
+  pct_from_52wk_high TEXT NOT NULL, optionable INTEGER NOT NULL, leverage TEXT NOT NULL,
+  last_earnings TEXT NOT NULL, is_etf INTEGER NOT NULL, session_range_pct TEXT,
+  description TEXT NOT NULL, qualified INTEGER NOT NULL,
+  PRIMARY KEY (asof, symbol)
+);
+
+CREATE TABLE IF NOT EXISTS tombstones (
+  id INTEGER PRIMARY KEY, date TEXT NOT NULL, symbol TEXT NOT NULL,
+  record_json TEXT NOT NULL, written_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS screen_rows (
+  id INTEGER PRIMARY KEY, date TEXT NOT NULL, symbol TEXT NOT NULL,
+  record_json TEXT NOT NULL, written_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS iv_series (
+  id INTEGER PRIMARY KEY, date TEXT NOT NULL, symbol TEXT NOT NULL,
+  record_json TEXT NOT NULL, written_at TEXT NOT NULL
+);
+-- UNIQUE(date,symbol) is the §1.7 idempotency guard: one snapshot per
+-- underlying per day, and a second attempt is a SKIP, never an error.
+CREATE TABLE IF NOT EXISTS oi_snapshots (
+  id INTEGER PRIMARY KEY, date TEXT NOT NULL, symbol TEXT NOT NULL,
+  record_json TEXT NOT NULL, written_at TEXT NOT NULL,
+  UNIQUE (date, symbol)
+);
+CREATE TABLE IF NOT EXISTS events (
+  id INTEGER PRIMARY KEY, date TEXT NOT NULL, symbol TEXT,
+  record_json TEXT NOT NULL, written_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS artifacts (
+  id INTEGER PRIMARY KEY, kind TEXT NOT NULL, date TEXT,
+  path TEXT NOT NULL, sha256 TEXT NOT NULL, lines INTEGER NOT NULL,
+  written_at TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS evidence_no_update BEFORE UPDATE ON evidence BEGIN SELECT RAISE(ABORT, 'evidence is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS evidence_no_delete BEFORE DELETE ON evidence BEGIN SELECT RAISE(ABORT, 'evidence is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS escalations_no_update BEFORE UPDATE ON escalations BEGIN SELECT RAISE(ABORT, 'escalations is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS escalations_no_delete BEFORE DELETE ON escalations BEGIN SELECT RAISE(ABORT, 'escalations is append-only'); END;

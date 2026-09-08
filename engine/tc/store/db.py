@@ -16,13 +16,24 @@ from typing import Any, Literal
 import aiosqlite
 from pydantic import BaseModel, ConfigDict
 
-from tc.broker.models import RESTING, STOP_TYPES, AccountSnapshot, OrderRow
+from tc.broker.models import RESTING, STOP_TYPES, AccountSnapshot, OrderRow, Position
 
 Verdict = Literal["done", "noop", "content_failed", "failed", "timeout", "missed"]
 VERDICTS: frozenset[str] = frozenset(
     {"done", "noop", "content_failed", "failed", "timeout", "missed"}
 )
 SCHEMA_VERSION = 1
+
+# One dispatch table so `tc.research.ledgers` and the importer agree on which
+# physical table backs each ledger name.
+LEDGER_TABLES: dict[str, str] = {
+    "screen": "screen_rows",
+    "iv": "iv_series",
+    "oi": "oi_snapshots",
+    "tombstones": "tombstones",
+    "events": "events",
+}
+IN_SCOPE_SECTORS = ("consumer-software", "airlines-transport", "semis-hardware")
 
 
 class SessionStatusRow(BaseModel):
@@ -427,4 +438,268 @@ class Store:
         await self.execute(
             "INSERT OR IGNORE INTO rules_versions(sha256, path, seen_at) VALUES (?,?,?)",
             (sha256, path, _now()),
+        )
+
+    async def latest_account(self) -> AccountSnapshot | None:
+        row = await self.fetchone("SELECT * FROM account_snapshots ORDER BY id DESC LIMIT 1")
+        if row is None:
+            return None
+        positions = await self.fetchall(
+            "SELECT symbol, asset_type, quantity, average_price, market_value, day_pl,"
+            " settled_quantity FROM position_snapshots WHERE snapshot_id=?",
+            (row["id"],),
+        )
+        return AccountSnapshot(
+            account_hash=row["account_hash"],
+            read_at=datetime.fromisoformat(row["read_at"]),
+            liquidation_value=Decimal(row["liquidation_value"]),
+            cash_available_for_trading=Decimal(row["cash_available_for_trading"]),
+            unsettled_cash=Decimal(row["unsettled_cash"]),
+            cash_balance=Decimal(row["cash_balance"]),
+            cash_call=Decimal(row["cash_call"]),
+            is_closing_only_restricted=bool(row["is_closing_only_restricted"]),
+            positions=[
+                Position(
+                    symbol=p["symbol"],
+                    asset_type=p["asset_type"],
+                    quantity=int(p["quantity"]),
+                    average_price=(
+                        None if p["average_price"] is None else Decimal(p["average_price"])
+                    ),
+                    market_value=Decimal(p["market_value"]),
+                    day_pl=Decimal(p["day_pl"]),
+                    settled_quantity=int(p["settled_quantity"]),
+                )
+                for p in positions
+            ],
+        )
+
+    async def latest_tick(self) -> TickRow | None:
+        row = await self.fetchone("SELECT * FROM ticks ORDER BY id DESC LIMIT 1")
+        return None if row is None else TickRow(**{k: row[k] for k in TickRow.model_fields})
+
+    # --- research ledgers (spec §6) -----------------------------------------
+    async def insert_evidence(self, row: dict[str, Any]) -> int:
+        async with self._lock:
+            cur = await self._c().execute(
+                "INSERT INTO evidence(symbol, date, claim, url, source_type, observed,"
+                " independence, extra_json, written_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    row["symbol"],
+                    row["date"],
+                    row["claim"],
+                    row["url"],
+                    row["source_type"],
+                    row["observed"],
+                    row["independence"],
+                    json.dumps(row.get("extra", {}), sort_keys=True),
+                    _now(),
+                ),
+            )
+            return int(cur.lastrowid or 0)
+
+    async def evidence_for(self, symbol: str) -> list[dict[str, Any]]:
+        rows = await self.fetchall(
+            "SELECT symbol, date, claim, url, source_type, observed, independence,"
+            " extra_json, written_at FROM evidence WHERE symbol=? ORDER BY id",
+            (symbol,),
+        )
+        return [
+            {
+                "symbol": r["symbol"],
+                "date": r["date"],
+                "claim": r["claim"],
+                "url": r["url"],
+                "source_type": r["source_type"],
+                "observed": r["observed"],
+                "independence": r["independence"],
+                "extra": json.loads(r["extra_json"]),
+                "written_at": r["written_at"],
+            }
+            for r in rows
+        ]
+
+    async def insert_escalation(self, row: dict[str, Any]) -> None:
+        await self.execute(
+            "INSERT INTO escalations(id, kind, symbol, at, record_json, written_at)"
+            " VALUES (?,?,?,?,?,?)",
+            (
+                row["id"],
+                row["kind"],
+                row["symbol"],
+                row["at"],
+                json.dumps(row["record"], sort_keys=True),
+                _now(),
+            ),
+        )
+
+    async def escalation_raise_exists(self, escalation_id: str) -> bool:
+        row = await self.fetchone(
+            "SELECT 1 FROM escalations WHERE id=? AND kind='raise' LIMIT 1", (escalation_id,)
+        )
+        return row is not None
+
+    async def escalations(self, symbol: str | None = None) -> list[dict[str, Any]]:
+        sql = "SELECT id, kind, symbol, at, record_json FROM escalations"
+        sql += "" if symbol is None else " WHERE symbol = ?"
+        sql += " ORDER BY row_id"
+        rows = await self.fetchall(sql, () if symbol is None else (symbol,))
+        raises: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            rec = json.loads(r["record_json"])
+            if r["kind"] == "raise":
+                raises[r["id"]] = {
+                    "id": r["id"],
+                    "symbol": r["symbol"],
+                    "raised": r["at"],
+                    "latest_outcome": None,
+                    **rec,
+                }
+            elif r["id"] in raises:
+                # last score wins: this is a plain overwrite in row order
+                raises[r["id"]]["latest_outcome"] = rec.get("outcome")
+        return list(raises.values())
+
+    async def upsert_sectors(self, rows: list[tuple[str, str, str]]) -> tuple[int, int]:
+        """Replace each named symbol's tag; count what changed.
+
+        `new` is a symbol that had no in-scope tag and now has one; `retired`
+        is one that had an in-scope tag and is now `other`. That is what the
+        v2 return line reported and what the weekly digest reads. Symbols are
+        compared as TEXT throughout -- awk's numeric compare made tagging `1E2`
+        delete the row for `100`, and on BSD awk the real ticker `NAN` too.
+        """
+        new = retired = 0
+        async with self._transaction() as c:
+            for symbol, sector, d in rows:
+                cur = await c.execute("SELECT sector FROM sectors WHERE symbol=?", (symbol,))
+                prev_row = await cur.fetchone()
+                prev = None if prev_row is None else str(prev_row[0])
+                if sector in IN_SCOPE_SECTORS and prev not in IN_SCOPE_SECTORS:
+                    new += 1
+                if sector == "other" and prev in IN_SCOPE_SECTORS:
+                    retired += 1
+                await c.execute(
+                    "INSERT INTO sectors (symbol, sector, date) VALUES (?,?,?)"
+                    " ON CONFLICT(symbol) DO UPDATE SET sector=excluded.sector, date=excluded.date",
+                    (symbol, sector, d),
+                )
+        return new, retired
+
+    async def sectors(self) -> list[dict[str, Any]]:
+        rows = await self.fetchall("SELECT symbol, sector, date FROM sectors ORDER BY symbol")
+        return [{"symbol": r["symbol"], "sector": r["sector"], "date": r["date"]} for r in rows]
+
+    async def replace_universe(self, asof: date, rows: list[dict[str, Any]]) -> int:
+        """Delete `asof`'s own rows first so a re-run of the same sweep is
+        idempotent; older `asof` rows are left alone as history."""
+        a = asof.isoformat()
+        async with self._transaction() as c:
+            await c.execute("DELETE FROM universe WHERE asof=?", (a,))
+            await c.executemany(
+                "INSERT INTO universe(asof, symbol, price, adv10, dollar_vol,"
+                " pct_from_52wk_high, optionable, leverage, last_earnings, is_etf,"
+                " session_range_pct, description, qualified)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                [
+                    (
+                        a,
+                        r["symbol"],
+                        _s(r["price"]),
+                        _s(r["adv10"]),
+                        _s(r["dollar_vol"]),
+                        _s(r["pct_from_52wk_high"]),
+                        int(r["optionable"]),
+                        _s(r["leverage"]),
+                        r["last_earnings"],
+                        int(r["is_etf"]),
+                        _s(r.get("session_range_pct")),
+                        r["description"],
+                        int(r["qualified"]),
+                    )
+                    for r in rows
+                ],
+            )
+        return len(rows)
+
+    async def universe_asof(self) -> date | None:
+        row = await self.fetchone("SELECT asof FROM universe ORDER BY asof DESC LIMIT 1")
+        return None if row is None else date.fromisoformat(row["asof"])
+
+    async def universe_rows(self, qualified_only: bool = True) -> list[dict[str, Any]]:
+        """Rows from the newest `asof` only; older sweeps are kept as history
+        but never read back through this accessor."""
+        asof = await self.universe_asof()
+        if asof is None:
+            return []
+        sql = "SELECT * FROM universe WHERE asof=?"
+        params: tuple[Any, ...] = (asof.isoformat(),)
+        if qualified_only:
+            sql += " AND qualified=1"
+        rows = await self.fetchall(sql + " ORDER BY symbol", params)
+        return [
+            {
+                "symbol": r["symbol"],
+                "price": Decimal(r["price"]),
+                "adv10": Decimal(r["adv10"]),
+                "dollar_vol": Decimal(r["dollar_vol"]),
+                "pct_from_52wk_high": Decimal(r["pct_from_52wk_high"]),
+                "optionable": bool(r["optionable"]),
+                "leverage": Decimal(r["leverage"]),
+                "last_earnings": r["last_earnings"],
+                "is_etf": bool(r["is_etf"]),
+                "session_range_pct": (
+                    None if r["session_range_pct"] is None else Decimal(r["session_range_pct"])
+                ),
+                "description": r["description"],
+                "qualified": bool(r["qualified"]),
+            }
+            for r in rows
+        ]
+
+    async def append_ledger(
+        self, name: str, d: date, symbol: str | None, record: dict[str, Any]
+    ) -> None:
+        table = LEDGER_TABLES[name]
+        await self.execute(
+            f"INSERT INTO {table} (date, symbol, record_json, written_at) VALUES (?,?,?,?)",  # noqa: S608
+            (d.isoformat(), symbol or "", json.dumps(record, sort_keys=True), _now()),
+        )
+
+    async def ledger_rows(
+        self, name: str, d: date | None = None, latest_before: date | None = None
+    ) -> list[dict[str, Any]]:
+        table = LEDGER_TABLES[name]
+        if latest_before is not None:
+            row = await self.fetchone(
+                f"SELECT date FROM {table} WHERE date < ? ORDER BY date DESC LIMIT 1",  # noqa: S608
+                (latest_before.isoformat(),),
+            )
+            if row is None:
+                return []
+            d = date.fromisoformat(row["date"])
+        sql = f"SELECT date, symbol, record_json FROM {table}"  # noqa: S608
+        params: tuple[Any, ...] = ()
+        if d is not None:
+            sql += " WHERE date = ?"
+            params = (d.isoformat(),)
+        rows = await self.fetchall(sql + " ORDER BY id", params)
+        return [
+            {"date": r["date"], "symbol": r["symbol"], "record": json.loads(r["record_json"])}
+            for r in rows
+        ]
+
+    async def oi_symbol_seen(self, d: date, symbol: str) -> bool:
+        row = await self.fetchone(
+            "SELECT 1 FROM oi_snapshots WHERE date=? AND symbol=?", (d.isoformat(), symbol)
+        )
+        return row is not None
+
+    async def record_artifact(
+        self, kind: str, d: date | None, path: str, sha256: str, lines: int
+    ) -> None:
+        await self.execute(
+            "INSERT INTO artifacts(kind, date, path, sha256, lines, written_at)"
+            " VALUES (?,?,?,?,?,?)",
+            (kind, None if d is None else d.isoformat(), path, sha256, lines, _now()),
         )
