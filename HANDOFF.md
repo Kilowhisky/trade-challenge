@@ -1,3 +1,44 @@
+# Handoff — 2026-09-08, 18:45 ET
+
+**Plan 0c is merged and running on the Pi.** `main` = `1e3eadd` (33 commits, engine
+670 tests, runner 88, mypy --strict, ruff, both consistency checkers clean); the
+server adopted it, both images were rebuilt, `tc-engine` and the new `tc-runner`
+are up. The engine now mounts the MCP server (`/mcp/research`, `/mcp/decide`,
+bearer-gated — a request without a bearer is 401), the v2 research store was
+imported once (19 documents, 54 tombstones, 267 screen rows, 61 IV, 62 OI, 62
+events, the 500-name universe), and the first runs were started by hand:
+`weekly_universe` (engine code, no Claude) and `postclose` (the first Claude job
+through the runner). Their verdicts land in `job_runs`; logs on the Pi under
+`/home/knome/tc-logs/`. Runbook: `docs/superpowers/plans/2026-09-08-v3-plan0c-bootstrap.md`.
+
+**What runs on its own from now on** (`config.yml` schedule, ET): tick every 15 min
+09:32–15:47, session close 16:04, token check 07:05, expectations 07:30, backup
+23:30, scout 07:12, catalyst 18:33, preopen 08:17, postclose 16:22, research
+hourly 09:57–14:57, weekly universe Sat 07:40, sector tag Sat 09:40.
+
+**Still not possible: trading.** No order path exists until Plan 1
+(`docs/superpowers/plans/2026-09-08-v3-plan1-order-path.md`, written, not
+started). Resting GTC stops at Schwab are the only protection.
+
+## Needs you
+
+1. **Discord webhook** — still none. The engine and the host probe cannot reach
+   you. Create a webhook in `#llm-yolo` (or `#engine-shadow`) named `tc-engine`,
+   append `TC_DISCORD_WEBHOOK_URL=` and `TC_DISCORD_SHADOW_WEBHOOK_URL=` with it
+   to `/srv/tc/.env`, put `PROBE_WEBHOOK=` in `/etc/tc/probe.env`, then
+   `docker compose -f docker/docker-compose.yml restart engine` and
+   `sudo systemctl enable --now tc-healthprobe.timer`. Or grant the bot
+   Manage Webhooks and I do it.
+2. **§9 amendment (your words needed):** `CLAUDE.md` line 13 still resolves the
+   high-water mark "per tick.md §B5"; that document is a tombstone. The mark
+   lives in the engine's `session_status` table (`tc/loops/session.py`) and is
+   read through `status_latest`. Same for the header's `scripts/*.sh` mentions
+   (spec §14). Say the word and I write the amendment commit quoting you.
+3. Token: fresh, dies 2026-09-14 ~21:10 PDT; the engine posts the re-auth link
+   at day 5 once the webhook exists; `tc auth-url` prints it any time.
+
+---
+
 # Handoff — 2026-09-08, 00:15 ET
 
 **The engine has its token (installed 2026-09-07 ~21:10 PDT via the tailnet
