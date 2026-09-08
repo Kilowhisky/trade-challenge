@@ -31,5 +31,13 @@ def test_runner_is_built_on_the_pinned_toolchain_image() -> None:
     assert "TC_CLAUDE_CLI=/usr/local/bin/claude" in body
 
 
+def test_runner_reseeds_trust_for_its_own_cwd() -> None:
+    # The base image's baked /home/trader/.claude.json trusts only "/app" --
+    # this image's cwd is /app/repo, a different path, and without a re-seed
+    # here the CLI treats it as untrusted and ignores .claude/settings.json.
+    body = DOCKERFILE.read_text()
+    assert '"/app/repo":{"hasTrustDialogAccepted":true}' in body
+
+
 def test_runner_binds_loopback_only() -> None:
     assert '"--host", "127.0.0.1"' in DOCKERFILE.read_text()
