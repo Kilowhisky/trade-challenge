@@ -38,6 +38,7 @@ model, so a job that reports a hot candidate cannot fail to have it said.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from datetime import date, datetime
@@ -239,6 +240,44 @@ def _one_line(text: str | None) -> str:
     return " ".join((text or "").split())[:MAX_TEXT]
 
 
+def _recover_verdict_from_text(text: str, model: type[BaseModel]) -> BaseModel | None:
+    """Best-effort recovery of a structured verdict from a run's raw text.
+
+    Observed on the Pi: a 14-minute postclose run wrote its documents and
+    ledgers through the MCP tools and its final text was exactly the verdict
+    JSON object, but the CLI never populated `structured_output` — so
+    `verdict_raw` came back `None` on a run that plainly answered. Refusing to
+    look at `result_text` in that case turns a completed job into
+    `content_failed` for a reason that has nothing to do with the job.
+
+    Strips code-fence markers (a model that wraps its JSON in a ```json
+    block), then walks every `{` in the text from the END toward the start,
+    trying `json.JSONDecoder().raw_decode` at each position. The scan runs
+    right-to-left and returns on the first candidate that both parses AND
+    validates against `model`, so a nested object that happens to parse on
+    its own (say, one entry of `hot_fresh`) but does not validate as the
+    verdict itself is skipped in favour of the real, larger object that
+    encloses it. Returns `None` — never raises — when nothing in the text
+    both parses and validates; the caller's `content_failed` path is
+    unchanged in that case.
+    """
+    cleaned = text.replace("```json", "").replace("```", "")
+    decoder = json.JSONDecoder()
+    positions = [i for i, ch in enumerate(cleaned) if ch == "{"]
+    for idx in reversed(positions):
+        try:
+            obj, _ = decoder.raw_decode(cleaned, idx)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        try:
+            return model.model_validate(obj)
+        except ValidationError:
+            continue
+    return None
+
+
 def _validation_errors(exc: ValidationError) -> list[str]:
     """Location and error type only — never `input`.
 
@@ -279,7 +318,23 @@ def classify(
             "text": _one_line(res.result_text),
         }
     if res.verdict_raw is None:
-        # Exit 0, turns spent, nothing structured. The v2 bug, given a name.
+        # Exit 0, turns spent, nothing structured on `structured_output` — but
+        # the run may still have SAID the verdict as its final text (the CLI
+        # simply failed to populate the field). Try to recover it before
+        # calling this `content_failed`.
+        recovered = (
+            _recover_verdict_from_text(res.result_text, spec.verdict)
+            if res.result_text
+            else None
+        )
+        if recovered is not None:
+            detail = recovered.model_dump(mode="json")
+            detail["verdict_source"] = "text"
+            if spec.noop_when is not None and spec.noop_when(recovered):
+                return "noop", recovered, detail
+            return "done", recovered, detail
+        # No JSON object in the text parsed, or none validated. The v2 bug,
+        # given a name.
         return "content_failed", None, {
             "reason": "no structured output",
             "text": _one_line(res.result_text),

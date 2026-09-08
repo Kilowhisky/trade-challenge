@@ -179,6 +179,82 @@ async def test_no_structured_output_is_content_failed(notifier: RecordingNotifie
     assert "ran out of turns" in detail["text"]
 
 
+async def test_verdict_recovered_from_text_when_structured_output_missing(
+    notifier: RecordingNotifier,
+) -> None:
+    """The CLI can finish a real job and simply fail to populate
+    `verdict_raw` — the run's final text was exactly the verdict JSON
+    object. `classify` recovers it and treats it as a structured verdict
+    instead of `content_failed`."""
+    text = (
+        '{"kind": "postclose", "wrote": ["scorecard.md"], "hot_fresh": [], '
+        '"notes": "", "summary": "CLOSE | recovered from text"}'
+    )
+    payload = {**GOOD, "verdict_raw": None, "result_text": text}
+    at = datetime(2026, 9, 7, 20, 30, tzinfo=UTC)  # 16:30 ET, inside postclose
+    verdict, detail = await _jr(_ok(payload), notifier).execute("postclose", at)
+    assert verdict == "done"
+    assert detail["verdict_source"] == "text"
+    assert detail["wrote"] == ["scorecard.md"]
+    assert any("✅ CLOSE | recovered from text" in m for m in notifier.posted)
+
+
+async def test_verdict_recovered_from_a_fenced_json_block(
+    notifier: RecordingNotifier,
+) -> None:
+    text = (
+        "Here is the result.\n```json\n"
+        '{"kind": "postclose", "wrote": [], "hot_fresh": [], '
+        '"notes": "halted", "summary": "CLOSE | nothing"}'
+        "\n```\n"
+    )
+    payload = {**GOOD, "verdict_raw": None, "result_text": text}
+    at = datetime(2026, 9, 7, 20, 30, tzinfo=UTC)
+    verdict, detail = await _jr(_ok(payload), notifier).execute("postclose", at)
+    # `wrote == []` is still a deep-run noop, even recovered from text.
+    assert verdict == "noop"
+    assert detail["verdict_source"] == "text"
+
+
+async def test_text_with_a_failing_json_object_stays_content_failed(
+    notifier: RecordingNotifier,
+) -> None:
+    text = '{"kind": "postclose", "wrote": "scorecard.md"}'  # wrote must be a list
+    payload = {**GOOD, "verdict_raw": None, "result_text": text}
+    at = datetime(2026, 9, 7, 20, 30, tzinfo=UTC)
+    verdict, detail = await _jr(_ok(payload), notifier).execute("postclose", at)
+    assert verdict == "content_failed"
+    assert detail["reason"] == "no structured output"
+    assert "verdict_source" not in detail
+
+
+async def test_structured_output_still_wins_over_text(
+    notifier: RecordingNotifier,
+) -> None:
+    """When `verdict_raw` IS populated, the text-recovery path is never
+    consulted, and no `verdict_source` key appears in the detail."""
+    ignored_text = (
+        '{"kind": "postclose", "wrote": [], "hot_fresh": [], '
+        '"notes": "", "summary": "from text, ignored"}'
+    )
+    payload = {
+        **GOOD,
+        "verdict_raw": {
+            "kind": "postclose",
+            "wrote": ["scorecard.md"],
+            "hot_fresh": [],
+            "notes": "",
+            "summary": "CLOSE | structured",
+        },
+        "result_text": ignored_text,
+    }
+    at = datetime(2026, 9, 7, 20, 30, tzinfo=UTC)
+    verdict, detail = await _jr(_ok(payload), notifier).execute("postclose", at)
+    assert verdict == "done"
+    assert "verdict_source" not in detail
+    assert detail["summary"] == "CLOSE | structured"
+
+
 async def test_a_verdict_with_the_wrong_shape_is_content_failed(
     notifier: RecordingNotifier,
 ) -> None:
