@@ -59,11 +59,24 @@ whole point of a host-side probe is that it can still speak when the engine
 cannot. It does not need to be (and should not be) `TC_DISCORD_WEBHOOK_URL`
 or `TC_DISCORD_SHADOW_WEBHOOK_URL` from `/srv/tc/.env` below.
 
-## `/srv/tc/.env` — what the `engine` container itself needs
+## `/srv/tc/.env` and `/srv/tc/runner.env` — two files, two containers
 
-This is a separate file, owned by the `engine` service (`docker/docker-
-compose.yml`'s `env_file:` and the bind-mounted `/srv/tc/.env:ro`), not read
-by the probe. Chris creates it on the host; it is never committed. Keys:
+`engine` and `runner` each get their **own** secrets file. Compose `env_file:`
+loads every key in the file into the container with no way to select a
+subset, and `engine` and `runner` do not have the same trust level: `runner`
+is `FROM` the public toolchain image, reachable over host networking, and
+sized (`oom_score_adj: 800`) to be the box's preferred kill target. Putting
+the Schwab app credential or the Discord webhooks in a file `runner` also
+loads would mean an OOM-prone, network-exposed container holding secrets it
+never uses. **No Schwab credential may ever appear in `runner.env`.**
+
+Chris creates both files on the host; neither is ever committed. Both should
+be `chmod 600`, owned by the user the containers run as.
+
+### `/srv/tc/.env` — the `engine` container
+
+Bind-mounted read-only in `docker/docker-compose.yml` (`env_file:` plus
+`/srv/tc/.env:ro`), not read by the probe. Keys:
 
 ```
 TC_SCHWAB_APP_KEY=...
@@ -71,20 +84,39 @@ TC_SCHWAB_APP_SECRET=...
 TC_DISCORD_WEBHOOK_URL=...
 TC_DISCORD_SHADOW_WEBHOOK_URL=...
 TC_HEALTHCHECKS_BASE_URL=...
+TC_RUNNER_TOKEN=...
+TC_RUNNER_URL=...
+TC_MCP_RESEARCH_TOKEN=...
+TC_MCP_DECIDE_TOKEN=...
 ```
 
-The `runner` service reads the same file (its own `env_file:` in `docker/
-docker-compose.yml`) for two of its keys:
+`TC_RUNNER_TOKEN` here is the bearer the engine presents when it calls the
+runner's `POST /run` — the same value must also be in `runner.env` below, so
+the runner can check it. `TC_RUNNER_URL` is where the engine reaches the
+runner. `TC_MCP_RESEARCH_TOKEN` and `TC_MCP_DECIDE_TOKEN` are the two MCP
+role bearers the engine uses to build its token→role map; the engine hands
+the right one to the runner **per request**, in the `POST /run` body — they
+are never read from the runner's own environment.
+
+### `/srv/tc/runner.env` — the `runner` container only
+
+The `runner` service's own `env_file:` in `docker/docker-compose.yml`. Keys,
+and *only* these keys:
 
 ```
 CLAUDE_CODE_OAUTH_TOKEN=...
 TC_RUNNER_TOKEN=...
+TC_ENGINE_URL=...
 ```
 
 `CLAUDE_CODE_OAUTH_TOKEN` is the subscription token the CLI runs headless
-under; `TC_RUNNER_TOKEN` is the bearer the `engine` presents when it calls the
-runner's `POST /run`. Nothing else goes in the runner's environment — no
-Schwab credential, no database — see `docker/docker-compose.yml` for why.
+under. `TC_RUNNER_TOKEN` is the same shared secret as in `/srv/tc/.env`
+above — the runner checks an incoming request's bearer against it.
+`TC_ENGINE_URL` is how the runner reaches the engine's MCP endpoints
+(`http://127.0.0.1:8080`, reachable because both containers use host
+networking). Nothing else goes in this file or the runner's environment — no
+Schwab credential, no database, no MCP role token — see
+`docker/docker-compose.yml` for why.
 
 ## Building and running the `engine` service
 

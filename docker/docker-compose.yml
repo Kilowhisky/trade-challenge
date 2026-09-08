@@ -281,9 +281,18 @@ services:
     environment:
       TZ: America/New_York
       HOME: /home/trader
-      # 127.0.0.1 is the ENGINE, reachable because both use host networking.
-      TC_ENGINE_URL: http://127.0.0.1:8080
-    env_file: [/srv/tc/.env]        # CLAUDE_CODE_OAUTH_TOKEN, TC_RUNNER_TOKEN
+    # A file of its OWN, deliberately not the engine's: compose env_file loads
+    # every key in a file with no way to select a subset, and the engine's
+    # secrets file holds the Schwab app credential, the Discord webhooks and
+    # the MCP role bearers. Loading that file here would put all of it in the
+    # one container that is FROM the public toolchain image, network-exposed
+    # via host networking, and sized to be the kernel's preferred OOM victim.
+    # This one holds ONLY CLAUDE_CODE_OAUTH_TOKEN, TC_RUNNER_TOKEN and
+    # TC_ENGINE_URL (127.0.0.1:8080 -- reachable because both containers use
+    # host networking; see host/README.md) -- nothing this container does not
+    # itself need. The MCP role bearer is never in here: it travels per-run in
+    # the engine's POST /run body instead (app.py's RunRequest).
+    env_file: [/srv/tc/runner.env]
     volumes:
       # Read-only, and it is the ONLY filesystem the runner can see: prompts,
       # CLAUDE.md, strategy.md, rules.yml. No store volume, no broker token,
