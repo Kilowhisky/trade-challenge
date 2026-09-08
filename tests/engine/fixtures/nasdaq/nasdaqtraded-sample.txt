@@ -1,0 +1,21 @@
+Nasdaq Traded|Symbol|Security Name|Listing Exchange|Market Category|ETF|Round Lot Size|Test Issue|Financial Status|CQS Symbol|NASDAQ Symbol|NextShares
+Y|SPY|SPDR S&P 500 ETF Trust|P| |Y|100|N| |SPY|SPY|N
+Y|CSX|CSX Corporation - Common Stock|Q|Q|N|100|N|N|CSX|CSX|N
+Y|MPC|Marathon Petroleum Corporation - Common Stock|N| |N|100|N| |MPC|MPC|N
+Y|AAL|American Airlines Group Inc. - Common Stock|Z| |N|100|N| |AAL|AAL|N
+Y|AAAU|Goldman Sachs Physical Gold ETF Shares|A| |Y|100|N| |AAAU|AAAU|N
+Y|CSX|CSX Corporation - Common Stock|Q|Q|N|100|N|N|CSX|CSX|N
+Y|TESTQ|Nasdaq Test Security - Common Stock|Q|Q|N|100|Y|N|TESTQ|TESTQ|N
+Y|WARRW|Acme Industries Inc. - Warrant|Q|S|N|100|N|N|WARRW|WARRW|N
+Y|UNITU|Acme Industries Inc. - Unit|Q|S|N|100|N|N|UNITU|UNITU|N
+Y|RGHTR|Acme Industries Inc. - Right|Q|S|N|100|N|N|RGHTR|RGHTR|N
+Y|RIGHTR|Acme Holdings Inc. - Right|Q|S|N|100|N|N|RIGHTR|RIGHTR|N
+Y|PREFA|Acme Industries Inc. - Preferred Stock Series A|N| |N|100|N| |PREFA|PREFA|N
+Y|NOTEA|Acme Capital Trust - 5.50% Note|N| |N|100|N| |NOTEA|NOTEA|N
+Y|BONDA|Acme Industries Inc. - Senior Bond due 2032|N| |N|100|N| |BONDA|BONDA|N
+Y|DEPOA|Acme Group plc - American Depositary Shares|N| |N|100|N| |DEPOA|DEPOA|N
+Y|WHENA|Acme Newco Inc. - Common Stock When Issued|N| |N|100|N| |WHENA|WHENA|N
+Y|TOOLONGX|Acme Overlong Ticker Inc. - Common Stock|N| |N|100|N| |TOOLONGX|TOOLONGX|N
+Y|BRK$A|Berkshire Oddball Class A|N| |N|100|N| |BRK$A|BRK$A|N
+Y|IEXCO|IEX Listed Co - Common Stock|V| |N|100|N| |IEXCO|IEXCO|N
+File Creation Time: 09052026 22:15|||||||||||

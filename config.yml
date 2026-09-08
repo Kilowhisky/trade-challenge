@@ -30,6 +30,7 @@ schedule:                      # ET. weekdays = trading days per get_market_hour
   token_check:   "at 07:05 daily"
   expectations:  "at 07:30 daily"
   backup:        "at 23:30 daily"
+  weekly_universe: "at 07:40 sat"   # the market is shut; the regular-session close is the screening price
 expectations:                  # spec §7 layer 3 — declarative anomaly checks over the store
   - name: ticks_per_session_min
     check: ticks_per_session_min

@@ -55,7 +55,9 @@ from tc.loops.reconcile import reconcile
 from tc.loops.session import close_session
 from tc.loops.tick import TickResult, run_tick
 from tc.loops.token import token_check
+from tc.loops.universe import DirectoryUnavailable, counts_detail, run_weekly_universe
 from tc.notify import Notifier, Pinger
+from tc.research.docs import DocStore
 from tc.rules.model import Rules
 from tc.scheduler import Fire, Scheduler, ScheduleSpec
 from tc.store.db import Store, Verdict
@@ -65,7 +67,9 @@ log = logging.getLogger(__name__)
 # The job table. A name not in here is a config error, not a job that quietly
 # never runs: `Engine.start` rejects the schedule and `--once` rejects the
 # argument, both before anything is opened.
-JOBS: tuple[str, ...] = ("tick", "session_close", "token_check", "expectations", "backup")
+JOBS: tuple[str, ...] = (
+    "tick", "session_close", "token_check", "expectations", "backup", "weekly_universe",
+)
 
 BACKUPS_KEPT = 14  # ~3 weeks of trading days; the store is small and the disk is not
 LOOP_INTERVAL_S = 1.0
@@ -102,6 +106,7 @@ class Engine:
         pinger: Pinger,
         clock: Callable[[], datetime],
         sleep_s: float = LOOP_INTERVAL_S,
+        client: httpx.AsyncClient | None = None,
     ) -> None:
         self._s = settings
         self._broker = broker
@@ -110,11 +115,16 @@ class Engine:
         self._pinger = pinger
         self._clock = clock
         self._sleep_s = sleep_s
+        # The shared HTTP client Notifier and Pinger already hold. The weekly
+        # sweep fetches the Nasdaq directory over it; a job that needs it and
+        # was not given one opens its own rather than failing.
+        self._client = client
         # Rules load here, not in start(): a rules.yml that will not parse is
         # a config failure the operator must see at once, and loading it early
         # means every job below can treat `self._rules` as present.
         self._rules = Rules.load(settings.engine.repo_dir / "rules.yml")
         self._leveraged = set(settings.engine.leveraged_symbols)
+        self._docs = DocStore(settings.engine.research_dir, store)
         self._window: MarketWindow | None = None
         # A fallback window is a guess (every weekday trades, 09:30-16:00). It
         # is held only until the broker will answer: an early close read as a
@@ -332,6 +342,8 @@ class Engine:
             return await self._job_expectations(now)
         if job == "backup":
             return await self._job_backup(now)
+        if job == "weekly_universe":
+            return await self._job_weekly_universe(now)
         raise ValueError(f"unknown job {job!r}")
 
     # --- jobs --------------------------------------------------------------
@@ -449,6 +461,31 @@ class Engine:
             return "noop", {"reason": "backup exists", "path": str(path)}
         await self._store.backup_to(path)
         return "done", {"path": str(path), "pruned": _prune_backups(path.parent, BACKUPS_KEPT)}
+
+    async def _job_weekly_universe(self, now: datetime) -> tuple[Verdict, dict[str, Any]]:
+        if self._client is None:
+            async with httpx.AsyncClient() as client:
+                return await self._sweep_universe(now, client)
+        return await self._sweep_universe(now, self._client)
+
+    async def _sweep_universe(
+        self, now: datetime, client: httpx.AsyncClient
+    ) -> tuple[Verdict, dict[str, Any]]:
+        try:
+            counts = await run_weekly_universe(
+                broker=self._broker, store=self._store, docs=self._docs,
+                rules=self._rules, client=client, now=now,
+            )
+        except DirectoryUnavailable as e:
+            # Not a crash: the directory was unreadable and last week's universe
+            # stands. It is `failed` so the deadman sees it, with the reason.
+            await self.notifier.post(f"⚠️ weekly_universe: {e}")
+            return "failed", {"error": "DirectoryUnavailable", "detail": str(e)}
+        await self.notifier.post(
+            f"🗺️ universe {counts.fetched} fetched / {counts.qualified} qualified"
+            f" / {counts.ranked} ranked ({counts.dropped} dropped)"
+        )
+        return "done", counts_detail(counts)
 
     # --- broker/window helpers ---------------------------------------------
 
@@ -676,6 +713,7 @@ def build_engine(
             client,
         ),
         clock=clock,
+        client=client,
     )
 
 
