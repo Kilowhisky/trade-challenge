@@ -26,9 +26,12 @@
 # not a directory to git — the moment these became symlinks they fell out of
 # the ignore rules and showed up as untracked, one `git add -A` away from
 # committing machine-specific absolute paths into a public repo.
-research
-status
-trade-log.csv
+# ANCHORED with a leading slash: unanchored, `research` also matched
+# engine/tc/research -- the engine's own Python package, which is source and
+# belongs in this repo. Only the three repo-root symlinks are trade data.
+/research
+/status
+/trade-log.csv
 
 
 # Rollback target written by scripts/deploy.sh on the server. Machine state,
