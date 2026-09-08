@@ -1,4 +1,16 @@
-# Handoff — 2026-09-07 (Labor Day), 13:15 ET
+# Handoff — 2026-09-08, 00:15 ET
+
+**The engine has its token (installed 2026-09-07 ~21:10 PDT via the tailnet
+callback; dies 2026-09-14 ~21:10 PDT, re-auth prompt at day 5).** First real
+reconcile at 00:10 ET: 4 positions / 4 stops, account value $3,718.11, HWM
+$3,800.00, drawdown −2.16%, no flags. The 09:32 tick on 09-08 is the first
+watched session under v3. Still no Discord webhook, so trips reach nobody
+until `/srv/tc/.env` has `TC_DISCORD_SHADOW_WEBHOOK_URL`; check
+`https://brewmaster.tail14458e.ts.net:8443/health` and `/api/ticks?date=` instead.
+
+---
+
+# Earlier — 2026-09-07 (Labor Day), 13:15 ET
 
 **The old stack is retired.** Chris, 10:03 PDT: *"The old broker is dead."*
 `tc-broker` and `tc-scheduler` are stopped (not deleted — rollback is
