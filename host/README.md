@@ -73,6 +73,19 @@ TC_DISCORD_SHADOW_WEBHOOK_URL=...
 TC_HEALTHCHECKS_BASE_URL=...
 ```
 
+The `runner` service reads the same file (its own `env_file:` in `docker/
+docker-compose.yml`) for two of its keys:
+
+```
+CLAUDE_CODE_OAUTH_TOKEN=...
+TC_RUNNER_TOKEN=...
+```
+
+`CLAUDE_CODE_OAUTH_TOKEN` is the subscription token the CLI runs headless
+under; `TC_RUNNER_TOKEN` is the bearer the `engine` presents when it calls the
+runner's `POST /run`. Nothing else goes in the runner's environment — no
+Schwab credential, no database — see `docker/docker-compose.yml` for why.
+
 ## Building and running the `engine` service
 
 From the repo root:

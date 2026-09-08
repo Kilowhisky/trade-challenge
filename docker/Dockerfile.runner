@@ -1,0 +1,25 @@
+# The runner: claude-agent-sdk plus the pinned CLI, and nothing else.
+#
+# FROM the existing toolchain image on purpose. That image already carries the
+# pinned `claude` 2.1.234 with DISABLE_AUTOUPDATER=1, the trust seed for the
+# repo mount, and the unprivileged `trader` user at UID 1000 -- all of which the
+# runner needs and none of which is worth reproducing in a second Dockerfile
+# that would then drift from the first.
+FROM ghcr.io/kilowhisky/trade-challenge:latest
+
+USER root
+# A dedicated venv so the SDK cannot collide with the image's uv-managed tools.
+RUN uv venv --python 3.12 /opt/runner
+COPY runner/pyproject.toml /srv/runner/pyproject.toml
+COPY runner/tc_runner /srv/runner/tc_runner
+RUN /opt/runner/bin/pip install --no-cache-dir /srv/runner \
+    && chmod -R a+rX /opt/runner /srv/runner
+
+USER trader
+ENV PATH=/opt/runner/bin:$PATH \
+    TC_CLAUDE_CLI=/usr/local/bin/claude \
+    TC_REPO_DIR=/app/repo
+WORKDIR /srv/runner
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8090/health',timeout=3).status==200 else 1)"
+CMD ["uvicorn", "tc_runner.app:app", "--host", "127.0.0.1", "--port", "8090"]

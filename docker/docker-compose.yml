@@ -266,6 +266,37 @@ services:
     mem_limit: 512m
     oom_score_adj: 300
 
+  # --- the Claude runner: one job at a time, its own memory fence -----------
+  # A separate cgroup is the only reliable memory fence Docker offers on this
+  # Pi, and `claude` is the one memory-hungry process on the box (~330MB peak
+  # over a 17-hour window). An OOM here costs a research run; an OOM in the
+  # engine would cost the token holder, a pending approval and the stop loop.
+  # oom_score_adj 800 > the engine's 300 makes the kernel pick this one first.
+  runner:
+    profiles: ["engine"]
+    build: {context: .., dockerfile: docker/Dockerfile.runner}
+    image: ${TC_RUNNER_IMAGE:-ghcr.io/kilowhisky/trade-challenge-runner:latest}
+    container_name: tc-runner
+    restart: unless-stopped
+    environment:
+      TZ: America/New_York
+      HOME: /home/trader
+      # 127.0.0.1 is the ENGINE, reachable because both use host networking.
+      TC_ENGINE_URL: http://127.0.0.1:8080
+    env_file: [/srv/tc/.env]        # CLAUDE_CODE_OAUTH_TOKEN, TC_RUNNER_TOKEN
+    volumes:
+      # Read-only, and it is the ONLY filesystem the runner can see: prompts,
+      # CLAUDE.md, strategy.md, rules.yml. No store volume, no broker token,
+      # no database.
+      - ..:/app/repo:ro
+      # The CLI's own state (session ids, update-check cache) -- not a secret;
+      # the two MCP role tokens are handed to the runner per-request by the
+      # engine and never sit in this container's environment or a volume.
+      - claude-home:/home/trader/.claude
+    network_mode: host
+    mem_limit: 1g
+    oom_score_adj: 800
+
 volumes:
   schwab-token:
   claude-home:
