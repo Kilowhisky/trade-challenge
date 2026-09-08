@@ -71,7 +71,6 @@ class McpDeps:
     rules: Rules
     settings: Settings
     clock: Callable[[], datetime]
-    account_hash: Callable[[], str | None]
 
 
 class Pong(BaseModel):

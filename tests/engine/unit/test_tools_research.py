@@ -119,7 +119,6 @@ async def research_server(tmp_path: Path, store: Store, docs: DocStore) -> FastM
         rules=Rules.load(REPO / "rules.yml"),
         settings=_settings(tmp_path),
         clock=lambda: NOW,
-        account_hash=lambda: "HASH_REDACTED",
     )
     server = FastMCP(name="engine", streamable_http_path="/", stateless_http=False)
     tools_research.register(server, deps, "research")

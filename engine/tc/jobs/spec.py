@@ -103,10 +103,60 @@ class SectorVerdict(BaseModel):
     summary: str
 
 
+# How deep a `$ref` chain may be before inlining calls it a cycle. The verdict
+# models nest one level (`ScoutVerdict` -> `Escalation`); anything approaching
+# this is a model shape nobody meant to write.
+MAX_REF_DEPTH = 8
+
+
 def output_schema(model: type[BaseModel]) -> dict[str, Any]:
-    """`model_json_schema()` already emits `additionalProperties: false`,
-    because every verdict model above forbids extras."""
-    return model.model_json_schema()
+    """The verdict's JSON schema with every `$ref` resolved and no `$defs`.
+
+    `model_json_schema()` already emits `additionalProperties: false`, because
+    every verdict model above forbids extras — but it also lifts each nested
+    model (`Escalation`, `HotFresh`) into `$defs` and leaves a `$ref` behind.
+    That schema is handed straight to the CLI as `--output-format json_schema`,
+    and a reference is one more thing between the model and a valid answer:
+    the constraints on `escalations[]` are stated somewhere the object being
+    described does not point at in plain sight. Inlining costs a few duplicated
+    lines and removes the indirection entirely.
+
+    Raises on an unresolvable or recursive reference rather than emitting a
+    schema with a dangling `$ref`: a verdict model this cannot flatten is a
+    model to restructure, and the failure belongs at import time (where every
+    `JOB_SPECS` entry is built) rather than in the CLI's parser.
+    """
+    schema = model.model_json_schema()
+    defs = schema.pop("$defs", {})
+    flat = _inline(schema, defs, ())
+    assert isinstance(flat, dict)  # a JSON-schema root is an object by construction
+    return flat
+
+
+def _inline(node: Any, defs: dict[str, Any], seen: tuple[str, ...]) -> Any:
+    """Replace `{"$ref": "#/$defs/X"}` with X's definition, everywhere.
+
+    Sibling keys win over the target's own: pydantic writes
+    `{"$ref": ..., "description": ...}` when a field carries its own
+    description, and that description is about the field, not the model.
+    """
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str):
+            name = ref.removeprefix("#/$defs/")
+            if name == ref or name not in defs:
+                raise ValueError(f"output schema carries an unresolvable $ref: {ref!r}")
+            if name in seen or len(seen) >= MAX_REF_DEPTH:
+                raise ValueError(
+                    f"output schema cannot be flattened: $ref cycle through {name!r}"
+                )
+            target = _inline(defs[name], defs, (*seen, name))
+            siblings = {k: _inline(v, defs, seen) for k, v in node.items() if k != "$ref"}
+            return {**target, **siblings}
+        return {k: _inline(v, defs, seen) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_inline(v, defs, seen) for v in node]
+    return node
 
 
 # ---------------------------------------------------------------------------

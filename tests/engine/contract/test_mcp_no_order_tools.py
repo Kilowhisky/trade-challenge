@@ -7,8 +7,10 @@ purpose:
 
 * against the declared registry table, which is what `jobs/spec.py` builds each
   job's allowlist from and what `rules/consistency.py` fails the build on; and
-* against the LIVE servers, so a tool registered without being listed -- the
-  case a table-only check is blind to -- still trips it.
+* against the LIVE servers, built from the real registrars and WITHOUT
+  `allow_stubs`, so a tool registered without being listed -- the case a
+  table-only check is blind to -- still trips it, and so does a declared name
+  that nothing implements.
 
 The live half also pins live == declared in both directions. A name in the
 table that nothing registers is as much a defect as a tool nothing declared:
@@ -27,6 +29,8 @@ from mcp.server.fastmcp import FastMCP
 
 from tc.broker.fake import FakeBroker
 from tc.config import Settings, load_settings
+from tc.mcp import server as server_mod
+from tc.mcp import tools_read, tools_research
 from tc.mcp.registry import FORBIDDEN, ROLE_TOOLS, Role, forbidden_tools
 from tc.mcp.server import McpDeps, build_servers
 from tc.research.docs import DocStore
@@ -61,7 +65,9 @@ def _settings(tmp_path: Path) -> Settings:
 
 
 @pytest.fixture
-async def engine_servers(tmp_path: Path) -> AsyncIterator[dict[Role, FastMCP]]:
+async def engine_servers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[dict[Role, FastMCP]]:
     store = Store(tmp_path / "e.db")
     await store.open()
     deps = McpDeps(
@@ -71,15 +77,26 @@ async def engine_servers(tmp_path: Path) -> AsyncIterator[dict[Role, FastMCP]]:
         rules=Rules.load(REPO / "rules.yml"),
         settings=_settings(tmp_path),
         clock=lambda: NOW,
-        account_hash=lambda: "HASH_REDACTED",
     )
+    # The REAL registrars, in the same arrangement `main._wire_mcp_registrars`
+    # installs: read tools on both roles (`tools_read` withholds `book` from
+    # research itself), the research writers on research only. Set through
+    # `_REGISTRARS` rather than `server.register` because that table is module
+    # state -- `register` appends, so calling it per test would build servers
+    # with two copies of every tool -- and `monkeypatch.setitem` puts it back.
+    #
+    # `allow_stubs` is NOT passed, and that is the point of this fixture.
+    # Under stubs every declared name is present whether or not anything
+    # implements it, so "no order-shaped tool is registered" and
+    # "live == declared" were both true of a server that answered nothing.
+    # Building the way production builds means these assertions are about the
+    # tools the runner can actually call.
+    monkeypatch.setitem(server_mod._REGISTRARS, "research", [
+        tools_read.register, tools_research.register,
+    ])
+    monkeypatch.setitem(server_mod._REGISTRARS, "decide", [tools_read.register])
     try:
-        # allow_stubs: tasks 8 and 9 supply the bodies. The §10 contract is
-        # about NAMES, and a stub carries its declared name exactly, so the
-        # check is meaningful before the tools exist. `build_servers` refuses
-        # a stub-filled server by default (test_mcp_server.py) precisely so
-        # nothing else gets one by accident.
-        yield build_servers(deps, allow_stubs=True)
+        yield build_servers(deps)
     finally:
         await store.close()
 

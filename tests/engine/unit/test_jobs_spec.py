@@ -7,9 +7,11 @@ runtime 403 from the MCP gate discovered mid-job.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 from tc.jobs.spec import JOB_SPECS, DeepVerdict, ScoutVerdict, output_schema, tools_for
 from tc.mcp.registry import ROLE_TOOLS
@@ -60,6 +62,42 @@ def test_schema_forbids_extra_keys_so_a_stray_field_fails_the_verdict() -> None:
     schema = output_schema(ScoutVerdict)
     assert schema["additionalProperties"] is False
     assert set(schema["required"]) >= {"cohort", "observed", "escalations", "summary"}
+
+
+def test_no_job_schema_carries_a_ref_or_defs() -> None:
+    """The schema goes to the CLI as `--output-format json_schema`, and a
+    `$ref` puts the constraints on `escalations[]` somewhere the object being
+    described does not point at in plain sight. Every nested model is inlined.
+    """
+    for name, spec in JOB_SPECS.items():
+        text = json.dumps(output_schema(spec.verdict))
+        assert "$ref" not in text, name
+        assert "$defs" not in text, name
+
+
+def test_the_inlined_schema_still_constrains_the_nested_model() -> None:
+    """Inlining must move the definition, not drop it: the `Escalation` object
+    keeps its own `additionalProperties: false` and its own required keys."""
+    escalation = output_schema(ScoutVerdict)["properties"]["escalations"]["items"]
+    assert escalation["type"] == "object"
+    assert escalation["additionalProperties"] is False
+    assert set(escalation["required"]) == {"symbol", "claim"}
+    assert escalation["properties"]["evidence_ids"]["items"] == {"type": "string"}
+    fresh = output_schema(DeepVerdict)["properties"]["hot_fresh"]["items"]
+    assert fresh["additionalProperties"] is False
+    assert fresh["properties"]["sleeve"]["enum"] == ["core", "catalyst", "option"]
+
+
+def test_a_schema_that_cannot_be_flattened_is_a_failure_not_a_dangling_ref() -> None:
+    """A recursive verdict model is a model to restructure. It must not emit a
+    schema whose `$ref` points at a `$defs` block this just removed."""
+
+    class Recursive(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        child: Recursive | None = None
+
+    with pytest.raises(ValueError, match="cycle"):
+        output_schema(Recursive)
 
 
 def test_tools_for_rejects_a_tool_no_role_has() -> None:

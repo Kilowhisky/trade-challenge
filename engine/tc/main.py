@@ -250,7 +250,6 @@ class Engine:
             rules=self._rules,
             settings=self._s,
             clock=self._clock,
-            account_hash=lambda: self._account_hash,
         )
         return McpMounts(servers=build_servers(deps), tokens=tokens)
 

@@ -113,7 +113,6 @@ async def _serve(tmp_path: Path, *, under: str = "") -> AsyncIterator[Served]:
         rules=Rules.load(REPO / "rules.yml"),
         settings=settings,
         clock=lambda: NOW,
-        account_hash=lambda: "HASH_REDACTED",
     )
     state = EngineState(
         token=_token_store(settings, tmp_path),
@@ -346,7 +345,6 @@ def _deps(tmp_path: Path, store: Store) -> McpDeps:
         rules=Rules.load(REPO / "rules.yml"),
         settings=load_settings(cfg, env),
         clock=lambda: NOW,
-        account_hash=lambda: "HASH_REDACTED",
     )
 
 

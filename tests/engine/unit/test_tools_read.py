@@ -92,7 +92,6 @@ def _server(store: Store, broker: FakeBroker, tmp_path: Path, role: Role) -> Fas
         rules=Rules.load(REPO / "rules.yml"),
         settings=_settings(tmp_path),
         clock=lambda: NOW,
-        account_hash=lambda: HASH,
     )
     server = FastMCP(name="engine", streamable_http_path="/", stateless_http=False)
     tools_read.register(server, deps, role)
