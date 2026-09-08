@@ -5,11 +5,16 @@ from pathlib import Path
 import pytest
 
 from tc.rules.consistency import run_checks
+from tc.rules.model import Rules
 
 REPO = Path(__file__).resolve().parents[3]
 # Built by concatenation so this test file (and the plan that quotes it) never
 # contains a literal annotation for the checkers to parse.
 MARK = "<!--" + "rule:manual_single_position_pct-->"
+
+
+def _rules() -> Rules:
+    return Rules.load(REPO / "rules.yml")
 
 
 def _mini_repo(tmp_path: Path) -> Path:
@@ -141,3 +146,44 @@ def test_unreadable_file_is_a_finding_not_a_crash(tmp_path: Path) -> None:
     finally:
         bad.chmod(0o644)
     assert any("unreadable" in f.message for f in rep.findings)
+
+
+# --- the MCP tool registry (spec §9/§10) --------------------------------
+
+
+def test_tool_registry_check_trips_on_an_order_shaped_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bash checker could not see this at all -- there was no registry to
+    see. It lives in the checker, not only in the contract test, because a
+    rule only a test enforces is a rule the build does not."""
+    import tc.mcp.registry as reg
+    from tc.rules.consistency import check_tool_registry
+
+    monkeypatch.setitem(reg.ROLE_TOOLS, "research", ("quotes", "cancel_order"))
+    findings, _ = check_tool_registry(REPO, _rules())
+    assert [f.message for f in findings] == [
+        "role 'research' exposes order-shaped tool 'cancel_order'"
+    ]
+
+
+def test_tool_registry_check_passes_as_shipped() -> None:
+    from tc.rules.consistency import check_tool_registry
+
+    findings, count = check_tool_registry(REPO, _rules())
+    assert findings == []
+    assert count > 0
+
+
+def test_run_checks_includes_the_tool_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Wired into CHECKS, not merely importable: an order-shaped tool must
+    fail `tc check`, which is what the gate actually runs."""
+    import tc.mcp.registry as reg
+
+    rep = run_checks(REPO)
+    assert "tool_registry" in rep.checked
+
+    monkeypatch.setitem(reg.ROLE_TOOLS, "decide", ("place_order",))
+    rep = run_checks(REPO)
+    assert not rep.ok
+    assert any(f.check == "tool_registry" for f in rep.findings)

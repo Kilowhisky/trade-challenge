@@ -277,6 +277,32 @@ def check_endgame(root: Path, rules: Rules) -> tuple[list[Finding], int]:
     return out, len(files)
 
 
+def check_tool_registry(root: Path, rules: Rules) -> tuple[list[Finding], int]:
+    """Spec §9/§10: no MCP role may expose a tool matching place|cancel|replace|order.
+
+    The bash checker could not see this at all -- there was no registry to
+    see. It is checked here rather than only in the contract test because a
+    rule that only a test enforces is a rule the build does not: `tc check` is
+    what the gate runs, and this is the one §10 property that can be decided
+    without standing a server up.
+
+    Neither `root` nor `rules` is read: the registry is Python, not a
+    document, and the signature matches CHECKS so it can be run beside the
+    greps. Imported inside the function so `tc.rules` keeps no import edge on
+    `tc.mcp` -- the checker is loaded by every job, the MCP surface by one.
+    """
+    from tc.mcp.registry import ROLE_TOOLS, forbidden_tools
+
+    findings = [
+        Finding(
+            "tool_registry", "engine/tc/mcp/registry.py", None,
+            f"role {role!r} exposes order-shaped tool {name!r}",
+        )
+        for role, name in forbidden_tools()
+    ]
+    return findings, sum(len(v) for v in ROLE_TOOLS.values())
+
+
 # Whether a check needs a Rules object actually loaded from rules.yml to do
 # its job. annotations/tightness/derived read rule VALUES; the rest only grep
 # raw text (rules.yml's own text, or docs/scripts) and never touch `rules`.
@@ -297,6 +323,7 @@ CHECKS: tuple[tuple[str, Callable[[Path, Rules], tuple[list[Finding], int]], boo
     ("ungated_broker", check_ungated, False),
     ("cross_basis", check_cross_basis, False),
     ("endgame", check_endgame, False),
+    ("tool_registry", check_tool_registry, False),
 )
 
 

@@ -17,25 +17,35 @@ Three routes, three different trust levels:
   query params, which are one-time OAuth secrets.
 * `/api/*` is a read-only feed for a dashboard: the latest `session_status`
   ledger row, the most recent in-memory tick, and a day's tick history.
+* `/mcp/<role>/` is the Claude runner's MCP surface, mounted only when the
+  engine was given role tokens. It is the one part of this app behind a
+  credential, and `RoleAuthMiddleware` is deliberately scoped to that prefix:
+  `/health` must keep answering an unattended probe that carries no bearer.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
 import httpx
 from authlib.common.errors import AuthlibBaseError
+from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
-from starlette.routing import Route
+from starlette.routing import BaseRoute, Route
+from starlette.types import Lifespan
 
 from tc.broker.token import NoAuthInProgress, TokenStore, action_for
 from tc.loops.tick import TickResult
+from tc.mcp.registry import Role
+from tc.mcp.server import RoleAuthMiddleware, mcp_lifespan, mcp_routes
 from tc.store.db import Store
 
 logger = logging.getLogger(__name__)
@@ -101,7 +111,20 @@ async def _open_alert_count(store: Store) -> int:
         return 0
 
 
-def build_app(state: EngineState) -> Starlette:
+@dataclass
+class McpMounts:
+    """The MCP half of the app, or nothing at all.
+
+    Optional by design: an engine with no role tokens configured serves
+    exactly what Phase 0b served, so a deployment without a runner still
+    boots, ticks and answers /health rather than failing on a missing secret.
+    """
+
+    servers: dict[Role, FastMCP]
+    tokens: dict[str, str]          # bearer -> role, from Settings.mcp_tokens()
+
+
+def build_app(state: EngineState, *, mcp: McpMounts | None = None) -> Starlette:
     async def health(request: Request) -> Response:
         db_ok = await _db_ok(state.store)
         token_state, _age_days, days_until_dead = state.token.status()
@@ -187,11 +210,26 @@ def build_app(state: EngineState) -> Starlette:
         rows = await state.store.ticks_for(date_str)
         return JSONResponse({"rows": [r.model_dump(mode="json") for r in rows]})
 
-    return Starlette(
-        routes=[
-            Route("/health", health, methods=["GET"]),
-            Route("/oauth/callback", oauth_callback, methods=["GET"]),
-            Route("/api/status", api_status, methods=["GET"]),
-            Route("/api/ticks", api_ticks, methods=["GET"]),
-        ]
-    )
+    routes: list[BaseRoute] = [
+        Route("/health", health, methods=["GET"]),
+        Route("/oauth/callback", oauth_callback, methods=["GET"]),
+        Route("/api/status", api_status, methods=["GET"]),
+        Route("/api/ticks", api_ticks, methods=["GET"]),
+    ]
+    middleware: list[Middleware] = []
+    lifespan: Lifespan[Starlette] | None = None
+    if mcp is not None:
+        routes.extend(mcp_routes(mcp.servers))
+        middleware.append(Middleware(RoleAuthMiddleware, tokens=mcp.tokens))
+
+        @contextlib.asynccontextmanager
+        async def _lifespan(app: Starlette) -> AsyncIterator[None]:
+            # Both session managers, entered here and nowhere else:
+            # `streamable_http_app()` builds them without starting them, and
+            # mounting into this app replaced FastMCP's own lifespan.
+            async with mcp_lifespan(mcp.servers):
+                yield
+
+        lifespan = _lifespan
+
+    return Starlette(routes=routes, middleware=middleware, lifespan=lifespan)
