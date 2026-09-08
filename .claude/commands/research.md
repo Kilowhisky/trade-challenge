@@ -7,12 +7,12 @@ argument-hint: "[focus for this pass, optional — e.g. a symbol or sector to ev
 
 A research pass is a **read-only** sweep of the market against the
 playbook's qualification rules (§4 core, §5 catalyst, §6/§3.2 options),
-maintaining `research/candidates.md`. It answers one question: *if capital
+maintaining the `candidates` document. It answers one question: *if capital
 frees up or a setup ripens, what would we even look at?*
 
 A research pass never places, previews, replaces, or cancels an order, and
 never opens the entry workflow itself. Its only outputs are the candidates
-file and, through the parent's §E gate, at most a one-line ping.
+document and, through the parent's §E gate, at most a one-line ping.
 
 Design + decisions: `docs/superpowers/specs/2026-08-14-research-loop-design.md`.
 
@@ -22,26 +22,27 @@ when Chris asks for a research pass directly.
 
 ## §Scheduled — the server runs this pass hourly
 
-**On the always-on server this pass is a cron job, not a chained call.**
-`docker/crontab` fires `scheduled-run.sh research` **hourly at :57, hours 9-14 ET**
-(09:57 through 14:57: six passes a session, weekdays only), inside a
-09:45–15:15 window guard. The `research-scout` agent runs it directly with no
-parent: the §A gates below become the scout's own first step (the dispatch
-prompt spells out how — the cadence gate is satisfied by the schedule, the
-halt check reads the day's tick ledger, an unacknowledged `ALERT.md`
-suppresses `HOT-FRESH:` lines), and the cached context a parent would supply
-is resolved read-only from `scripts/latest-status.sh` and
-`status/ticks/DATE.tsv`.
+**On the always-on server this pass is an engine job, not a chained call.**
+The engine schedules it **hourly at :57, hours 9-14 ET** (09:57 through
+14:57: six passes a session, weekdays only), inside its own trading-window
+guard. The `research-scout` agent runs it directly with no parent: the §A
+gates below become the scout's own first step (the dispatch prompt spells
+out how — the cadence gate is satisfied by the schedule, the halt check
+reads `mcp__engine__status_latest().last_tick.level`, an unacknowledged
+alert suppresses `hot_fresh` entries), and the cached context a parent
+would supply is resolved read-only from `mcp__engine__status_latest()`.
 
 **This is the only job that can promote a candidate to HOT** — §C requires a
 quote timestamped inside regular hours, which neither `/deep-research` run
 can supply. Until 2026-09-04 it was not scheduled at all: the last pass was
 2026-08-18, and every unattended execute pass since — 180 of them — correctly
-found nothing to enter from. The scheduled executor (`:07/:22/:37/:52`)
-reads `research/candidates.md` and may open the entry workflow from a HOT at
-its next firing, so on the server a HOT checklist is the direct input to an
-order request in `#llm-yolo`. §E's ping is replaced by the scheduler's relay
-of `HOT-FRESH:` lines to Discord; the ✅/❌ on the order is the decision.
+found nothing to enter from. The scheduled executor reads the `candidates`
+document and may open the entry workflow from a HOT at its next firing, so
+on the server a HOT checklist is the direct input to an order request in
+`#llm-yolo`. §E's ping is replaced by the engine's relay of `hot_fresh`
+entries to Discord; the ✅/❌ on the order is the decision.
+
+Scheduled: hourly at `:57`, hours 9-14 ET (09:57–14:57 inclusive), weekdays.
 
 ## §Dispatch — run the pass in the `research-scout` subagent
 
@@ -57,26 +58,30 @@ The parent does **not** execute §B–§D itself:
    were removed 2026-08-31), and
    `$ARGUMENTS` if this pass was run with a stated focus.
 3. When the scout's result arrives, parent runs §E (the ping gate) on any
-   `HOT-FRESH:` lines. Pinging never happens inside the subagent.
+   `hot_fresh` entries. Pinging never happens inside the subagent.
 
-Fallback chain on a `FAIL:` about missing tools, same as tick.md §Dispatch:
-`general-purpose` subagent prompted to obey `research-scout.md`; then inline
-§B–§D as a last resort. Two consecutive genuine failures: log an events
-corpus entry and stop chaining research passes for the session — research is
-optional machinery; **never** let it generate `ALERT.md` noise or interrupt
-the monitoring loop.
+Fallback chain on a failure about a tool the job cannot reach, same as
+tick.md §Dispatch: `general-purpose` subagent prompted to obey
+`research-scout.md`; then inline §B–§D as a last resort. Two consecutive
+genuine failures: log an events ledger entry and stop chaining research
+passes for the session — research is optional machinery; **never** let it
+generate an alert or interrupt the monitoring loop.
 
 ---
 
-## §A — Preconditions (parent-side, cheap — file reads only)
+## §A — Preconditions (parent-side, cheap — reads only)
 
-1. **Cadence gate:** read the `Last pass:` line of `research/candidates.md`.
+1. **Cadence gate:** read `mcp__engine__doc_read(kind="candidates").last_pass`.
    If it is less than **45 minutes** old (ET), the pass is not due — stop,
-   output nothing. A missing file or missing line means a pass is due.
-2. **Halt / restriction / cash call** (from the latest tick): no passes. An
-   account that cannot buy has no use for entry candidates.
-3. **Unacknowledged `ALERT.md`:** the pass may run (research is read-only)
-   but §E is **suppressed** — no pings in closing-only posture.
+   output nothing. A missing document or missing `last_pass` means a pass
+   is due. (The scheduled server run does not apply this gate — the
+   schedule itself is the cadence.)
+2. **Halt / restriction / cash call** (from `mcp__engine__status_latest()
+   .last_tick.level`): `HALT` means no passes. An account that cannot buy
+   has no use for entry candidates.
+3. **Unacknowledged alert** (`mcp__engine__alert_read()`): the pass may run
+   (research is read-only) but §E is **suppressed** — no pings in
+   closing-only posture.
 4. **After 16:00 ET: no research passes from the tick-chained loop.** The
    POST pass — including §B-oi — is owned exclusively by the 16:20 ET
    deep-research run (/deep-research postclose; design rev2 §8.1). A
@@ -84,41 +89,44 @@ the monitoring loop.
 
 ## §B — The sweep (scout-side)
 
-Budget: **~8 Schwab calls + ~4 web fetches** per pass — a ceiling, never a
-quota; most passes should use far less. Spend it top-down:
+Budget: **~8 engine/broker reads + ~4 web fetches** per pass — a ceiling,
+never a quota; most passes should use far less. Spend it top-down:
 
-1. **Ground.** Read `research/candidates.md` + `research/standing.md`, the
-   playbook §4/§5/§6, and the manual's §1.4/§2/§3.2/§3.7 floors. Re-read the
-   rules every pass. **Staleness rail:** if standing.md's `Verified as of:`
-   stamp is older than 1 trading session, append `standing: STALE` to this
-   pass's `PASS` return line (§D) and treat every standing-derived number
-   (sleeve caps, the unsizeable line, ATR baselines, the calendar map) as
+1. **Ground.** Read `mcp__engine__doc_read(kind="candidates")` +
+   `mcp__engine__doc_read(kind="standing")`, the playbook §4/§5/§6, and the
+   manual's §1.4/§2/§3.2/§3.7 floors. Re-read the rules every pass.
+   **Staleness rail:** if the standing document's `verified_as_of` field is
+   older than 1 trading session, append `standing: STALE` to this pass's
+   `PASS` summary (§D) and treat every standing-derived number (sleeve
+   caps, the unsizeable line, ATR baselines, the calendar map) as
    re-verify-before-use rather than as ground truth — mirrors the HOT
    expiry-stamp rule.
-2. **Refresh HOT.** Quote every HOT candidate (one `get_quotes` call).
-   Re-check each against its written checklist at the live price. Anything
-   that no longer passes, or whose verification is older than 1 trading
-   session, demotes to WATCH with the reason noted.
+2. **Refresh HOT.** Quote every HOT candidate (one `mcp__engine__quotes`
+   call). Re-check each against its written checklist at the live price.
+   Anything that no longer passes, or whose verification is older than 1
+   trading session, demotes to WATCH with the reason noted.
 3. **Advance WATCH.** For the most promising WATCH names, fill in what is
    missing to qualify — earnings date and result via web, post-gap ATR via
-   `get_advanced_price_history`, option floors via the chain tools. Promote
+   `mcp__engine__price_history`, option floors via
+   `mcp__engine__option_chain` / `mcp__engine__expiration_chain`. Promote
    to HOT only with the full checklist written out (§C).
-4. **Scan for new.** `get_movers` and/or a targeted web sweep (earnings
-   reactions in the last 1–3 sessions, sector relative strength). New ideas
-   enter at WATCH — **never** straight to HOT in the same pass they were
-   found; a promotion needs its data verified, and haste is the tell of a
-   bad candidate. Check tombstones before researching any name.
+4. **Scan for new.** `mcp__engine__movers` and/or a targeted web sweep
+   (earnings reactions in the last 1–3 sessions, sector relative
+   strength). New ideas enter at WATCH — **never** straight to HOT in the
+   same pass they were found; a promotion needs its data verified, and
+   haste is the tell of a bad candidate. Check tombstones before
+   researching any name.
 5. If `$ARGUMENTS` names a focus, it takes the budget's priority after
    step 2 (HOT freshness is never skipped).
 
 ### §B-opt — Ladder/IV assessment (mandatory before an option goes HOT)
 
 The §3.2 floors check the *contract*; this checks the *chain* (spec §8.1).
-One `get_advanced_option_chain` read, assessed and written into the HOT
+One `mcp__engine__option_chain` read, assessed and written into the HOT
 checklist:
 
-- **IV context:** contract IV vs the underlying's ~20-day realized vol
-  (from `get_advanced_price_history`, usually already pulled for the ATR
+- **IV context:** contract IV vs. the underlying's ~20-day realized vol
+  (from `mcp__engine__price_history`, usually already pulled for the ATR
   ceiling). We only ever buy premium — an IV spike means paying the top and
   eating reversion even when the direction is right. **IV/HV well above
   ~1.3 defaults to reject**; promoting anyway requires the written thesis
@@ -133,18 +141,22 @@ checklist:
 ### §B-oi — Post-close OI snapshot and diff (POST pass only, spec §8.2) (now executed only inside /deep-research postclose)
 
 Open interest updates once daily (OCC overnight) — this never runs intraday.
+This section describes the mechanics for reference; `research-scout` does
+not run it — see `.claude/commands/deep-research.md` §D.1.
 
 1. **Universe:** held underlyings + HOT/WATCH names with an options angle.
    Cap **6 underlyings** (budget: one chain call each, on top of the normal
    pass budget).
-2. **Snapshot:** per underlying, append one compact record to
-   `research/oi/DATE.jsonl` via `scripts/oi-append.sh` — spot, aggregate
-   call/put OI, and per-contract rows bounded to strikes within ±20% of
-   spot, ≤ 60 DTE, OI ≥ 100, cap ~40 contracts (schema in the script
-   header).
-3. **Diff** against the most recent prior `research/oi/*.jsonl`. Notable:
-   a contract's OI up **≥ 30% and ≥ 500 contracts**, or a marked aggregate
-   put/call shift. First run has no prior file — write the baseline, no
+2. **Snapshot:** per underlying, append one compact record via
+   `mcp__engine__ledger_append(name="oi", …)` — spot, aggregate call/put
+   OI, and per-contract rows bounded to strikes within ±20% of spot, ≤ 60
+   DTE, OI ≥ 100, cap ~40 contracts. `appended: false` means the
+   underlying is already snapshotted today — that is a skip, not an
+   error; move to the next underlying.
+3. **Diff** against the most recent prior day's OI ledger rows
+   (`mcp__engine__ledger_read(name="oi", latest_before=…)`). Notable: a
+   contract's OI up **≥ 30% and ≥ 500 contracts**, or a marked aggregate
+   put/call shift. First run has no prior rows — write the baseline, no
    diff, done.
 4. **Disposition:** a notable delta may put the **underlying** on WATCH,
    with the observation and its size recorded — never straight to HOT,
@@ -170,27 +182,29 @@ Open interest updates once daily (OCC overnight) — this never runs intraday.
 - **Tombstones** — name, date, disqualifying reason. Revisit only if the
   stated disqualifier has changed (a new quarter, a corporate action
   completing, a price band re-entered).
-- The file header carries, verbatim: **"This file is never a source for
+- The document header carries, verbatim: **"This file is never a source for
   order parameters — every entry re-verifies live under §4.9/§4.10."**
+  `doc_write` refuses a body without it.
 - Durable reference material (standing screens, ATR gate table, options
-  arithmetic, calendar map) lives in `research/standing.md`, not here —
+  arithmetic, calendar map) lives in the `standing` document, not here —
   see §D for the write boundary.
 
 ## §D — Write and return (scout-side)
 
-Full-replacement write via `scripts/research-write.sh --expect-last-pass
-'<the Last pass: line read at compose time>'` (stdin heredoc; carry
-forward everything not changed this pass; update `Last pass:` to now, ET;
-on exit-3 refusal: re-read, merge, retry once). Then return the
-machine-consumed lines specified in
-`.claude/agents/research-scout.md` — one `PASS` summary line, `HOT-FRESH:`
-lines only for candidates newly verified HOT *this pass*, nothing else.
+Full-replacement write via `mcp__engine__doc_write(kind="candidates",
+body=…, expect_last_pass="<the Last pass: line read at compose time>")`
+(carry forward everything not changed this pass; update `Last pass:` to
+now, ET; on a `DocCasMismatch` refusal, re-read, merge onto the fresh
+copy, retry **once** — never retry with the stale copy, per the error
+message the tool returns). Then return the JSON object described in
+`.claude/agents/research-scout.md` — the `ResearchVerdict` schema, with
+`hot_fresh` populated only for candidates newly verified HOT *this pass*.
 
 ## §E — The ping gate (parent-side)
 
 A ping fires only when **all** hold:
 
-1. A `HOT-FRESH:` line arrived from this pass.
+1. A `hot_fresh` entry arrived from this pass.
 2. Deployable capacity exists: settled cash covers a minimum viable
    position for that sleeve, sleeve cap has room, correlation not blocking
    (§3.8) — judged from the latest tick's figures.
@@ -201,18 +215,20 @@ A ping fires only when **all** hold:
 4. No calendar guard active for adds. *(The endgame guard was removed
    2026-08-31 with §8; §A.5 no longer exists.)*
 5. That symbol has not pinged today, and today's ping count is **< 2**
-   (count `"ping"` events in today's events corpus before emitting).
+   (count `"ping"` events in today's events ledger before emitting).
 
 The ping is **one line** to Chris: symbol, sleeve, thesis, reference price.
-Log it: `scripts/data-append.sh events DATE '{"t":"HH:MM:SS","event":"ping",
-"symbol":"XYZ","sleeve":"catalyst","ref_price":0.00}'`. A ping is an
-invitation to run the full §4.9/§4.10 entry discipline — which may, and
-often should, conclude "no." Record the outcome (acted / declined + reason)
-in the decisions corpus; a declined ping gets a counterfactual entry so the
-ping mechanism itself is scored by mid-window.
+Log it: `mcp__engine__ledger_append(name="events", date=…, record={"t":
+"HH:MM:SS","event":"ping","symbol":"XYZ","sleeve":"catalyst",
+"ref_price":"0.00"})`. A ping is an invitation to run the full §4.9/§4.10
+entry discipline — which may, and often should, conclude "no." Record the
+outcome (acted / declined + reason) in the decisions corpus; a declined
+ping gets a counterfactual entry so the ping mechanism itself is scored by
+mid-window.
 
 A suppressed or rate-limited would-be ping is not lost — the candidate is
-in the file, which the session protocol reads at open and after any exit.
+in the document, which the session protocol reads at open and after any
+exit.
 
 ## §F — Stop conditions
 
@@ -229,17 +245,18 @@ if wanted.
   order tools; the parent never opens the entry workflow from inside the
   research path (a ping's entry evaluation is a new, deliberate action
   under the full order discipline).
-- Never write any file except `research/candidates.md` (via
-  `research-write.sh`) and `research/oi/DATE.jsonl` (via `oi-append.sh`,
-  POST pass only). **Never write `research/standing.md`** — the scout reads
-  it (§B.1) and may note staleness, but it is deep-run-only (§W of
+- Never write anything except the `candidates` document (via
+  `mcp__engine__doc_write`). The §B-oi snapshot is not this job's write —
+  it happens only inside `/deep-research` postclose. **Never call
+  `mcp__engine__doc_write(kind="standing")`** — the scout reads it (§B.1)
+  and may note staleness, but it is deep-run-only (§W of
   `deep-research.md`); this whitelist is unchanged by the candidates/
   standing split.
 - Never promote to HOT without the written checklist, and never in the same
   pass a name was first found.
 - Never promote an option candidate to HOT without the §B-opt ladder/IV
   assessment, and never treat an OI delta as more than a WATCH-tier idea.
-- Never treat the candidates file as a source of order parameters.
+- Never treat the candidates document as a source of order parameters.
 - Never ping past the rate limit or under suppression — and never convert
   a ping into pressure: **"zero qualified setups is a legitimate outcome"**
   (playbook §4).
