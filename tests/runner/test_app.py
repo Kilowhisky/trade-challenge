@@ -3,12 +3,25 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import secrets
+import stat
+import time
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
-from conftest import AUTH, BODY, FakeResult, RecordingGen, fake_query, gen_query
+from conftest import (
+    AUTH,
+    BODY,
+    ROLE_TOKEN,
+    RUNNER_TOKEN,
+    FakeResult,
+    RecordingGen,
+    fake_query,
+    gen_query,
+)
 
 import tc_runner.app as appmod
 
@@ -78,9 +91,71 @@ async def test_options_carry_the_pins_the_gate_depends_on(
     assert o.max_turns == BODY["max_turns"]
     assert o.env["CLAUDE_CODE_OAUTH_TOKEN"] == "test-token-not-real"  # noqa: S105
     assert o.env["DISABLE_AUTOUPDATER"] == "1"
-    assert o.mcp_servers["engine"]["type"] == "http"
-    assert o.mcp_servers["engine"]["url"] == "http://127.0.0.1:8080/mcp/research/"
-    assert o.mcp_servers["engine"]["headers"]["Authorization"] == "Bearer test-token-not-real"
+    # A PATH, never the dict: the dict is rendered by the SDK into
+    # `--mcp-config <json>` on the CLI child's argv, which publishes the
+    # engine's role bearer to every `ps` on the host.
+    assert isinstance(o.mcp_servers, str)
+    assert not isinstance(o.mcp_servers, dict)
+
+
+async def test_the_mcp_bearer_is_written_to_a_private_file_not_the_child_s_argv(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, Any] = {}
+    seen: dict[str, Any] = {}
+
+    def _q(*, prompt: str, options: Any, **kw: Any) -> Any:
+        # Read the config DURING the run: it is deleted the moment the run ends.
+        path = Path(options.mcp_servers)
+        seen["mode"] = stat.S_IMODE(path.stat().st_mode)
+        seen["dir_mode"] = stat.S_IMODE(path.parent.stat().st_mode)
+        seen["body"] = json.loads(path.read_text())
+        seen["path"] = path
+        return fake_query([FakeResult()], captured=captured)(prompt=prompt, options=options)
+
+    monkeypatch.setattr(appmod, "QUERY", _q)
+    assert (await client.post("/run", json=BODY, headers=AUTH)).status_code == 200
+    engine = seen["body"]["mcpServers"]["engine"]
+    assert engine["type"] == "http"
+    assert engine["url"] == "http://127.0.0.1:8080/mcp/research/"
+    assert engine["headers"]["Authorization"] == f"Bearer {ROLE_TOKEN}"
+    assert seen["mode"] == 0o600, oct(seen["mode"])  # never world-readable, not even briefly
+    assert seen["dir_mode"] == 0o700, oct(seen["dir_mode"])
+    # And it does not outlive the run: the whole private directory is gone.
+    assert not seen["path"].exists()
+    assert not seen["path"].parent.exists()
+
+
+async def test_the_mcp_config_is_removed_even_when_the_run_raises(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, Any] = {}
+
+    async def _q(*, prompt: str, options: Any, **kw: Any) -> Any:
+        seen["path"] = Path(options.mcp_servers)
+        raise RuntimeError("CLINotFoundError")
+        yield  # pragma: no cover - makes this an async generator
+
+    monkeypatch.setattr(appmod, "QUERY", _q)
+    assert (await client.post("/run", json=BODY, headers=AUTH)).json()["is_error"] is True
+    assert not seen["path"].exists()
+    assert not seen["path"].parent.exists()
+
+
+async def test_the_mcp_config_is_removed_after_a_timeout(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, Any] = {}
+    gen = RecordingGen([FakeResult()], delay=5.0)
+
+    def _q(*, prompt: str, options: Any, **kw: Any) -> Any:
+        seen["path"] = Path(options.mcp_servers)
+        return gen
+
+    monkeypatch.setattr(appmod, "QUERY", _q)
+    out = (await client.post("/run", json={**BODY, "timeout_s": 0.05}, headers=AUTH)).json()
+    assert out["timed_out"] is True
+    assert not seen["path"].parent.exists()
 
 
 async def test_the_hook_on_the_options_is_the_job_s_own_gate(
@@ -110,10 +185,15 @@ async def test_no_agent_means_no_agent_flag(
 async def test_the_decide_role_gets_the_decide_mount(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    captured: dict[str, Any] = {}
-    monkeypatch.setattr(appmod, "QUERY", fake_query([FakeResult()], captured=captured))
+    seen: dict[str, Any] = {}
+
+    def _q(*, prompt: str, options: Any, **kw: Any) -> Any:
+        seen["body"] = json.loads(Path(options.mcp_servers).read_text())
+        return fake_query([FakeResult()])(prompt=prompt, options=options)
+
+    monkeypatch.setattr(appmod, "QUERY", _q)
     await client.post("/run", json={**BODY, "mcp_role": "decide"}, headers=AUTH)
-    assert captured["options"].mcp_servers["engine"]["url"].endswith("/mcp/decide/")
+    assert seen["body"]["mcpServers"]["engine"]["url"].endswith("/mcp/decide/")
 
 
 async def test_a_missing_structured_output_is_reported_not_invented(
@@ -359,3 +439,122 @@ async def test_a_malformed_sdk_field_degrades_to_an_error_result(
     assert out["subtype"] == "error_runner_result"
     assert out["result_text"] is not None
     assert "could not render" in out["result_text"]
+
+
+# --- review round 2: the bearer never leaves, and busy answers now -----------
+
+
+async def test_an_exception_carrying_the_bearer_comes_back_redacted(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`result_text` is written to the engine's job ledger and posted to
+    Discord. An SDK exception renders whatever it was handed, and what it was
+    handed includes the engine's role bearer."""
+
+    async def _q(*, prompt: str, options: Any, **kw: Any) -> Any:
+        raise RuntimeError(
+            f"connect failed with Authorization: Bearer {ROLE_TOKEN} "
+            f"(runner {RUNNER_TOKEN})"
+        )
+        yield  # pragma: no cover - makes this an async generator
+
+    monkeypatch.setattr(appmod, "QUERY", _q)
+    out = (await client.post("/run", json=BODY, headers=AUTH)).json()
+    text = out["result_text"]
+    assert text is not None
+    assert ROLE_TOKEN not in text
+    assert RUNNER_TOKEN not in text
+    assert text.count(appmod.REDACTED) == 2  # both bearers, both gone
+    assert "RuntimeError" in text  # the diagnosis survives the scrub
+
+
+async def test_a_result_message_carrying_the_bearer_comes_back_redacted(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        appmod,
+        "QUERY",
+        fake_query([FakeResult(result=f"401 from Bearer {ROLE_TOKEN}", subtype="success")]),
+    )
+    out = (await client.post("/run", json=BODY, headers=AUTH)).json()
+    assert ROLE_TOKEN not in out["result_text"]
+    assert appmod.REDACTED in out["result_text"]
+
+
+async def test_a_subtype_carrying_the_bearer_comes_back_redacted(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        appmod, "QUERY", fake_query([FakeResult(subtype=f"error_{ROLE_TOKEN}")])
+    )
+    out = (await client.post("/run", json=BODY, headers=AUTH)).json()
+    assert out["subtype"] == f"error_{appmod.REDACTED}"
+
+
+async def test_the_render_failure_path_is_redacted_too(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A malformed SDK field reaches the "could not render" fallback, which
+    # interpolates the exception -- and a pydantic error quotes its input.
+    monkeypatch.setattr(
+        appmod,
+        "QUERY",
+        fake_query([FakeResult(permission_denials=[ROLE_TOKEN])]),  # type: ignore[list-item]
+    )
+    out = (await client.post("/run", json=BODY, headers=AUTH)).json()
+    assert out["subtype"] == "error_runner_result"
+    assert ROLE_TOKEN not in out["result_text"]
+
+
+def test_redact_leaves_ordinary_text_alone() -> None:
+    assert appmod.redact("nothing secret here", ("abc",)) == "nothing secret here"
+    assert appmod.redact(None, ("abc",)) is None
+    # An empty secret must never turn every character into a redaction.
+    assert appmod.redact("abc", appmod.secrets_of(_req(mcp_role_token="x"))) == "abc"  # noqa: S106
+
+
+def _req(**kw: Any) -> appmod.RunRequest:
+    return appmod.RunRequest.model_validate({**BODY, **kw})
+
+
+def test_secrets_of_drops_the_empty_ones_and_orders_longest_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(appmod, "RUNNER_TOKEN", "")
+    monkeypatch.setattr(appmod, "OAUTH_TOKEN", "tok")
+    values = appmod.secrets_of(_req(mcp_role_token="tok-and-more"))  # noqa: S106
+    assert values == ("tok-and-more", "tok")
+    # Longest first is what stops a shorter secret shredding a longer one into
+    # "[REDACTED]-and-more", which leaks the tail.
+    assert appmod.redact("tok-and-more", values) == appmod.REDACTED
+
+
+def test_the_run_slot_is_taken_without_waiting_for_it() -> None:
+    slot = appmod.OneAtATime()
+    assert slot.busy is False
+    assert slot.try_acquire() is True
+    assert slot.busy is True
+    assert slot.try_acquire() is False  # no waiting, no queue: just "no"
+    slot.release()
+    assert slot.try_acquire() is True
+
+
+async def test_a_concurrent_post_is_refused_immediately_not_queued(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """409 must arrive while the first job is still running, not after it.
+
+    The engine drops a `busy` reply rather than retrying, so a second request
+    that QUEUES on the slot is a job whose window expires inside a socket.
+    """
+    monkeypatch.setattr(appmod, "QUERY", fake_query([FakeResult()], delay=0.6))
+    first = asyncio.create_task(client.post("/run", json=BODY, headers=AUTH))
+    await asyncio.sleep(0.05)
+    started = time.monotonic()
+    second = await client.post("/run", json=BODY, headers=AUTH)
+    elapsed = time.monotonic() - started
+    assert second.status_code == 409
+    assert elapsed < 0.3, elapsed  # answered now, not after the 0.6s run
+    assert (await client.get("/health")).json()["busy"] is True
+    assert (await first).status_code == 200
+    assert (await client.get("/health")).json()["busy"] is False
