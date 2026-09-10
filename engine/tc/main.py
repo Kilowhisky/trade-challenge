@@ -61,7 +61,7 @@ from tc.loops.universe import UniverseUnavailable, counts_detail, run_weekly_uni
 from tc.mcp import server as mcp_server
 from tc.mcp import tools_read, tools_research
 from tc.mcp.server import McpDeps, build_servers
-from tc.notify import Notifier, Pinger
+from tc.notify import BotChannel, Notifier, Pinger
 from tc.research.docs import DocStore
 from tc.rules.model import Rules
 from tc.scheduler import Fire, Scheduler, ScheduleSpec
@@ -817,6 +817,42 @@ def make_broker(settings: Settings, token: TokenStore) -> Broker:
     return SchwabBroker(token, settings.schwab_app_key, settings.schwab_app_secret)
 
 
+def _discord_target(settings: Settings, shadow: bool) -> str | BotChannel | None:
+    """Where the engine's messages go: the bot if it is configured, else a
+    webhook, else nowhere.
+
+    The bot wins because it needs nothing created — the account already has
+    one, it is already in the channel, and a message is one REST call
+    (notify.BotChannel). Webhooks remain the fallback, and remain the right
+    answer for the host probe, which must be able to shout when this engine is
+    the thing that is down.
+
+    Shadow with no shadow channel of its own falls back to the ordinary
+    channel rather than going silent. That inverts the original Phase 0 rule,
+    and deliberately: shadow existed to keep this engine's messages out of
+    #llm-yolo while the v2 stack was still posting there, and v2 was retired
+    2026-09-07. Nothing else posts to that channel now, so the "[shadow] "
+    prefix carries the whole distinction and silence buys nothing.
+    """
+    bot = settings.discord_bot_token
+    if bot:
+        channel = settings.discord_shadow_channel_id if shadow else settings.discord_channel_id
+        if shadow and channel is None:
+            channel = settings.discord_channel_id
+            if channel is not None:
+                log.info("shadow mode has no channel of its own: tagging into the main channel")
+        if channel:
+            return BotChannel(bot, channel)
+        log.warning("a Discord bot token is set with no channel id: falling back to webhooks")
+    webhook = settings.discord_shadow_webhook_url if shadow else settings.discord_webhook_url
+    if webhook is None:
+        # Silence is a state an operator must be told about, because every
+        # notification the engine makes will now be dropped.
+        log.warning("no Discord bot channel and no webhook configured: Discord is silent")
+        return None
+    return str(webhook)
+
+
 def build_engine(
     settings: Settings,
     *,
@@ -825,14 +861,8 @@ def build_engine(
     client: httpx.AsyncClient,
 ) -> Engine:
     shadow = settings.shadow.enabled
-    webhook = settings.discord_shadow_webhook_url if shadow else settings.discord_webhook_url
-    if shadow and webhook is None:
-        # Not an error: shadow mode exists precisely to keep messages out of
-        # #llm-yolo. But silence is a state an operator must be told about,
-        # because every notification below will now be dropped.
-        log.warning("shadow mode is on with no shadow webhook configured: Discord is silent")
     notifier = Notifier(
-        None if webhook is None else str(webhook), client, "[shadow] " if shadow else ""
+        _discord_target(settings, shadow), client, "[shadow] " if shadow else ""
     )
     return Engine(
         settings,

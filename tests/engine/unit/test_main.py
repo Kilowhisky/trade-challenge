@@ -1327,3 +1327,96 @@ def test_run_once_exits_1_on_a_run_that_answered_nothing(
     monkeypatch.setattr(RunnerClient, "run", fake_run)
     monkeypatch.setattr(RunnerClient, "health", fake_health)
     assert cli.main([*_cli_args(tmp_path, env_extra=MCP_ENV), "run", "--once", "scout"]) == 1
+
+
+async def test_build_engine_prefers_the_bot_over_the_webhook(tmp_path: Path) -> None:
+    """A configured bot wins: the message comes from the account's own bot in
+    a channel it already belongs to, so no webhook has to be created."""
+    seen: list[tuple[str, str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(
+            (
+                str(request.url),
+                request.headers.get("authorization", ""),
+                json.loads(request.content)["content"],
+            )
+        )
+        return httpx.Response(200)
+
+    s = _settings(
+        tmp_path,
+        env_extra="\nTC_DISCORD_BOT_TOKEN=botsecret\nTC_DISCORD_CHANNEL_ID=999\n",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+        eng = build_engine(
+            s, broker=FakeBroker(_fx(tmp_path), NOW), clock=lambda: NOW, client=c
+        )
+        await eng.notifier.post("hello")
+    assert seen == [
+        ("https://discord.com/api/v10/channels/999/messages", "Bot botsecret", "[shadow] hello")
+    ]
+
+
+async def test_build_engine_shadow_without_its_own_channel_tags_into_the_main_one(
+    tmp_path: Path,
+) -> None:
+    """v2 is retired, so nothing else posts to #llm-yolo: silence buys nothing
+    and the tag carries the whole distinction."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200)
+
+    s = _settings(
+        tmp_path,
+        env_extra="\nTC_DISCORD_BOT_TOKEN=b\nTC_DISCORD_CHANNEL_ID=111\n",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+        eng = build_engine(
+            s, broker=FakeBroker(_fx(tmp_path), NOW), clock=lambda: NOW, client=c
+        )
+        await eng.notifier.post("x")
+    assert seen == ["https://discord.com/api/v10/channels/111/messages"]
+
+
+async def test_build_engine_shadow_channel_wins_when_set(tmp_path: Path) -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200)
+
+    s = _settings(
+        tmp_path,
+        env_extra=(
+            "\nTC_DISCORD_BOT_TOKEN=b\nTC_DISCORD_CHANNEL_ID=111"
+            "\nTC_DISCORD_SHADOW_CHANNEL_ID=222\n"
+        ),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+        eng = build_engine(
+            s, broker=FakeBroker(_fx(tmp_path), NOW), clock=lambda: NOW, client=c
+        )
+        await eng.notifier.post("x")
+    assert seen == ["https://discord.com/api/v10/channels/222/messages"]
+
+
+async def test_build_engine_bot_token_without_a_channel_falls_back_to_the_webhook(
+    tmp_path: Path,
+) -> None:
+    """A half-configured bot must not silence the engine."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(204)
+
+    s = _settings(tmp_path, env_extra="\nTC_DISCORD_BOT_TOKEN=b\n")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+        eng = build_engine(
+            s, broker=FakeBroker(_fx(tmp_path), NOW), clock=lambda: NOW, client=c
+        )
+        await eng.notifier.post("x")
+    assert seen == ["https://shadow.example/h"]

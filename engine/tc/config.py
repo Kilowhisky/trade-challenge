@@ -106,8 +106,14 @@ class Secrets(BaseSettings):
 
     schwab_app_key: str
     schwab_app_secret: str
-    # Both webhooks are optional: an engine with no Discord still watches the
-    # book, serves /health and writes its ledgers; Notifier(None) posts nothing.
+    # Every Discord field is optional: an engine with no Discord still watches
+    # the book, serves /health and writes its ledgers; Notifier(None) posts
+    # nothing. A bot token plus a channel id wins over the webhooks -- the
+    # messages then come from the account's own bot in a channel it is already
+    # a member of, which is why no webhook needs creating (notify.BotChannel).
+    discord_bot_token: str | None = None
+    discord_channel_id: str | None = None
+    discord_shadow_channel_id: str | None = None
     discord_webhook_url: AnyHttpUrl | None = None
     discord_shadow_webhook_url: AnyHttpUrl | None = None
     healthchecks_base_url: AnyHttpUrl | None = None
@@ -148,6 +154,18 @@ class Settings(BaseModel):
     @property
     def schwab_app_secret(self) -> str:
         return self.secrets.schwab_app_secret
+
+    @property
+    def discord_bot_token(self) -> str | None:
+        return self.secrets.discord_bot_token
+
+    @property
+    def discord_channel_id(self) -> str | None:
+        return self.secrets.discord_channel_id
+
+    @property
+    def discord_shadow_channel_id(self) -> str | None:
+        return self.secrets.discord_shadow_channel_id
 
     @property
     def discord_webhook_url(self) -> AnyHttpUrl | None:
