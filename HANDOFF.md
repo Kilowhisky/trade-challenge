@@ -33,13 +33,20 @@ started). Resting GTC stops at Schwab are the only protection.
 
 ## Needs you
 
-1. **Discord webhook** — still none. The engine and the host probe cannot reach
-   you. Create a webhook in `#llm-yolo` (or `#engine-shadow`) named `tc-engine`,
-   append `TC_DISCORD_WEBHOOK_URL=` and `TC_DISCORD_SHADOW_WEBHOOK_URL=` with it
-   to `/srv/tc/.env`, put `PROBE_WEBHOOK=` in `/etc/tc/probe.env`, then
-   `docker compose -f docker/docker-compose.yml restart engine` and
-   `sudo systemctl enable --now tc-healthprobe.timer`. Or grant the bot
-   Manage Webhooks and I do it.
+1. **The host probe still has no way to reach you** — and it is the one that
+   matters most, because its job is to shout when the engine is the thing that
+   is down. It cannot use the engine's bot for that: a watchdog that posts
+   through what it watches goes silent exactly when it is needed, which is the
+   v2 deadman failure. Put an independent `PROBE_WEBHOOK=` in
+   `/etc/tc/probe.env` and `sudo systemctl enable --now tc-healthprobe.timer`.
+   A Discord webhook is the obvious form; ntfy or Pushover would do as well and
+   would survive Discord itself being the outage.
+
+   *(The engine itself is no longer silent: as of 2026-09-10 it posts as the
+   existing bot — `TC_DISCORD_BOT_TOKEN`/`TC_DISCORD_CHANNEL_ID` in
+   `/srv/tc/.env`, lifted from the retired `tc-broker`. No webhook was needed;
+   sending is one REST call, and only the ✅/❌ read path needs a gateway,
+   which arrives with Plan 1.)*
 2. **§9 amendment (your words needed):** `CLAUDE.md` line 13 still resolves the
    high-water mark "per tick.md §B5"; that document is a tombstone. The mark
    lives in the engine's `session_status` table (`tc/loops/session.py`) and is
