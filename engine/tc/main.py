@@ -52,12 +52,14 @@ from tc.config import Settings
 from tc.desk.approval import DiscordReactions, NoReactions, Reactions
 from tc.desk.bars import bars_symbols, carried_symbols, refresh_bars
 from tc.desk.models import ActiveJob
+from tc.desk.paper import ensure_book
+from tc.desk.post import desk_summary, pitch_counts_since, post_proposals
 from tc.desk.scorecard import build_scorecard, render_scorecard
 from tc.desk.scoring import score
 from tc.desk.watch import run_desk_watch
 from tc.http.app import EngineState, McpMounts, build_app
 from tc.jobs.dispatch import FAILED_VERDICTS, JobRunner, RunnerClient
-from tc.jobs.spec import JOB_SPECS
+from tc.jobs.spec import DESK_CHAINS, JOB_SPECS
 from tc.loops.expectations import digest, run_expectations
 from tc.loops.reconcile import reconcile
 from tc.loops.session import close_session
@@ -88,7 +90,8 @@ CLAUDE_JOBS: tuple[str, ...] = tuple(JOB_SPECS)
 # argument, both before anything is opened.
 JOBS: tuple[str, ...] = (
     "tick", "session_close", "token_check", "expectations", "backup", "weekly_universe",
-    "bars_refresh", "scorecard_weekly", "desk_watch", *CLAUDE_JOBS,
+    "bars_refresh", "scorecard_weekly", "desk_watch", "desk_evening", "desk_preopen",
+    *CLAUDE_JOBS,
 )
 
 BACKUPS_KEPT = 14  # ~3 weeks of trading days; the store is small and the disk is not
@@ -474,6 +477,8 @@ class Engine:
             return await self._job_scorecard_weekly(now)
         if job == "desk_watch":
             return await self._job_desk_watch(now)
+        if job in DESK_CHAINS:
+            return await self._job_desk_chain(job, now, ignore_window=ignore_window)
         if job in CLAUDE_JOBS:
             return await self._job_claude(job, now, ignore_window=ignore_window)
         raise ValueError(f"unknown job {job!r}")
@@ -483,13 +488,53 @@ class Engine:
     ) -> tuple[Verdict, dict[str, Any]]:
         if self._jobs is None:
             return "noop", {"skipped": "no runner configured"}
+        if job == "pm":
+            await self._ensure_paper_book(now)
         # The desk tools read WHO is calling from here (tc/desk/models.ActiveJob);
         # set for exactly the life of the dispatch, cleared even on a raise.
         self._active.name = job
         try:
-            return await self._jobs.execute(job, now, ignore_window=ignore_window)
+            verdict, detail = await self._jobs.execute(job, now, ignore_window=ignore_window)
         finally:
             self._active.name = None
+        if job == "pm":
+            # Funded calls became proposals during the run; they go to Discord
+            # now, each with its own veto deadline (spec §9.4).
+            posted = await post_proposals(
+                self._store, self.notifier, self._rules, self._s.desk, self._clock()
+            )
+            detail = {**detail, "proposals_posted": posted}
+        return verdict, detail
+
+    async def _ensure_paper_book(self, now: datetime) -> None:
+        """The paper book starts at the first PM run, with the real account's
+        value as its cash (spec §10: legacy positions count as cash)."""
+        acct = await self._store.latest_account()
+        if acct is not None:
+            await ensure_book(self._store, self._et(now).date(), acct.liquidation_value, now)
+
+    async def _job_desk_chain(
+        self, chain: str, now: datetime, *, ignore_window: bool = False
+    ) -> tuple[Verdict, dict[str, Any]]:
+        """One engine job, several Claude jobs, strictly in order: each
+        sub-job gets its own `job_runs` row (so the ledger says which analyst
+        failed), and a failure moves the chain on rather than stopping it."""
+        results: dict[str, str] = {}
+        for job in DESK_CHAINS[chain]:
+            started = self._clock()
+            try:
+                verdict, detail = await self._job_claude(job, started, ignore_window=ignore_window)
+            except Exception as e:
+                log.exception("desk chain %s: %s raised", chain, job)
+                verdict, detail = "failed", {"error": type(e).__name__}
+            await self._record(job, started, self._clock(), verdict, {**detail, "chain": chain})
+            results[job] = verdict
+        counts = await pitch_counts_since(self._store, now)
+        await self.notifier.post(desk_summary(chain, results, counts, self._et(now).date()))
+        ran = [v for v in results.values() if v not in ("noop", "missed")]
+        failed = [v for v in ran if v in FAILED_VERDICTS]
+        chain_verdict: Verdict = "failed" if ran and len(failed) == len(ran) else "done"
+        return chain_verdict, {"jobs": results, "pitches": counts}
 
     # --- jobs --------------------------------------------------------------
 
@@ -973,9 +1018,11 @@ def build_engine(
                 settings.runner.slack_s,
                 connect_timeout_s=settings.runner.connect_timeout_s,
                 # The bearer the runner presents BACK to the engine's own MCP
-                # mount. Every job in JOB_SPECS runs as the research role; the
-                # decide token is Plan 1's and is not handed out here.
+                # mount, one per MCP role.
                 role_token=settings.mcp_research_token,
+                role_tokens=(
+                    {"decide": settings.mcp_decide_token} if settings.mcp_decide_token else None
+                ),
             ),
             notifier,
             clock,

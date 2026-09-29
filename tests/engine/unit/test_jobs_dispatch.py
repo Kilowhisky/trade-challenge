@@ -22,6 +22,7 @@ What these tests exist to pin down:
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 
@@ -94,8 +95,12 @@ GOOD: dict[str, Any] = {
 }
 
 
+async def _no_sleep(s: float) -> None:
+    return None
+
+
 def _jr(handler: Handler, notifier: RecordingNotifier, **kw: Any) -> JobRunner:
-    return JobRunner(_runner(handler, **kw), notifier, lambda: IN_WINDOW)
+    return JobRunner(_runner(handler, **kw), notifier, lambda: IN_WINDOW, sleep=_no_sleep)
 
 
 # --- classification ---------------------------------------------------------
@@ -293,13 +298,12 @@ async def test_timeout_and_is_error_are_distinct_verdicts(
         assert verdict == want
 
 
-async def test_busy_runner_is_a_noop(notifier: RecordingNotifier) -> None:
+async def test_a_runner_busy_all_window_is_missed(notifier: RecordingNotifier) -> None:
     def h(request: httpx.Request) -> httpx.Response:
         return httpx.Response(409, json={"error": "runner busy"})
 
     verdict, detail = await _jr(h, notifier).execute("scout", IN_WINDOW)
-    assert verdict == "noop"
-    assert detail["skipped"] == "runner busy"
+    assert (verdict, detail["skipped"]) == ("missed", "runner busy past its window")
 
 
 async def test_a_non_2xx_answer_is_failed_and_names_only_the_status(
@@ -386,8 +390,6 @@ async def test_the_request_carries_the_spec_and_the_et_date(
     seen: dict[str, Any] = {}
 
     def h(request: httpx.Request) -> httpx.Response:
-        import json
-
         seen.update(json.loads(request.content))
         seen["auth"] = request.headers.get("authorization")
         return httpx.Response(200, json=GOOD)
@@ -416,8 +418,6 @@ async def test_the_deep_runs_are_told_which_half_to_execute(
     seen: dict[str, Any] = {}
 
     def h(request: httpx.Request) -> httpx.Response:
-        import json
-
         seen.update(json.loads(request.content))
         return httpx.Response(200, json={**GOOD, "verdict_raw": None})
 
@@ -555,6 +555,56 @@ async def test_runner_health_is_the_runners_own_ok_flag(
     assert await _jr(up, notifier).health() is True
     assert await _jr(down, notifier).health() is False
     assert await _jr(gone, notifier).health() is False
+
+
+# --- per-role bearers, busy wait, PM retry -----------------------------------
+
+PM_AT = datetime(2026, 9, 8, 13, 50, tzinfo=UTC)          # 09:50 ET
+PM_GOOD: dict[str, Any] = {**GOOD, "verdict_raw": {"held": [], "calls": [4], "summary": "PM 1 call"}}
+
+
+def _pm_runner(handler: Handler, decide: str | None = "decide-token-not-real") -> RunnerClient:
+    return RunnerClient("http://runner", TOKEN,
+                        httpx.AsyncClient(transport=httpx.MockTransport(handler)), SLACK_S,
+                        role_token=ROLE_TOKEN,
+                        role_tokens={"decide": decide} if decide else None)
+
+
+async def test_a_decide_job_presents_the_decide_bearer(notifier: RecordingNotifier) -> None:
+    seen: dict[str, Any] = {}
+
+    def h(req: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(req.read()))
+        return httpx.Response(200, json=PM_GOOD)
+
+    jr = JobRunner(_pm_runner(h), notifier, lambda: PM_AT, sleep=_no_sleep)
+    verdict, _ = await jr.execute("pm", PM_AT)
+    assert verdict == "done"
+    assert (seen["mcp_role"], seen["mcp_role_token"]) == ("decide", "decide-token-not-real")
+    assert any("PM 1 call" in p for p in notifier.posted)
+
+
+async def test_a_decide_job_without_a_decide_bearer_is_never_dispatched(
+    notifier: RecordingNotifier,
+) -> None:
+    jr = JobRunner(_pm_runner(_ok(PM_GOOD), decide=None), notifier, lambda: PM_AT, sleep=_no_sleep)
+    assert (await jr.execute("pm", PM_AT)) == ("noop", {"skipped": "no mcp decide token"})
+
+
+async def test_a_busy_runner_is_waited_out_inside_the_window(notifier: RecordingNotifier) -> None:
+    replies = [httpx.Response(409), httpx.Response(409), httpx.Response(200, json=GOOD)]
+    jr = _jr(lambda r: replies.pop(0), notifier)
+    verdict, _ = await jr.execute("scout", IN_WINDOW)
+    assert verdict == "done" and replies == []
+
+
+async def test_the_pm_retries_a_failed_run_once(notifier: RecordingNotifier) -> None:
+    failed = {**PM_GOOD, "is_error": True, "subtype": "error_during_execution",
+              "result_text": "You've hit your session limit"}
+    replies = [httpx.Response(200, json=failed), httpx.Response(200, json=PM_GOOD)]
+    jr = JobRunner(_pm_runner(lambda r: replies.pop(0)), notifier, lambda: PM_AT, sleep=_no_sleep)
+    verdict, detail = await jr.execute("pm", PM_AT)
+    assert verdict == "done" and detail["retried"] is True
 
 
 # --- classify is pure -------------------------------------------------------

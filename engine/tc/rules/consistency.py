@@ -326,7 +326,7 @@ def check_schedule_vs_doc(root: Path, rules: Rules) -> tuple[list[Finding], int]
     Neither `rules` nor any rule value is read: this is a check about the
     schedule agreeing with itself, not about a risk parameter.
     """
-    from tc.jobs.spec import JOB_SPECS
+    from tc.jobs.spec import CHAINED_JOBS, JOB_SPECS
     from tc.main import JOBS
 
     out: list[Finding] = []
@@ -336,7 +336,7 @@ def check_schedule_vs_doc(root: Path, rules: Rules) -> tuple[list[Finding], int]
             "schedule_vs_doc", "config.yml", None,
             f"schedules {job!r}, which is not a job the engine knows",
         ))
-    for job in sorted(set(JOB_SPECS) - set(schedule)):
+    for job in sorted(set(JOB_SPECS) - CHAINED_JOBS - set(schedule)):
         out.append(Finding(
             "schedule_vs_doc", "config.yml", None,
             f"{job!r} has a job spec but no schedule entry: it can never fire",

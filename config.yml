@@ -34,6 +34,12 @@ schedule:                      # ET. weekdays = trading days per get_market_hour
   bars_refresh: "at 16:10 weekdays"   # trading-desk design §4: bars, then scoring
   scorecard_weekly: "at 08:30 sat"    # trading-desk design §7.3
   desk_watch:   "every 5m 09:55-15:55 weekdays"   # trading-desk design §9.4-§9.5, §10
+  # Trading desk (trading-desk design §4). Analysts run as chains so the
+  # one-job-at-a-time runner never sees two of them at once.
+  desk_evening: "at 16:30 weekdays"   # technical -> earnings -> news -> macro
+  desk_preopen: "at 08:00 weekdays"   # news -> earnings, short mode
+  pm:           "at 09:50 weekdays"   # the one heavy Claude run in market hours
+  pm_midday:    "at 12:30 weekdays"   # held positions only
   # Task 12 (jobs/spec.py): the six research-role jobs, unchanged from the v2
   # docker/crontab times (scout 07:12, catalyst 18:33, preopen 08:17,
   # postclose 16:22, sector_tag Sat 09:40). `research` keeps its "hourly at
@@ -58,6 +64,10 @@ expectations:                  # spec §7 layer 3 — declarative anomaly checks
   - name: token_days_until_dead_min
     check: token_days_until_dead_min
     arg: 2
+  - name: job_verdict_not_failed      # a failed analyst, PM or bars run shows in the 07:30 digest
+    check: job_verdict_not
+    arg: failed
+    window_sessions: 1
 desk:                          # trading-desk design §4.2, §8, §9.4 — non-numeric settings
   etf_list: [SPY, QQQ, IWM, DIA, XLB, XLC, XLE, XLF, XLI, XLK, XLP, XLRE, XLU, XLV, XLY,
              SMH, XBI, KRE, XHB, ITB, JETS, GLD, SLV, GDX, TLT, IEF, HYG, EEM, FXI, EWZ, USO]

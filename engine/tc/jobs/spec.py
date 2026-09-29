@@ -103,6 +103,37 @@ class SectorVerdict(BaseModel):
     summary: str
 
 
+class AnalystVerdict(BaseModel):
+    """An analyst pass. The pitches themselves are rows written through
+    `pitch_submit`; the verdict only names them, so a verdict that fails to
+    parse loses nothing but the summary line."""
+
+    model_config = ConfigDict(extra="forbid")
+    pitched: list[int]
+    withdrawn: list[int]
+    summary: str
+
+
+class HeldDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    symbol: str
+    action: Literal["hold", "exit", "tighten"]
+    reason: str
+
+
+class PmVerdict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    held: list[HeldDecision]
+    calls: list[int]
+    summary: str
+
+
+class MiddayVerdict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    held: list[HeldDecision]
+    summary: str
+
+
 # How deep a `$ref` chain may be before inlining calls it a cycle. The verdict
 # models nest one level (`ScoutVerdict` -> `Escalation`); anything approaching
 # this is a model shape nobody meant to write.
@@ -168,6 +199,17 @@ def _inline(node: Any, defs: dict[str, Any], seen: tuple[str, ...]) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def tools_for_role(role: Role, *names: str) -> tuple[str, ...]:
+    """Prefix each name with `mcp__engine__` after checking it against that
+    role's registry, so a typo -- or a tool of the other role -- fails at
+    import time rather than as a refusal mid-job."""
+    role_tools = ROLE_TOOLS[role]
+    for name in names:
+        if name not in role_tools:
+            raise KeyError(name)
+    return tuple(f"mcp__engine__{name}" for name in names)
+
+
 def tools_for(*names: str) -> tuple[str, ...]:
     """Prefix each declared tool name with `mcp__engine__`, after checking it
     against `ROLE_TOOLS["research"]`.
@@ -177,11 +219,7 @@ def tools_for(*names: str) -> tuple[str, ...]:
     evaluated, rather than a tool the model can never reach discovered only
     when a job runs and gets refused.
     """
-    role_tools = ROLE_TOOLS["research"]
-    for name in names:
-        if name not in role_tools:
-            raise KeyError(name)
-    return tuple(f"mcp__engine__{name}" for name in names)
+    return tools_for_role("research", *names)
 
 
 # The harness tools every job may also reach, beyond the engine's own MCP
@@ -217,6 +255,10 @@ class JobSpec:
     # type-check anywhere a spec is inspected, rather than needing a cast.
     role: Role
     noop_when: Callable[[BaseModel], bool] | None
+    # Only the PM carries this (spec §14): a failure inside the market's one
+    # daily entry window is worth one retry before falling back to "no
+    # entries today"; every other job's next scheduled fire is retry enough.
+    retry_failed_after_s: float | None = None
 
 
 # `noop_when` predicates. Each takes the base `BaseModel` type (never the
@@ -429,3 +471,92 @@ JOB_SPECS: dict[str, JobSpec] = {
         noop_when=None,  # zero new tags is an ordinary result, not an empty pass
     ),
 }
+
+# ---------------------------------------------------------------------------
+# The trading desk (docs/superpowers/specs/2026-09-27-claude-trading-desk-design.md §4)
+# ---------------------------------------------------------------------------
+
+_WEB: tuple[str, ...] = ("WebSearch", "WebFetch")
+_ANALYST_ALLOW = tools_for_role(
+    "research", "get_datetime", "market_hours", "quotes", "price_history", "instruments",
+    "briefing", "pitch_submit", "pitch_withdraw", "my_record",
+) + _WEB
+_PM_ALLOW = tools_for_role(
+    "decide", "get_datetime", "market_hours", "quotes", "price_history", "option_chain", "book",
+    "paper_book", "pitches_read", "scorecard", "option_candidates", "call_submit", "call_extend",
+    "call_tighten", "exit_request",
+) + _WEB
+
+_EVENING_PROMPT = (
+    "EVENING PASS. Follow your agent instructions for one evening pass: read "
+    "mcp__engine__briefing, file at most five pitches with mcp__engine__pitch_submit, and "
+    "never size, fund or trade. Return a single JSON object matching the AnalystVerdict "
+    "schema and nothing else."
+)
+_PREOPEN_PROMPT = (
+    "PRE-OPEN MODE. It is before the 09:30 open. Read overnight news and pre-market reports "
+    "against your open pitches and your briefing. File at most two NEW pitches, and withdraw "
+    "any of your own open pitches whose premise broke overnight with "
+    "mcp__engine__pitch_withdraw. Return a single JSON object matching the AnalystVerdict "
+    "schema and nothing else."
+)
+
+
+def _evening(name: str, agent: str) -> JobSpec:
+    return JobSpec(
+        name=name, agent=agent, command=f"/desk {name}", prompt=_EVENING_PROMPT,
+        allowed_tools=_ANALYST_ALLOW, verdict=AnalystVerdict, max_turns=40, timeout_s=1500.0,
+        window=(time(16, 25), time(20, 0)), role="research", noop_when=None,
+    )
+
+
+def _preopen(name: str, agent: str) -> JobSpec:
+    return JobSpec(
+        name=name, agent=agent, command=f"/desk {name}", prompt=_PREOPEN_PROMPT,
+        allowed_tools=_ANALYST_ALLOW, verdict=AnalystVerdict, max_turns=20, timeout_s=600.0,
+        window=(time(7, 55), time(9, 0)), role="research", noop_when=None,
+    )
+
+
+DESK_SPECS: dict[str, JobSpec] = {
+    "analyst_technical": _evening("analyst_technical", "analyst-technical"),
+    "analyst_earnings": _evening("analyst_earnings", "analyst-earnings"),
+    "analyst_news": _evening("analyst_news", "analyst-news"),
+    "analyst_macro": _evening("analyst_macro", "analyst-macro"),
+    "preopen_news": _preopen("preopen_news", "analyst-news"),
+    "preopen_earnings": _preopen("preopen_earnings", "analyst-earnings"),
+    "pm": JobSpec(
+        name="pm", agent="pm", command="/desk pm",
+        prompt=(
+            "Follow your agent instructions for the 09:50 run: the book first, then up to "
+            "five calls, then funding. Return a single JSON object matching the PmVerdict "
+            "schema and nothing else."
+        ),
+        allowed_tools=_PM_ALLOW, verdict=PmVerdict, max_turns=40, timeout_s=900.0,
+        # Latest start 10:30 (spec §13): a PM that cannot start by then makes
+        # no entries that day, and the 900s retry must also land inside it.
+        window=(time(9, 45), time(10, 30)), role="decide", noop_when=None,
+        retry_failed_after_s=900.0,
+    ),
+    "pm_midday": JobSpec(
+        name="pm_midday", agent="pm", command="/desk pm_midday",
+        prompt=(
+            "MIDDAY MODE. Held positions and today's news only: hold, mcp__engine__exit_request "
+            "or mcp__engine__call_tighten. No new calls. Return a single JSON object matching "
+            "the MiddayVerdict schema and nothing else."
+        ),
+        allowed_tools=_PM_ALLOW, verdict=MiddayVerdict, max_turns=15, timeout_s=300.0,
+        window=(time(12, 25), time(13, 30)), role="decide", noop_when=None,
+    ),
+}
+JOB_SPECS.update(DESK_SPECS)
+
+# Chains run their jobs one after another inside one engine job, so the
+# one-job-at-a-time runner never sees two of them collide (the 2026-09-08
+# catalyst run was lost to "runner busy"). A chained job has no schedule entry
+# of its own.
+DESK_CHAINS: dict[str, tuple[str, ...]] = {
+    "desk_evening": ("analyst_technical", "analyst_earnings", "analyst_news", "analyst_macro"),
+    "desk_preopen": ("preopen_news", "preopen_earnings"),
+}
+CHAINED_JOBS: frozenset[str] = frozenset(j for jobs in DESK_CHAINS.values() for j in jobs)

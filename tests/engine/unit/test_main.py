@@ -44,6 +44,7 @@ from tc.clock import ET, trading_days_between
 from tc.config import Settings, load_settings
 from tc.http.app import build_app
 from tc.jobs.dispatch import JobRunner, RunnerClient
+from tc.jobs.spec import CHAINED_JOBS
 from tc.loops.session import seed_hwm
 from tc.main import (
     BACKUPS_KEPT,
@@ -1019,8 +1020,9 @@ def test_every_scheduled_job_in_the_repo_config_is_a_known_job() -> None:
     cfg = yaml.safe_load((REPO / "config.yml").read_text())
     assert set(cfg["schedule"]) <= set(JOBS)
     # And every Claude job the spec table defines is actually scheduled: a job
-    # with a spec and no schedule reads as a working feature and is not one.
-    assert set(CLAUDE_JOBS) <= set(cfg["schedule"])
+    # with a spec and no schedule reads as a working feature and is not one --
+    # except a chained job (Task 17), which fires only as part of its chain.
+    assert set(CLAUDE_JOBS) - CHAINED_JOBS <= set(cfg["schedule"])
 
 
 async def test_a_claude_job_dispatches_through_the_job_runner(

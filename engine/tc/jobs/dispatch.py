@@ -38,10 +38,11 @@ model, so a job that reports a hot candidate cannot fail to have it said.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from collections.abc import Callable
-from datetime import date, datetime
+from collections.abc import Awaitable, Callable, Mapping
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -70,7 +71,7 @@ MAX_ERRORS = 5
 # The jobs whose one-line `summary` is worth a message of its own. The scout
 # and catalyst passes already relay per-escalation, and `research` relays per
 # hot-fresh candidate; posting their summary too would say the same pass twice.
-SUMMARY_JOBS = frozenset({"preopen", "postclose", "sector_tag"})
+SUMMARY_JOBS = frozenset({"preopen", "postclose", "sector_tag", "pm", "pm_midday"})
 # The verdicts that mean nobody got an answer: each gets one ⚠️ line here, and
 # `Engine._dispatch` pings healthchecks `/fail` for them rather than `/ok`.
 # One set, shared, because "the job did not work" must mean the same thing to
@@ -138,13 +139,18 @@ class RunnerClient:
         *,
         connect_timeout_s: float = 10.0,
         role_token: str | None = None,
+        role_tokens: Mapping[str, str] | None = None,
     ) -> None:
         self._base = base_url.rstrip("/") if base_url else None
         self._token = token
         self._c = client
         self._slack_s = slack_s
         self._connect_timeout_s = connect_timeout_s
-        self._role_token = role_token
+        # One bearer per MCP role. `role_token` is the research bearer, kept as
+        # its own argument because every existing caller passes it that way.
+        self._role_tokens: dict[str, str] = {k: v for k, v in (role_tokens or {}).items() if v}
+        if role_token:
+            self._role_tokens.setdefault("research", role_token)
 
     @property
     def configured(self) -> bool:
@@ -159,7 +165,10 @@ class RunnerClient:
         refused -- burning the whole budget to arrive at a 401. Better to not
         dispatch, and to say which half of the configuration is missing.
         """
-        return bool(self._role_token)
+        return "research" in self._role_tokens
+
+    def token_for(self, role: str) -> str | None:
+        return self._role_tokens.get(role)
 
     async def health(self) -> bool:
         """The runner's own `/health`, for the engine's `/health` and the host
@@ -196,7 +205,7 @@ class RunnerClient:
             "prompt": spec.prompt if not prompt_extra else f"{spec.prompt}\n\n{prompt_extra}",
             "allowed_tools": list(spec.allowed_tools),
             "mcp_role": spec.role,
-            "mcp_role_token": self._role_token or "",
+            "mcp_role_token": self._role_tokens.get(spec.role, ""),
             "output_schema": output_schema(spec.verdict),
             "max_turns": spec.max_turns,
             "timeout_s": spec.timeout_s,
@@ -362,11 +371,15 @@ class JobRunner:
     """
 
     def __init__(
-        self, runner: RunnerClient, notifier: Notifier, clock: Callable[[], datetime]
+        self, runner: RunnerClient, notifier: Notifier, clock: Callable[[], datetime],
+        *, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        busy_retry_s: float = 60.0,
     ) -> None:
         self._runner = runner
         self._notifier = notifier
         self._clock = clock
+        self._sleep = sleep
+        self._busy_retry_s = busy_retry_s
 
     async def health(self) -> bool:
         """Is the other container up? Read once at start and reported by
@@ -393,13 +406,9 @@ class JobRunner:
             # deployment; a `failed` row every weekday at 07:12 for a service
             # nobody installed is how a deadman gets muted.
             return "noop", {"skipped": "no runner configured"}
-        if not self._runner.has_role_token:
-            # Half-configured, which is worse than unconfigured: the runner
-            # would take the job, spend its budget, and be 401'd at its first
-            # engine tool. Warned rather than silent -- unlike "no runner",
-            # this state is nobody's intended deployment.
-            log.warning("%s not dispatched: no MCP research token configured", job)
-            return "noop", {"skipped": "no mcp research token"}
+        if self._runner.token_for(spec.role) is None:
+            log.warning("%s not dispatched: no MCP %s token configured", job, spec.role)
+            return "noop", {"skipped": f"no mcp {spec.role} token"}
         et = (now or self._clock()).astimezone(ET)
         start, end = spec.window
         if not ignore_window and not start <= et.time() <= end:
@@ -412,10 +421,38 @@ class JobRunner:
                 "window": window,
                 "at_et": et.strftime("%H:%M"),
             }
-        reply = await self._runner.run(spec, prompt_extra=_prompt_extra(spec, et.date()))
+        extra = _prompt_extra(spec, et.date())
+        reply = await self._runner.run(spec, prompt_extra=extra)
+        if reply.busy:
+            reply = await self._wait_out_busy(spec, et, extra)
+            if reply.busy:
+                return "missed", {"skipped": "runner busy past its window"}
         verdict, model, detail = classify(spec, reply)
+        if verdict == "failed" and spec.retry_failed_after_s is not None:
+            later = et + timedelta(seconds=spec.retry_failed_after_s)
+            if ignore_window or later.time() <= end:
+                await self._sleep(spec.retry_failed_after_s)
+                first = detail
+                verdict, model, detail = classify(
+                    spec, await self._runner.run(spec, prompt_extra=extra)
+                )
+                detail = {**detail, "retried": True, "first": first}
         await self._relay(spec, verdict, model, detail, et.date())
         return verdict, detail
+
+    async def _wait_out_busy(self, spec: JobSpec, et: datetime, extra: str) -> RunnerReply:
+        """Queue, don't drop (spec §14): retry every `busy_retry_s` until the
+        job's own window closes. The number of tries is fixed from the time
+        left at the first refusal, so a frozen test clock cannot spin."""
+        end = datetime.combine(et.date(), spec.window[1], tzinfo=et.tzinfo)
+        tries = max(0, int((end - et).total_seconds() // self._busy_retry_s))
+        reply = RunnerReply(busy=True)
+        for _ in range(tries):
+            await self._sleep(self._busy_retry_s)
+            reply = await self._runner.run(spec, prompt_extra=extra)
+            if not reply.busy:
+                return reply
+        return reply
 
     async def _relay(
         self,
