@@ -92,6 +92,11 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def now_iso() -> str:
+    """The UTC ISO timestamp every ledger row is written with."""
+    return _now()
+
+
 class Store:
     def __init__(self, path: Path) -> None:
         self.path = path

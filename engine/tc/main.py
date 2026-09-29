@@ -50,6 +50,7 @@ from tc.broker.token import TokenStore
 from tc.clock import ET, fallback_window, trading_days_between
 from tc.config import Settings
 from tc.desk.bars import bars_symbols, carried_symbols, refresh_bars
+from tc.desk.scoring import score
 from tc.http.app import EngineState, McpMounts, build_app
 from tc.jobs.dispatch import FAILED_VERDICTS, JobRunner, RunnerClient
 from tc.jobs.spec import JOB_SPECS
@@ -641,6 +642,14 @@ class Engine:
                 f"⚠️ bars_refresh: token died after {rep.fetched} of {rep.requested}"
             )
             return "failed", {**detail, "error": "BrokerUnauthorized"}
+        rep_score = await score(self._store)
+        detail["resolved"] = len(rep_score.resolved)
+        detail["stuck"] = rep_score.stuck[:10]
+        if rep_score.stuck:
+            await self.notifier.post(
+                f"⚠️ desk: {len(rep_score.stuck)} item(s) missing bars 3+ sessions — "
+                + ", ".join(rep_score.stuck[:10])
+            )
         return "done", detail
 
     # --- broker/window helpers ---------------------------------------------
