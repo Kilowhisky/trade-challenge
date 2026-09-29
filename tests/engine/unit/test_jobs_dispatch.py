@@ -607,6 +607,48 @@ async def test_the_pm_retries_a_failed_run_once(notifier: RecordingNotifier) -> 
     assert verdict == "done" and detail["retried"] is True
 
 
+async def test_the_pm_retry_window_is_judged_from_the_clock_after_the_failure(
+    notifier: RecordingNotifier,
+) -> None:
+    """`later` must be computed from the clock AFTER the failed run finished,
+    never from the fire time captured before it started: a run that takes a
+    while to fail must not still schedule a retry that lands past the
+    window's close just because the FIRE was early enough."""
+    failed = {**PM_GOOD, "is_error": True, "subtype": "error_during_execution",
+              "result_text": "boom"}
+    # 10:20 ET: 10 minutes from the 10:30 close, less than the 900s (15 min)
+    # retry_failed_after_s -- so a retry scheduled from THIS clock reading
+    # would land past the window and must not be attempted.
+    after_failure = datetime(2026, 9, 8, 14, 20, tzinfo=UTC)
+    jr = JobRunner(_pm_runner(_ok(failed)), notifier, lambda: after_failure, sleep=_no_sleep)
+    verdict, detail = await jr.execute("pm", PM_AT)
+    assert verdict == "failed"
+    assert "retried" not in detail
+
+
+async def test_the_pm_retry_meeting_a_busy_runner_keeps_the_first_failure(
+    notifier: RecordingNotifier,
+) -> None:
+    """A retry that meets a busy runner must not read as `noop` (`classify`
+    maps a busy reply to `noop`, which pings /ok and hides a day with no PM
+    entries behind a green check). The original failed verdict survives,
+    flagged as retried, and the retry itself is still queued through the
+    same busy-wait every other dispatch gets."""
+    failed = {**PM_GOOD, "is_error": True, "subtype": "error_during_execution",
+              "result_text": "boom"}
+    replies = [httpx.Response(200, json=failed), httpx.Response(409)]
+    # A huge busy_retry_s means the retry's own busy-wait gives up
+    # immediately (zero tries fit in the time left to the window's close),
+    # so the still-busy reply comes straight back.
+    jr = JobRunner(_pm_runner(lambda r: replies.pop(0)), notifier, lambda: PM_AT,
+                   sleep=_no_sleep, busy_retry_s=3600.0)
+    verdict, detail = await jr.execute("pm", PM_AT)
+    assert verdict == "failed"
+    assert detail["retried"] is True
+    assert detail["retry_skipped"] == "runner busy past its window"
+    assert detail["subtype"] == "error_during_execution"
+
+
 # --- classify is pure -------------------------------------------------------
 
 def test_classify_reads_the_reply_and_nothing_else() -> None:

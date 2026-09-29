@@ -40,6 +40,15 @@ class Notes(Notifier):
         self.posts.append(text)
         return True
 
+    async def post_message(self, text: str) -> str | None:
+        # The base `Notifier.post_message` returns `None` with no target
+        # configured (`target=None` above), which `post_proposals` now (fix
+        # round 1, finding 3) reads as a failed post and expires the
+        # proposal rather than posting it -- this test exists to exercise
+        # the SUCCESSFUL post path, so it fakes a real Discord message id.
+        self.posts.append(text)
+        return f"msg-{len(self.posts)}"
+
 
 @pytest.fixture
 async def client() -> AsyncIterator[httpx.AsyncClient]:

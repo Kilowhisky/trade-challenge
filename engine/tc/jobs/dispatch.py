@@ -156,18 +156,16 @@ class RunnerClient:
     def configured(self) -> bool:
         return bool(self._base and self._token)
 
-    @property
-    def has_role_token(self) -> bool:
-        """The bearer the runner presents BACK to the engine's MCP mount.
-
-        Separate from `configured` because it fails differently: a runner with
-        no MCP bearer would start the job, reach its first engine tool, and be
-        refused -- burning the whole budget to arrive at a 401. Better to not
-        dispatch, and to say which half of the configuration is missing.
-        """
-        return "research" in self._role_tokens
-
     def token_for(self, role: str) -> str | None:
+        """The bearer the runner presents BACK to the engine's MCP mount for
+        that role, or `None` if it was never configured.
+
+        `JobRunner.execute` refuses to dispatch when this is `None` for a
+        spec's own role: a runner with no MCP bearer would start the job,
+        reach its first engine tool, and be refused -- burning the whole
+        budget to arrive at a 401. Better to not dispatch, and to say which
+        role's bearer is missing.
+        """
         return self._role_tokens.get(role)
 
     async def health(self) -> bool:
@@ -422,23 +420,48 @@ class JobRunner:
                 "at_et": et.strftime("%H:%M"),
             }
         extra = _prompt_extra(spec, et.date())
-        reply = await self._runner.run(spec, prompt_extra=extra)
+        reply = await self._run_with_busy_wait(spec, et, extra)
         if reply.busy:
-            reply = await self._wait_out_busy(spec, et, extra)
-            if reply.busy:
-                return "missed", {"skipped": "runner busy past its window"}
+            return "missed", {"skipped": "runner busy past its window"}
         verdict, model, detail = classify(spec, reply)
         if verdict == "failed" and spec.retry_failed_after_s is not None:
-            later = et + timedelta(seconds=spec.retry_failed_after_s)
+            # The retry window is judged by the clock AFTER this run finished,
+            # never from the fire time captured before it started: a slow run
+            # that takes most of the window to fail must not still schedule a
+            # retry that lands past `end`.
+            failed_at = self._clock().astimezone(ET)
+            later = failed_at + timedelta(seconds=spec.retry_failed_after_s)
             if ignore_window or later.time() <= end:
                 await self._sleep(spec.retry_failed_after_s)
                 first = detail
-                verdict, model, detail = classify(
-                    spec, await self._runner.run(spec, prompt_extra=extra)
-                )
-                detail = {**detail, "retried": True, "first": first}
+                retry_et = self._clock().astimezone(ET)
+                retry_reply = await self._run_with_busy_wait(spec, retry_et, extra)
+                if retry_reply.busy:
+                    # The runner is still busy after the retry's own
+                    # busy-wait ran out the window: the retry never got a
+                    # turn. This must not read as `noop` -- `classify` maps a
+                    # busy reply to `noop`, which pings /ok and hides a day
+                    # with no PM entries behind a green check. Keep the
+                    # FIRST run's failed verdict, flagged as retried.
+                    detail = {
+                        **first, "retried": True,
+                        "retry_skipped": "runner busy past its window",
+                    }
+                else:
+                    verdict, model, detail = classify(spec, retry_reply)
+                    detail = {**detail, "retried": True, "first": first}
         await self._relay(spec, verdict, model, detail, et.date())
         return verdict, detail
+
+    async def _run_with_busy_wait(self, spec: JobSpec, et: datetime, extra: str) -> RunnerReply:
+        """One dispatch, queued rather than dropped if the runner is busy
+        (spec §14) -- shared by a job's first attempt and the PM's one
+        retry, so a retry that meets a busy runner is queued exactly like the
+        first attempt was, not classified as a plain `noop`."""
+        reply = await self._runner.run(spec, prompt_extra=extra)
+        if reply.busy:
+            reply = await self._wait_out_busy(spec, et, extra)
+        return reply
 
     async def _wait_out_busy(self, spec: JobSpec, et: datetime, extra: str) -> RunnerReply:
         """Queue, don't drop (spec §14): retry every `busy_retry_s` until the
