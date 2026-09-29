@@ -66,6 +66,9 @@ TIGHTNESS = (  # strategy_key, manual_key, direction, label
     ("leveraged_exit_session", "leveraged_max_hold_sessions", "le", "leveraged-hold"),
     ("sleeve_options_open_pct", "option_open_premium_pct", "le", "options-open"),
     ("sleeve_leveraged_pct", "leveraged_aggregate_pct", "le", "leveraged-aggregate"),
+    ("size_shares_pct_conviction_5", "single_position_pct", "le", "shares-conviction-5"),
+    ("size_option_premium_pct_conviction_5", "option_single_position_pct", "le",
+     "option-conviction-5"),
 )
 
 

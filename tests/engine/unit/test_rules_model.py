@@ -14,7 +14,7 @@ def test_loads_real_rules_yml() -> None:
     assert r.single_position_pct == Decimal("35")
     assert r.halt_multiple_of_hwm == Decimal("0.80")
     assert r.settlement_reserve_usd == Decimal("900.00")
-    assert r.get("strategy", "option_min_delta") == Decimal("0.50")
+    assert r.get("strategy", "option_min_delta") == Decimal("0.45")
 
 
 def test_unknown_key_raises() -> None:

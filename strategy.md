@@ -215,7 +215,7 @@ grows; scarcity discipline lives in the 30% open cap and the quality floors.
 
 Two *(strategy rules)* from the comparative research tighten this:
 
-- **Δ ≥ 0.50**<!--rule:strategy_option_min_delta--> **for long premium** — one
+- **Δ ≥ 0.45**<!--rule:strategy_option_min_delta--> **for long premium** — one
   step inside the manual's §3.2 band floor of 0.45, leaving the ceiling of
   0.75 as the manual states it. *(Raised from 0.40 on 2026-08-31, tracking the
   manual's move from a 0.35 floor to a 0.45–0.75 band.)* The reasoning changed
@@ -226,7 +226,8 @@ Two *(strategy rules)* from the comparative research tighten this:
   contract that is mostly intrinsic survives it. The earlier objection to 0.50
   (it forced deep, expensive contracts, few of them) is now the intended
   trade-off rather than a cost: fewer, higher-conviction, crush-resistant
-  positions is the design.
+  positions is the design. *(Lowered to the manual floor 2026-09-27: the trading desk ranks contracts toward Δ 0.60 inside the
+  manual band instead of flooring above it — trading-desk design §9.3.)*
 - **Expiry sits 14–28 days past the print** and never on the front weekly,
   where event vol is most concentrated (`rules.yml`
   `strategy.option_expiry_*_days_past_earnings`). The point is that a correct

@@ -55,3 +55,13 @@ expectations:                  # spec §7 layer 3 — declarative anomaly checks
   - name: token_days_until_dead_min
     check: token_days_until_dead_min
     arg: 2
+desk:                          # trading-desk design §4.2, §8, §9.4 — non-numeric settings
+  etf_list: [SPY, QQQ, IWM, DIA, XLB, XLC, XLE, XLF, XLI, XLK, XLP, XLRE, XLU, XLV, XLY,
+             SMH, XBI, KRE, XHB, ITB, JETS, GLD, SLV, GDX, TLT, IEF, HYG, EEM, FXI, EWZ, USO]
+  context_symbols: [UUP]       # macro context rows that are not on the tradeable list
+  checkpoint_date: 2026-12-31  # §8, pre-registered; changes only by a recorded amendment
+  entry_window_start: "10:00"
+  entry_window_end: "15:00"
+  bars_universe_size: 400      # the liquid universe's top N by dollar volume get daily bars
+  bars_history_days: 260       # one year plus margin, for 52-week and 200-day statistics
+  bars_request_spacing_s: 0.5  # ~120 price-history calls a minute, under Schwab's limit
