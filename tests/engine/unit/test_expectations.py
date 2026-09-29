@@ -10,6 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import AnyHttpUrl, ValidationError
 
 from tc.broker.token import TokenStore
@@ -23,6 +24,7 @@ TOKEN_CFG = TokenConfig(
 )
 DAY = 86400.0
 TODAY = date(2026, 9, 4)
+REPO_CONFIG = Path(__file__).resolve().parents[3] / "config.yml"
 
 
 @pytest.fixture
@@ -259,3 +261,18 @@ def test_expectations_defaults_to_empty_list(tmp_path: Path) -> None:
 def test_unknown_check_literal_rejected() -> None:
     with pytest.raises(ValidationError):
         Expectation(name="bad", check="not_a_real_check")
+
+
+async def test_the_repo_digest_flags_a_missed_pm_and_a_timed_out_analyst(
+    store: Store, tmp_path: Path,
+) -> None:
+    """Final review I3: a PM lost to a busy runner and an analyst that ran
+    out its budget both reach the 07:30 digest (spec §14), not just job_runs."""
+    raw = yaml.safe_load(REPO_CONFIG.read_text())["expectations"]
+    specs = [Expectation.model_validate(x) for x in raw if x["check"] == "job_verdict_not"]
+    at = datetime(2026, 9, 3, 13, 50, tzinfo=UTC)
+    await store.record_job_run("pm", at, at, "missed", {"skipped": "runner busy past its window"})
+    await store.record_job_run("analyst_news", at, at, "timeout", {})
+    results = await run_expectations(store, _token(tmp_path, 1.0, 0.0), specs, TODAY)
+    breached = {r.name for r in results if not r.ok}
+    assert {"job_verdict_not_missed", "job_verdict_not_timeout"} <= breached

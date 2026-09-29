@@ -58,7 +58,7 @@ from tc.desk.scorecard import build_scorecard, render_scorecard
 from tc.desk.scoring import score
 from tc.desk.watch import run_desk_watch
 from tc.http.app import EngineState, McpMounts, build_app
-from tc.jobs.dispatch import FAILED_VERDICTS, JobRunner, RunnerClient
+from tc.jobs.dispatch import FAILED_VERDICTS, SUMMARY_JOBS, JobRunner, RunnerClient
 from tc.jobs.spec import DESK_CHAINS, JOB_SPECS
 from tc.loops.expectations import digest, run_expectations
 from tc.loops.reconcile import reconcile
@@ -348,6 +348,13 @@ class Engine:
                 continue
             log.warning("missed %s scheduled for %s", fire.job, fire.at)
             await self._store.record_job_run(fire.job, fire.at, fire.at, "missed", {})
+            if fire.job in SUMMARY_JOBS:
+                # A PM fire the engine slept through is a day (or an
+                # afternoon) with no PM decisions; say so once.
+                await self.notifier.post(
+                    f"⚠️ {fire.job} missed: the engine was not running at"
+                    f" {self._et(fire.at).strftime('%H:%M')} ET -- no PM decisions this run"
+                )
         for fire in self.scheduler.due(now):
             self._spawn(self._run_fire(fire))
 
@@ -488,31 +495,73 @@ class Engine:
     ) -> tuple[Verdict, dict[str, Any]]:
         if self._jobs is None:
             return "noop", {"skipped": "no runner configured"}
-        if job == "pm":
-            await self._ensure_paper_book(now)
+        if job in SUMMARY_JOBS and self.state.blind:
+            # Spec §14 "Blind: no PM". Every call_submit would be refused
+            # ("broker blind"), so the run would spend the shared subscription
+            # in market hours and could still end `done` with zero calls --
+            # which reads as a clean paper day.
+            await self.notifier.post(
+                f"⚠️ {job} not run: the broker is blind (no working token), so nothing"
+                " could be priced -- no PM decisions this run"
+            )
+            return "noop", {"skipped": "blind"}
+        # The paper book's start date is the day a PM run first actually
+        # dispatches (spec §8, strategy.md §8): the hook runs after the
+        # runner/token/window gates, never for a noop or a late fire.
+        on_dispatch = (lambda: self._ensure_paper_book(now)) if job == "pm" else None
         # The desk tools read WHO is calling from here (tc/desk/models.ActiveJob);
         # set for exactly the life of the dispatch, cleared even on a raise.
         self._active.name = job
+        post_error: Exception | None = None
+        posted: list[int] | None = None
         try:
-            verdict, detail = await self._jobs.execute(job, now, ignore_window=ignore_window)
+            verdict, detail = await self._jobs.execute(
+                job, now, ignore_window=ignore_window, on_dispatch=on_dispatch
+            )
         finally:
             self._active.name = None
-        if job == "pm":
-            # Funded calls became proposals during the run; they go to Discord
-            # now, each with its own veto deadline (spec §9.4).
-            posted = await post_proposals(
-                self._store, self.notifier, self._rules, self._s.desk, self._clock(),
-                self._window,
-            )
+            if job == "pm":
+                # Funded calls became proposals during the run; they go to
+                # Discord now, each with its own veto deadline (spec §9.4) --
+                # even when the run itself raised, so what it did create is
+                # posted (or expired) rather than left unposted all day.
+                # Guarded: a posting failure must not replace the run's own
+                # exception, and is re-raised below only when there is none.
+                try:
+                    posted = await post_proposals(
+                        self._store, self.notifier, self._rules, self._s.desk, self._clock(),
+                        self._window,
+                    )
+                except Exception as e:
+                    log.exception("posting the PM's proposals failed")
+                    post_error = e
+        if post_error is not None:
+            raise post_error
+        if posted is not None:
             detail = {**detail, "proposals_posted": posted}
         return verdict, detail
 
     async def _ensure_paper_book(self, now: datetime) -> None:
-        """The paper book starts at the first PM run, with the real account's
-        value as its cash (spec §10: legacy positions count as cash)."""
+        """The paper book starts at the first PM run that actually dispatches,
+        with the real account's value as its cash (spec §10: legacy positions
+        count as cash)."""
         acct = await self._store.latest_account()
         if acct is not None:
             await ensure_book(self._store, self._et(now).date(), acct.liquidation_value, now)
+
+    async def _bars_stale(self, now: datetime) -> bool:
+        """Did this evening's bars_refresh fail (or never run)? The evening
+        analysts screen and pitch off those bars; a chain on yesterday's bars
+        files pitches against a stale briefing."""
+        today = self._et(now).date()
+        rows = await self._store.fetchall(
+            "SELECT started_at, verdict FROM job_runs WHERE job='bars_refresh'"
+            " ORDER BY id DESC LIMIT 10"
+        )
+        for r in rows:
+            if self._et(datetime.fromisoformat(r["started_at"])).date() == today:
+                return str(r["verdict"]) in ("failed", "missed")
+        return False
 
     async def _job_desk_chain(
         self, chain: str, now: datetime, *, ignore_window: bool = False
@@ -520,6 +569,21 @@ class Engine:
         """One engine job, several Claude jobs, strictly in order: each
         sub-job gets its own `job_runs` row (so the ledger says which analyst
         failed), and a failure moves the chain on rather than stopping it."""
+        label = "evening" if chain == "desk_evening" else "pre-open"
+        if self._jobs is None:
+            # A supported deployment, not a lost evening (see _job_claude).
+            return "noop", {"skipped": "no runner configured"}
+        if self.state.blind:
+            await self.notifier.post(
+                f"⚠️ desk {label} chain not run: the broker is blind (no working token)"
+            )
+            return "noop", {"skipped": "blind"}
+        if chain == "desk_evening" and await self._bars_stale(now):
+            await self.notifier.post(
+                f"⚠️ desk {label} chain not run: this evening's bars_refresh did not"
+                " complete, so every briefing would be stale"
+            )
+            return "noop", {"skipped": "bars stale"}
         results: dict[str, str] = {}
         for job in DESK_CHAINS[chain]:
             started = self._clock()
@@ -534,7 +598,16 @@ class Engine:
         await self.notifier.post(desk_summary(chain, results, counts, self._et(now).date()))
         ran = [v for v in results.values() if v not in ("noop", "missed")]
         failed = [v for v in ran if v in FAILED_VERDICTS]
-        chain_verdict: Verdict = "failed" if ran and len(failed) == len(ran) else "done"
+        chain_verdict: Verdict
+        if ran and len(failed) == len(ran):
+            chain_verdict = "failed"
+        elif not ran:
+            # No analyst ran at all -- each lost its turn to a busy runner,
+            # its window, or a missing token. An evening with no analysts is
+            # a missed chain, not a `done` one that pings /ok.
+            chain_verdict = "missed"
+        else:
+            chain_verdict = "done"
         return chain_verdict, {"jobs": results, "pitches": counts}
 
     # --- jobs --------------------------------------------------------------

@@ -57,6 +57,14 @@ expectations:                  # spec §7 layer 3 — declarative anomaly checks
     check: job_verdict_not
     arg: failed
     window_sessions: 1
+  - name: job_verdict_not_missed      # a PM or chain lost to a busy runner or a down engine (spec §14)
+    check: job_verdict_not
+    arg: missed
+    window_sessions: 1
+  - name: job_verdict_not_timeout     # an analyst or PM that ran out its budget (spec §14)
+    check: job_verdict_not
+    arg: timeout
+    window_sessions: 1
 desk:                          # trading-desk design §4.2, §8, §9.4 — non-numeric settings
   etf_list: [SPY, QQQ, IWM, DIA, XLB, XLC, XLE, XLF, XLI, XLK, XLP, XLRE, XLU, XLV, XLY,
              SMH, XBI, KRE, XHB, ITB, JETS, GLD, SLV, GDX, TLT, IEF, HYG, EEM, FXI, EWZ, USO]

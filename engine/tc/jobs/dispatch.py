@@ -62,6 +62,8 @@ log = logging.getLogger(__name__)
 # narrate its whole session cannot fill a Discord message or a detail column.
 MAX_TEXT = 200
 MAX_ERRORS = 5
+# The PM's runs: each posts its own one-line summary on success, and a
+# missed one is said out loud -- no PM run means no entries that day.
 SUMMARY_JOBS = frozenset({"pm", "pm_midday"})
 # The verdicts that mean nobody got an answer: each gets one ⚠️ line here, and
 # `Engine._dispatch` pings healthchecks `/fail` for them rather than `/ok`.
@@ -378,9 +380,14 @@ class JobRunner:
         return await self._runner.health()
 
     async def execute(
-        self, job: str, now: datetime | None = None, *, ignore_window: bool = False
+        self, job: str, now: datetime | None = None, *, ignore_window: bool = False,
+        on_dispatch: Callable[[], Awaitable[None]] | None = None,
     ) -> tuple[Verdict, dict[str, Any]]:
-        """`ignore_window` is the operator's `tc run --once --ignore-window`.
+        """`on_dispatch` runs once every gate here has passed, immediately
+        before the runner is first called -- the PM's paper book starts there
+        and nowhere earlier, so a noop or a late fire never fixes its start.
+
+        `ignore_window` is the operator's `tc run --once --ignore-window`.
 
         Never the scheduler's: a fire dispatched hours late is a job whose
         premise expired (below), and the whole point of the gate is that
@@ -411,8 +418,18 @@ class JobRunner:
                 "at_et": et.strftime("%H:%M"),
             }
         extra = _prompt_extra(spec, et.date())
+        if on_dispatch is not None:
+            await on_dispatch()
         reply = await self._run_with_busy_wait(spec, et, extra)
         if reply.busy:
+            if spec.name in SUMMARY_JOBS:
+                # Spec §14: "for the PM that means no entries that day,
+                # logged" -- and said, because a `missed` pings /ok and a
+                # day with no PM is otherwise visible only in job_runs.
+                await self._notifier.post(
+                    f"⚠️ {spec.name} missed: the runner stayed busy past its window"
+                    " -- no PM decisions this run"
+                )
             return "missed", {"skipped": "runner busy past its window"}
         verdict, model, detail = classify(spec, reply)
         if verdict == "failed" and spec.retry_failed_after_s is not None:
