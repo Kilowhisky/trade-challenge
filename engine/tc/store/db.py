@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from importlib import resources
@@ -16,7 +16,14 @@ from typing import Any, Literal
 import aiosqlite
 from pydantic import BaseModel, ConfigDict
 
-from tc.broker.models import RESTING, STOP_TYPES, AccountSnapshot, OrderRow, Position
+from tc.broker.models import (
+    RESTING,
+    STOP_TYPES,
+    AccountSnapshot,
+    DailyBar,
+    OrderRow,
+    Position,
+)
 
 Verdict = Literal["done", "noop", "content_failed", "failed", "timeout", "missed"]
 VERDICTS: frozenset[str] = frozenset(
@@ -708,3 +715,51 @@ class Store:
             " VALUES (?,?,?,?,?,?)",
             (kind, None if d is None else d.isoformat(), path, sha256, lines, _now()),
         )
+
+    def transaction(self) -> AbstractAsyncContextManager[aiosqlite.Connection]:
+        """`_transaction`, public, for the desk modules that own their tables
+        (tc/desk/). Same contract: the caller must not already hold the lock."""
+        return self._transaction()
+
+    # --- desk: daily bars (trading-desk design §13) -------------------------
+    async def upsert_bars(self, symbol: str, bars: Sequence[DailyBar]) -> int:
+        async with self._transaction() as c:
+            await c.executemany(
+                "INSERT INTO bars(symbol, date, open, high, low, close, volume)"
+                " VALUES (?,?,?,?,?,?,?) ON CONFLICT(symbol, date) DO UPDATE SET"
+                " open=excluded.open, high=excluded.high, low=excluded.low,"
+                " close=excluded.close, volume=excluded.volume",
+                [
+                    (symbol, b.date.isoformat(), str(b.open), str(b.high), str(b.low),
+                     str(b.close), b.volume)
+                    for b in bars
+                ],
+            )
+        return len(bars)
+
+    async def bars_for(
+        self, symbol: str, *, since: date | None = None, limit: int | None = None
+    ) -> list[DailyBar]:
+        """Oldest first. `limit` keeps the NEWEST `limit` bars."""
+        sql = "SELECT date, open, high, low, close, volume FROM bars WHERE symbol=?"
+        params: list[Any] = [symbol]
+        if since is not None:
+            sql += " AND date >= ?"
+            params.append(since.isoformat())
+        sql += " ORDER BY date DESC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        rows = await self.fetchall(sql, tuple(params))
+        return [
+            DailyBar(
+                date=date.fromisoformat(r["date"]), open=Decimal(r["open"]),
+                high=Decimal(r["high"]), low=Decimal(r["low"]), close=Decimal(r["close"]),
+                volume=int(r["volume"]),
+            )
+            for r in reversed(rows)
+        ]
+
+    async def bar_counts(self) -> dict[str, int]:
+        rows = await self.fetchall("SELECT symbol, COUNT(*) AS n FROM bars GROUP BY symbol")
+        return {r["symbol"]: int(r["n"]) for r in rows}
