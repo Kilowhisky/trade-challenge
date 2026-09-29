@@ -4,12 +4,14 @@ paper exits (spec §9.4, §9.5, §10)."""
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 from desk_fixtures import RULES, trend_bars
 
 from tc.broker.client import BrokerUnauthorized
@@ -250,3 +252,82 @@ async def test_a_dead_token_is_reported_not_raised(desk_store: Store, tmp_path: 
                                reactions=Fixed(Reaction(False, False)), rules=RULES,
                                desk=DeskConfig(), now=now)
     assert rep.blind is True and rep.skipped[0][1] == "skipped_blind"
+
+
+# --- fix round 1 -------------------------------------------------------
+
+
+async def test_a_proposal_from_an_earlier_session_expires_without_filling(
+    desk_store: Store, tmp_path: Path,
+) -> None:
+    """A missed 15:55 fire must not let a proposal posted on an earlier ET
+    date fill the next morning -- that is the overnight-resting entry
+    CLAUDE.md §4.2 forbids."""
+    await ensure_book(desk_store, TODAY, Decimal("3700"), T0)
+    await desk_store.upsert_bars("AAA", trend_bars(date(2026, 6, 1), 80, first="40", step="0.125"))
+    call = await insert_call(desk_store, NewCall(
+        made_at=T0, session=TODAY, origin="pm", pitch_id=None, extends_call_id=None, symbol="AAA",
+        direction="up", thesis="t" * 12, target=Decimal("55"), invalidation=Decimal("48"),
+        horizon_days=5, conviction=3, benchmark="XLK", ref_price=Decimal(50),
+        spy_ref=Decimal(500), bench_ref=Decimal(200), funding="shares"))
+    p = await create_proposal(desk_store, call_id=call.id, created_at=T0, instrument="shares",
+                              symbol="AAA", underlying="AAA", quantity=7,
+                              max_entry_price=Decimal("50.50"), atr_pct=Decimal(2))
+    posted = datetime(2026, 9, 28, 18, 50, tzinfo=UTC)              # 14:50 ET the day before
+    await mark_posted(desk_store, p.id, posted, posted + timedelta(minutes=10), "m1")
+    next_morning = datetime(2026, 9, 29, 13, 55, tzinfo=UTC)        # 09:55 ET
+    _quotes(tmp_path, next_morning, AAA=(50.0, 49.98, 50.02))
+    rep = await _run(desk_store, tmp_path, next_morning)
+    assert rep.filled == [] and rep.skipped[0][1] == "expired"
+
+
+async def test_a_raised_stop_recomputes_its_limit_and_gaps_to_the_bid(
+    desk_store: Store, tmp_path: Path,
+) -> None:
+    await _held(desk_store, tmp_path)
+    cid_row = await desk_store.fetchone("SELECT id FROM calls")
+    assert cid_row is not None
+    await tighten(desk_store, cid_row["id"], Decimal("49.5"), T0)
+    now = T0 + timedelta(minutes=20)
+    _quotes(tmp_path, now, AAA=(46.5, 46.45, 46.55))       # below the recomputed 47.02 limit
+    rep = await _run(desk_store, tmp_path, now)
+    assert rep.exits and rep.exits[0][1] == "stop"
+    fill = await desk_store.fetchone("SELECT price FROM paper_fills WHERE side='sell'")
+    assert fill is not None and fill["price"] == "46.45"
+
+
+async def test_a_raised_stop_still_fills_at_the_trigger_above_its_recomputed_limit(
+    desk_store: Store, tmp_path: Path,
+) -> None:
+    await _held(desk_store, tmp_path)
+    cid_row = await desk_store.fetchone("SELECT id FROM calls")
+    assert cid_row is not None
+    await tighten(desk_store, cid_row["id"], Decimal("49.5"), T0)
+    now = T0 + timedelta(minutes=20)
+    _quotes(tmp_path, now, AAA=(48.0, 47.95, 48.05))       # between the 47.02 limit and the 49.50 trigger
+    rep = await _run(desk_store, tmp_path, now)
+    assert rep.exits and rep.exits[0][1] == "stop"
+    fill = await desk_store.fetchone("SELECT price FROM paper_fills WHERE side='sell'")
+    assert fill is not None and fill["price"] == "49.50"
+
+
+async def test_an_option_entry_skips_when_the_underlying_is_already_through_the_invalidation(
+    desk_store: Store, tmp_path: Path,
+) -> None:
+    await _setup(desk_store, funding="call")
+    now = T0 + timedelta(minutes=10)
+    _quotes(tmp_path, now, AAA=(47.5, 47.4, 47.6), **{OSI.replace(" ", "_"): (2.45, 2.40, 2.50)})
+    rep = await _run(desk_store, tmp_path, now)
+    assert rep.filled == [] and rep.skipped[0][1] == "skipped_invalid"
+
+
+async def test_a_missing_exit_quote_logs_a_warning(
+    desk_store: Store, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    await _held(desk_store, tmp_path)
+    now = T0 + timedelta(minutes=20)
+    _quotes(tmp_path, now)                      # no symbols recorded: AAA's quote is missing
+    with caplog.at_level(logging.WARNING, logger="tc.desk.watch"):
+        rep = await _run(desk_store, tmp_path, now)
+    assert rep.exits == []
+    assert "AAA" in caplog.text

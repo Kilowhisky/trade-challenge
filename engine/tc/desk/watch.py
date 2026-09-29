@@ -4,6 +4,7 @@ exits. Engine code; the model is not involved."""
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, time
 from decimal import ROUND_CEILING, Decimal
@@ -28,13 +29,16 @@ from tc.desk.paper import (
 )
 from tc.desk.scoring import resolution_for
 from tc.desk.sizing import SizingRefused, entry_stop
-from tc.money import CENT
+from tc.money import CENT, floor_cents
 from tc.notify import Notifier
 from tc.rules.model import Rules
 from tc.store.db import Store
 
+log = logging.getLogger(__name__)
+
 ENTRY_CUTOFF = time(15, 55)
 RESOLVED_EXIT_FROM = time(10, 0)
+HUNDRED = Decimal(100)
 
 
 @dataclass
@@ -58,7 +62,11 @@ async def _entries(
     for p in await pending_proposals(store):
         if p.posted_at is None:
             continue
-        if et.time() >= ENTRY_CUTOFF:
+        # A missed 15:55 fire must not let a proposal from an earlier ET
+        # session fill the next morning -- that is exactly the overnight-
+        # resting entry CLAUDE.md §4.2 forbids.
+        posted_et_date = p.posted_at.astimezone(ET).date()
+        if posted_et_date < et.date() or et.time() >= ENTRY_CUTOFF:
             await record_outcome(store, p.id, now, "expired", vetoed=False, approved=False,
                                  detail={"reason": "unfilled at 15:55 (CLAUDE.md §4.2)"})
             rep.skipped.append((p.id, "expired"))
@@ -68,7 +76,7 @@ async def _entries(
         if not due:
             continue
         try:
-            q = (await _quote(broker, [p.symbol])).get(p.symbol)
+            quotes = await _quote(broker, [p.symbol, p.underlying])
         except BrokerUnauthorized:
             await record_outcome(store, p.id, now, "skipped_blind", vetoed=r.veto,
                                  approved=r.approve, detail={})
@@ -77,12 +85,13 @@ async def _entries(
             continue
         except BrokerError:
             continue            # transient: the next run tries again
-        await _fill_entry(store, notifier, rules, p, q, r, now, rep)
+        await _fill_entry(store, notifier, rules, p, quotes.get(p.symbol),
+                          quotes.get(p.underlying), r, now, rep)
 
 
 async def _fill_entry(
-    store: Store, notifier: Notifier, rules: Rules, p: Proposal, q: Quote | None, r: Reaction,
-    now: datetime, rep: WatchReport,
+    store: Store, notifier: Notifier, rules: Rules, p: Proposal, q: Quote | None,
+    u: Quote | None, r: Reaction, now: datetime, rep: WatchReport,
 ) -> None:
     detail = {"unreadable": r.unreadable}
     if q is None or q.ask <= 0 or q.ask > p.max_entry_price:
@@ -90,11 +99,11 @@ async def _fill_entry(
                              detail={**detail, "ask": None if q is None else str(q.ask)})
         rep.skipped.append((p.id, "skipped_price"))
         return
+    call = await get_call(store, await current_call_id(store, p.call_id))
+    assert call is not None
+    inval = await effective_invalidation(store, call)
     trigger = limit = None
     if p.instrument == "shares":
-        call = await get_call(store, await current_call_id(store, p.call_id))
-        assert call is not None
-        inval = await effective_invalidation(store, call)
         try:
             if q.ask <= inval:
                 raise SizingRefused("the ask is at or below the invalidation")
@@ -105,6 +114,19 @@ async def _fill_entry(
             rep.skipped.append((p.id, "skipped_invalid"))
             return
         trigger, limit = stop.trigger, stop.limit
+    elif u is not None:
+        # An option's own quote says nothing about the thesis: the
+        # underlying can already be through the invalidation while the
+        # contract itself still has a fillable ask, and filling here just
+        # hands it straight back to `_exits` for an immediate sale.
+        through = (u.last <= inval) if call.direction == "up" else (u.last >= inval)
+        if through:
+            await record_outcome(
+                store, p.id, now, "skipped_invalid", vetoed=r.veto, approved=r.approve,
+                detail={**detail, "reason": "the underlying is at or through the invalidation"},
+            )
+            rep.skipped.append((p.id, "skipped_invalid"))
+            return
     await record_fill(store, p.id, now, "buy", p.quantity, q.ask, "entry", trigger, limit)
     await record_outcome(store, p.id, now, "filled", vetoed=r.veto, approved=r.approve,
                          detail=detail)
@@ -120,9 +142,17 @@ def _exit_reason(
 ) -> tuple[str, Decimal] | None:
     if pos.instrument == "shares":
         thesis = inval.quantize(CENT, rounding=ROUND_CEILING)
-        trigger = max(pos.stop_trigger or Decimal(0), thesis)
+        raw_trigger = pos.stop_trigger or Decimal(0)
+        trigger = max(raw_trigger, thesis)
+        # §3.4/§9.5: the limit sits 5% below the trigger. A trigger raised by
+        # a tightened invalidation carries a limit that was never priced for
+        # it -- the stored `stop_limit` is still 5% below the OLD trigger --
+        # so a raised trigger recomputes its own limit rather than reusing it.
+        limit = pos.stop_limit
+        if trigger > raw_trigger:
+            limit = floor_cents(trigger * (HUNDRED - rules.stop_limit_pct_below_trigger) / HUNDRED)
         if u.last <= trigger:
-            price = trigger if pos.stop_limit is None or u.last >= pos.stop_limit else t.bid
+            price = trigger if limit is None or u.last >= limit else t.bid
             return "stop", price
         if u.last >= target:
             return "target", t.bid
@@ -156,6 +186,10 @@ async def _exits(
         for pos in positions:
             u, t = quotes.get(pos.underlying), quotes.get(pos.symbol)
             if u is None or t is None:
+                log.warning(
+                    "desk_watch: no quote for %s (underlying %s) -- exit check skipped this pass",
+                    pos.symbol, pos.underlying,
+                )
                 continue
             mark_price = t.bid if pos.instrument != "shares" else u.last
             await upsert_mark(store, pos.symbol, mark_price, now)
