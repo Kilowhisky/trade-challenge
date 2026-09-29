@@ -27,6 +27,8 @@ from tc.desk.paper import (
     mark_posted,
     open_positions,
     pending_proposals,
+    record_fill,
+    record_outcome,
     request_exit,
 )
 from tc.desk.watch import run_desk_watch
@@ -36,6 +38,7 @@ from tc.store.db import Store
 T0 = datetime(2026, 9, 29, 14, 0, tzinfo=UTC)          # 10:00 ET
 TODAY = date(2026, 9, 29)
 OSI = "AAA   261120C00050000"
+RESERVE = Decimal("900.00")
 
 
 class Notes(Notifier):
@@ -90,7 +93,8 @@ NOBODY = Reaction(veto=False, approve=False)
 async def _run(store: Store, fx: Path, now: datetime, r: Reaction = NOBODY,
                notes: Notes | None = None) -> Any:
     return await run_desk_watch(store=store, broker=FakeBroker(fx, now), notifier=notes or Notes(),
-                                reactions=Fixed(r), rules=RULES, desk=DeskConfig(), now=now)
+                                reactions=Fixed(r), rules=RULES, desk=DeskConfig(),
+                                reserve=RESERVE, now=now)
 
 
 async def test_a_proposal_waits_for_its_window_then_fills_at_the_ask(
@@ -250,7 +254,7 @@ async def test_a_dead_token_is_reported_not_raised(desk_store: Store, tmp_path: 
     now = T0 + timedelta(minutes=10)
     rep = await run_desk_watch(store=desk_store, broker=Dead(tmp_path, now), notifier=Notes(),
                                reactions=Fixed(Reaction(False, False)), rules=RULES,
-                               desk=DeskConfig(), now=now)
+                               desk=DeskConfig(), reserve=RESERVE, now=now)
     assert rep.blind is True and rep.skipped[0][1] == "skipped_blind"
 
 
@@ -331,3 +335,34 @@ async def test_a_missing_exit_quote_logs_a_warning(
         rep = await _run(desk_store, tmp_path, now)
     assert rep.exits == []
     assert "AAA" in caplog.text
+
+
+# --- final review C1: the caps are re-checked at the fill price ---------
+
+
+async def test_a_fill_that_would_breach_a_cap_is_skipped_as_invalid(
+    desk_store: Store, tmp_path: Path,
+) -> None:
+    """The PM proposed inside every cap, but the book moved during the veto
+    window (here: another position filled and took 2,500 of cash). At the
+    fill, 7 x 50.02 would leave 849.86 against the 900.00 reserve."""
+    _, pid = await _setup(desk_store)
+    other = await insert_call(desk_store, NewCall(
+        made_at=T0, session=TODAY, origin="pm", pitch_id=None, extends_call_id=None,
+        symbol="ZZZ", direction="up", thesis="t" * 12, target=Decimal(60),
+        invalidation=Decimal(40), horizon_days=5, conviction=4, benchmark="SPY",
+        ref_price=Decimal(50), spy_ref=Decimal(500), bench_ref=Decimal(500), funding="shares"))
+    z = await create_proposal(desk_store, call_id=other.id, created_at=T0, instrument="shares",
+                              symbol="ZZZ", underlying="ZZZ", quantity=50,
+                              max_entry_price=Decimal(50), atr_pct=Decimal(2))
+    await record_fill(desk_store, z.id, T0, "buy", 50, Decimal(50), "entry")
+    await record_outcome(desk_store, z.id, T0, "filled", vetoed=False, approved=False, detail={})
+    now = T0 + timedelta(minutes=10)
+    _quotes(tmp_path, now, AAA=(50.0, 49.98, 50.02), ZZZ=(50.0, 49.98, 50.02))
+    rep = await _run(desk_store, tmp_path, now)
+    assert rep.filled == [] and rep.skipped == [(pid, "skipped_invalid")]
+    row = await desk_store.fetchone(
+        "SELECT detail_json FROM proposal_outcomes WHERE proposal_id=?", (pid,))
+    assert row is not None and "at the fill price" in row["detail_json"]
+    assert "reserve" in row["detail_json"]
+    assert [p.symbol for p in await open_positions(desk_store)] == ["ZZZ"]

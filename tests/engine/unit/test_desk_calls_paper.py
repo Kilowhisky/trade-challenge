@@ -124,6 +124,38 @@ async def test_fills_drive_positions_cash_and_closed_trades(desk_store: Store) -
     assert (t.proposal_id, t.ret_pct) == (shares.id, Decimal(10))
 
 
+async def test_a_pending_proposal_is_committed_at_its_worst_case(desk_store: Store) -> None:
+    """Final review C1: a proposal nobody has filled yet still spends the
+    book's cash, open premium and name exposure at max_entry x qty x mult."""
+    await ensure_book(desk_store, TODAY, Decimal("3700"), NOW)
+    c = await insert_call(desk_store, _call())
+    shares = await create_proposal(desk_store, call_id=c.id, created_at=NOW, instrument="shares",
+                                   symbol="AAA", underlying="AAA", quantity=7,
+                                   max_entry_price=Decimal("50.50"), atr_pct=Decimal(2))
+    opt = await create_proposal(desk_store, call_id=c.id, created_at=NOW, instrument="call",
+                                symbol="AAA   261120C00050000", underlying="AAA", quantity=1,
+                                max_entry_price=Decimal("2.60"), atr_pct=None)
+    state = await book_state(desk_store)
+    assert state.cash == Decimal("3700") - Decimal("353.50") - Decimal("260.00")
+    assert state.equity == Decimal("3700")                  # a commitment is not a loss
+    assert state.open_premium == Decimal("260.00")
+    assert (state.positions, state.pending) == (0, 2)
+    assert {(h.symbol, h.benchmark, h.market_value) for h in state.holdings} == {
+        ("AAA", "XLK", Decimal("353.50")), ("AAA", "XLK", Decimal("260.00"))}
+    # desk_watch re-checks one proposal against the book without itself.
+    alone = await book_state(desk_store, exclude_proposal=shares.id)
+    assert alone.cash == Decimal("3700") - Decimal("260.00") and alone.pending == 1
+    # Once it fills (fill written, outcome not yet) it counts once, as a position.
+    await record_fill(desk_store, shares.id, NOW, "buy", 7, Decimal("50.00"), "entry")
+    state = await book_state(desk_store)
+    assert state.cash == Decimal("3700") - Decimal("350.00") - Decimal("260.00")
+    assert (state.positions, state.pending) == (1, 1)
+    # A finished proposal (expired) commits nothing.
+    await record_outcome(desk_store, opt.id, NOW, "expired", vetoed=False, approved=False,
+                         detail={})
+    assert (await book_state(desk_store)).open_premium == 0
+
+
 async def test_book_state_refuses_before_the_book_starts(desk_store: Store) -> None:
     with pytest.raises(DeskRefused, match="has not started"):
         await book_state(desk_store)

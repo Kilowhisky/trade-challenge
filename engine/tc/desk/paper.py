@@ -253,7 +253,30 @@ async def closed_trades(store: Store) -> list[ClosedTrade]:
     return out
 
 
-async def book_state(store: Store) -> BookState:
+async def committed_proposals(store: Store) -> list[Proposal]:
+    """Proposals the book has promised money to but not yet spent it on: no
+    outcome recorded and no entry fill. (`_fill_entry` writes the fill just
+    before the outcome, so the fill test keeps a proposal from counting twice
+    -- once as a position and once as a commitment.)"""
+    rows = await store.fetchall(
+        "SELECT * FROM proposals WHERE id NOT IN (SELECT proposal_id FROM proposal_outcomes)"
+        " AND id NOT IN (SELECT proposal_id FROM paper_fills WHERE side='buy') ORDER BY id"
+    )
+    return [_proposal(r) for r in rows]
+
+
+async def book_state(store: Store, *, exclude_proposal: int | None = None) -> BookState:
+    """The book as sizing must see it (spec §9.2, §10: "the $900 reserve and
+    all caps"). Open positions at their marks, AND every pending proposal as
+    if it had already filled at its worst case -- `max_entry_price` x
+    quantity x multiplier: that much is taken off `cash`, added to open
+    premium for an option, and carried as a `Holding` on its underlying so
+    the §3.1 same-name total, the §3.8 cluster and the correlation test all
+    see it. Without this, five funded calls in one PM run each sized against
+    a book that had heard of none of the others.
+
+    `exclude_proposal` leaves one proposal out -- desk_watch re-checks a
+    proposal at its actual fill price against the book WITHOUT itself."""
     row = await book_row(store)
     if row is None:
         raise DeskRefused("the paper book has not started (it starts at the first PM run)")
@@ -270,10 +293,26 @@ async def book_state(store: Store) -> BookState:
             benchmark="SPY" if call is None else call.benchmark, is_option=is_option,
             premium_paid=p.entry_price * p.quantity * m if is_option else Decimal(0),
         ))
-    c = await cash(store, start_equity)
+    committed = Decimal(0)
+    for q in await committed_proposals(store):
+        if q.id == exclude_proposal:
+            continue
+        call = await get_call(store, q.call_id)
+        worst = q.max_entry_price * q.quantity * MULT[q.instrument]
+        is_option = q.instrument != "shares"
+        committed += worst
+        holdings.append(Holding(
+            symbol=q.underlying, market_value=worst,
+            benchmark="SPY" if call is None else call.benchmark, is_option=is_option,
+            premium_paid=worst if is_option else Decimal(0), pending=True,
+        ))
+    c = await cash(store, start_equity) - committed
+    # Equity is unchanged by a commitment: cash falls by `worst` and a holding
+    # worth `worst` appears, so the scorecard's book return does not move
+    # until something actually fills.
     return BookState(
         equity=c + sum((h.market_value for h in holdings), Decimal(0)), cash=c,
-        holdings=tuple(holdings), pending=len(await pending_proposals(store)),
+        holdings=tuple(holdings),
     )
 
 

@@ -28,18 +28,36 @@ class Holding:
     benchmark: str
     is_option: bool
     premium_paid: Decimal = Decimal(0)
+    # A proposal not yet filled or finished, held at its worst case
+    # (`max_entry_price` x quantity x multiplier) so that every cap sees money
+    # the book has already promised (paper.book_state).
+    pending: bool = False
 
 
 @dataclass(frozen=True)
 class BookState:
+    """A snapshot of the book for sizing. `holdings` holds the open positions
+    AND every pending proposal (`Holding.pending`), and `cash` is already net
+    of the pending proposals' worst-case cost: a second call in the same PM run
+    must size against the first one's commitment, not against a book that
+    has not heard of it."""
+
     equity: Decimal
     cash: Decimal
     holdings: tuple[Holding, ...]
-    pending: int
+
+    @property
+    def positions(self) -> int:
+        return sum(1 for h in self.holdings if not h.pending)
+
+    @property
+    def pending(self) -> int:
+        return sum(1 for h in self.holdings if h.pending)
 
     @property
     def open_premium(self) -> Decimal:
-        """§3.2 "open premium" = premium PAID on open positions; marks irrelevant."""
+        """§3.2 "open premium" = premium PAID on open positions, plus the
+        worst-case premium of pending option proposals; marks irrelevant."""
         return sum((h.premium_paid for h in self.holdings if h.is_option), Decimal(0))
 
 
@@ -91,19 +109,24 @@ def check_book(
     reserve: Decimal,
 ) -> None:
     max_pos = int(rules.get("strategy", "max_funded_positions"))
-    if len(book.holdings) + book.pending >= max_pos:
+    if len(book.holdings) >= max_pos:
         raise SizingRefused(
-            f"the book carries {len(book.holdings)} positions and {book.pending} pending"
+            f"the book carries {book.positions} positions and {book.pending} pending"
             f" proposals; the limit is {max_pos}"
         )
     if book.cash - notional < reserve:
         raise SizingRefused(
-            f"cash {book.cash} less {cents(notional)} would breach the {reserve} reserve"
+            f"cash {cents(book.cash)} (net of pending proposals) less {cents(notional)} would"
+            f" breach the {reserve} reserve"
         )
-    if notional > cap_dollars(rules.single_position_pct, book.equity):
+    # CLAUDE.md §3.1 caps the resulting TOTAL, "counting all prior adds": what
+    # is already held or pending on this underlying counts with the new order.
+    same = sum((h.market_value for h in book.holdings if h.symbol == symbol), Decimal(0))
+    if same + notional > cap_dollars(rules.single_position_pct, book.equity):
         raise SizingRefused(
-            f"{cents(notional)} is over the §3.1 single-position cap"
-            f" ({rules.single_position_pct}% of {book.equity})"
+            f"{cents(notional)} on top of {cents(same)} already held or pending in {symbol} is"
+            f" over the §3.1 single-position cap ({rules.single_position_pct}% of"
+            f" {cents(book.equity)})"
         )
     if is_option:
         if notional > cap_dollars(rules.option_single_position_pct, book.equity):

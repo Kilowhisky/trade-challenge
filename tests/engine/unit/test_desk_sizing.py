@@ -25,8 +25,8 @@ EQ = Decimal("3700")
 RESERVE = Decimal("900.00")
 
 
-def _book(*holdings: Holding, cash: str = "3700", pending: int = 0) -> BookState:
-    return BookState(equity=EQ, cash=Decimal(cash), holdings=holdings, pending=pending)
+def _book(*holdings: Holding, cash: str = "3700") -> BookState:
+    return BookState(equity=EQ, cash=Decimal(cash), holdings=holdings)
 
 
 def test_conviction_below_three_is_never_funded() -> None:
@@ -50,8 +50,9 @@ def test_option_quantity_is_whole_contracts_under_the_cap() -> None:
 
 def test_the_position_count_includes_pending_proposals() -> None:
     held = tuple(Holding(f"S{i}", Decimal(100), "XLK", False) for i in range(7))
-    with pytest.raises(SizingRefused, match="the limit is 8"):
-        check_book(_book(*held, pending=1), symbol="NEW", benchmark="SPY",
+    pending = Holding("P0", Decimal(100), "SPY", False, pending=True)
+    with pytest.raises(SizingRefused, match="7 positions and 1 pending proposals; the limit is 8"):
+        check_book(_book(*held, pending), symbol="NEW", benchmark="SPY",
                    notional=Decimal(100), is_option=False, correlated=frozenset(),
                    rules=RULES, reserve=RESERVE)
 
@@ -66,6 +67,20 @@ def test_the_single_position_cap_binds() -> None:
     with pytest.raises(SizingRefused, match=r"§3.1"):
         check_book(_book(), symbol="NEW", benchmark="SPY", notional=Decimal(1300),
                    is_option=False, correlated=frozenset(), rules=RULES, reserve=RESERVE)
+
+
+def test_the_single_position_cap_counts_what_is_already_held_or_pending() -> None:
+    """CLAUDE.md §3.1: "counting all prior adds to that position" -- the 35%
+    cap is on the resulting total, not on each order."""
+    held = Holding("AAA", Decimal(700), "SPY", False)
+    pending = Holding("AAA", Decimal(400), "SPY", False, pending=True)
+    # 700 + 400 + 200 = 1300 > 35% of 3700 = 1295.
+    with pytest.raises(SizingRefused, match=r"already held or pending in AAA.*§3.1"):
+        check_book(_book(held, pending), symbol="AAA", benchmark="SPY", notional=Decimal(200),
+                   is_option=False, correlated=frozenset(), rules=RULES, reserve=RESERVE)
+    # The same order on another name is fine.
+    check_book(_book(held, pending), symbol="BBB", benchmark="SPY", notional=Decimal(200),
+               is_option=False, correlated=frozenset(), rules=RULES, reserve=RESERVE)
 
 
 def test_open_option_premium_is_capped_at_thirty_percent() -> None:

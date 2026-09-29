@@ -17,8 +17,10 @@ from tc.desk.approval import Reaction, Reactions
 from tc.desk.calls import current_call_id, effective_invalidation, get_call
 from tc.desk.options import osi_expiry
 from tc.desk.paper import (
+    MULT,
     PaperPosition,
     Proposal,
+    book_state,
     mark_exit_done,
     open_positions,
     pending_exit_requests,
@@ -27,8 +29,9 @@ from tc.desk.paper import (
     record_outcome,
     upsert_mark,
 )
+from tc.desk.pm import correlated_with
 from tc.desk.scoring import resolution_for
-from tc.desk.sizing import SizingRefused, entry_stop
+from tc.desk.sizing import SizingRefused, check_book, entry_stop
 from tc.money import CENT, floor_cents
 from tc.notify import Notifier
 from tc.rules.model import Rules
@@ -56,7 +59,7 @@ async def _quote(broker: Broker, symbols: list[str]) -> dict[str, Quote]:
 
 async def _entries(
     store: Store, broker: Broker, notifier: Notifier, reactions: Reactions, rules: Rules,
-    now: datetime, rep: WatchReport,
+    reserve: Decimal, now: datetime, rep: WatchReport,
 ) -> None:
     et = now.astimezone(ET)
     for p in await pending_proposals(store):
@@ -85,13 +88,13 @@ async def _entries(
             continue
         except BrokerError:
             continue            # transient: the next run tries again
-        await _fill_entry(store, notifier, rules, p, quotes.get(p.symbol),
+        await _fill_entry(store, notifier, rules, reserve, p, quotes.get(p.symbol),
                           quotes.get(p.underlying), r, now, rep)
 
 
 async def _fill_entry(
-    store: Store, notifier: Notifier, rules: Rules, p: Proposal, q: Quote | None,
-    u: Quote | None, r: Reaction, now: datetime, rep: WatchReport,
+    store: Store, notifier: Notifier, rules: Rules, reserve: Decimal, p: Proposal,
+    q: Quote | None, u: Quote | None, r: Reaction, now: datetime, rep: WatchReport,
 ) -> None:
     detail = {"unreadable": r.unreadable}
     if q is None or q.ask <= 0 or q.ask > p.max_entry_price:
@@ -127,6 +130,24 @@ async def _fill_entry(
             )
             rep.skipped.append((p.id, "skipped_invalid"))
             return
+    # The caps were checked when the PM proposed, at the worst-case price, but
+    # marks move during the veto window: re-check at the price actually paid,
+    # against the book WITHOUT this proposal's own commitment (spec §10: the
+    # paper book runs under "the $900 reserve and all caps").
+    book = await book_state(store, exclude_proposal=p.id)
+    try:
+        check_book(
+            book, symbol=p.underlying, benchmark=call.benchmark,
+            notional=q.ask * p.quantity * MULT[p.instrument], is_option=p.instrument != "shares",
+            correlated=await correlated_with(store, rules, p.underlying, book), rules=rules,
+            reserve=reserve,
+        )
+    except SizingRefused as e:
+        await record_outcome(store, p.id, now, "skipped_invalid", vetoed=r.veto,
+                             approved=r.approve,
+                             detail={**detail, "reason": f"at the fill price: {e}"})
+        rep.skipped.append((p.id, "skipped_invalid"))
+        return
     await record_fill(store, p.id, now, "buy", p.quantity, q.ask, "entry", trigger, limit)
     await record_outcome(store, p.id, now, "filled", vetoed=r.veto, approved=r.approve,
                          detail=detail)
@@ -224,9 +245,9 @@ async def _exits(
 
 async def run_desk_watch(
     *, store: Store, broker: Broker, notifier: Notifier, reactions: Reactions, rules: Rules,
-    desk: DeskConfig, now: datetime,
+    desk: DeskConfig, reserve: Decimal, now: datetime,
 ) -> WatchReport:
     rep = WatchReport()
-    await _entries(store, broker, notifier, reactions, rules, now, rep)
+    await _entries(store, broker, notifier, reactions, rules, reserve, now, rep)
     await _exits(store, broker, notifier, rules, now, rep)
     return rep

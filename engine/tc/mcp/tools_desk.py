@@ -258,9 +258,10 @@ def _pm(deps: McpDeps, ctx: DeskContext | None, *, making_calls: bool = False) -
 
 def _register_pm(server: FastMCP, deps: McpDeps) -> None:
     @server.tool(name="paper_book", description=(
-        "The desk's paper book: equity, cash, open premium, positions with their call's"
-        " target/invalidation/horizon, pending proposals, and the real account's legacy"
-        " positions with any legacy call attached."))
+        "The desk's paper book: equity, cash and open premium (both already net of pending"
+        " proposals at their max entry price, which is what the caps size against), positions"
+        " with their call's target/invalidation/horizon, pending proposals, and the real"
+        " account's legacy positions with any legacy call attached."))
     async def paper_book(ctx: DeskContext | None = None) -> PaperBookOut:
         return await paper_book_view(_pm(deps, ctx))
 

@@ -725,7 +725,8 @@ class Engine:
     async def _job_desk_watch(self, now: datetime) -> tuple[Verdict, dict[str, Any]]:
         rep = await run_desk_watch(
             store=self._store, broker=self._broker, notifier=self.notifier,
-            reactions=self._reactions, rules=self._rules, desk=self._s.desk, now=now,
+            reactions=self._reactions, rules=self._rules, desk=self._s.desk,
+            reserve=self._s.engine.reserve_usd, now=now,
         )
         detail: dict[str, Any] = {
             "filled": rep.filled, "skipped": rep.skipped, "exits": rep.exits,

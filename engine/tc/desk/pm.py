@@ -144,14 +144,19 @@ async def fresh_quotes(ctx: PmContext, symbols: Iterable[str]) -> dict[str, Quot
     return got
 
 
-async def _correlated(ctx: PmContext, symbol: str, book: BookState) -> frozenset[str]:
-    threshold = ctx.rules.get("manual", "correlation_threshold")
-    mine = await ctx.store.bars_for(symbol, limit=CORR_BARS)
+async def correlated_with(
+    store: Store, rules: Rules, symbol: str, book: BookState
+) -> frozenset[str]:
+    """The book's names (held or pending) whose daily returns correlate with
+    `symbol` above the §3.8 threshold. Shared by the PM's sizing and
+    desk_watch's fill-time re-check, so both judge the cluster the same way."""
+    threshold = rules.get("manual", "correlation_threshold")
+    mine = await store.bars_for(symbol, limit=CORR_BARS)
     out: set[str] = set()
     for h in book.holdings:
-        if h.symbol == symbol:
+        if h.symbol == symbol or h.symbol in out:
             continue
-        r = ind.log_return_corr(mine, await ctx.store.bars_for(h.symbol, limit=CORR_BARS))
+        r = ind.log_return_corr(mine, await store.bars_for(h.symbol, limit=CORR_BARS))
         if r is not None and r > threshold:
             out.add(h.symbol)
     return frozenset(out)
@@ -164,7 +169,7 @@ async def _fund(
     conviction_pct("shares" if cin.funding == "shares" else "option", cin.conviction, rules)
     chase = rules.get("strategy", "max_entry_chase_pct")
     book = await book_state(ctx.store)
-    correlated = await _correlated(ctx, symbol, book)
+    correlated = await correlated_with(ctx.store, rules, symbol, book)
     if cin.funding == "shares":
         if cin.direction != "up":
             raise DeskRefused("shares fund up calls only; a down call is funded with a put")
