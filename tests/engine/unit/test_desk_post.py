@@ -16,6 +16,7 @@ review caught:
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -29,7 +30,7 @@ from tc.broker.models import MarketWindow
 from tc.clock import ET
 from tc.config import DeskConfig
 from tc.desk.calls import NewCall, insert_call
-from tc.desk.paper import create_proposal, pending_proposals, unposted_proposals
+from tc.desk.paper import create_proposal, mark_posted, pending_proposals, unposted_proposals
 from tc.desk.post import post_proposals
 from tc.notify import Notifier
 from tc.rules.model import Rules
@@ -213,3 +214,40 @@ async def test_a_full_session_still_posts_until_the_entry_window_ends(
                           symbol="AAA", underlying="AAA", quantity=7,
                           max_entry_price=Decimal("50.50"), atr_pct=Decimal(2))
     assert await post_proposals(desk_store, RecordingNotifier(client), RULES, DESK, at, full)
+
+
+# --- final review M7: one poster claims a proposal ----------------------
+
+async def test_mark_posted_claims_a_proposal_once(desk_store: Store) -> None:
+    call = await insert_call(desk_store, _call())
+    p = await create_proposal(desk_store, call_id=call.id, created_at=NOW, instrument="shares",
+                              symbol="AAA", underlying="AAA", quantity=7,
+                              max_entry_price=Decimal("50.50"), atr_pct=Decimal(2))
+    deadline = NOW + timedelta(minutes=10)
+    assert await mark_posted(desk_store, p.id, NOW, deadline, "first") is True
+    assert await mark_posted(desk_store, p.id, NOW, deadline, "second") is False
+    [q] = await pending_proposals(desk_store)
+    assert q.message_id == "first"
+
+
+async def test_a_proposal_another_process_posted_first_is_not_claimed_twice(
+    desk_store: Store, client: httpx.AsyncClient, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The serving engine and a `tc run --once pm` both post: the one that
+    marks second leaves the first message id in place and says so."""
+    call = await insert_call(desk_store, _call())
+    p = await create_proposal(desk_store, call_id=call.id, created_at=NOW, instrument="shares",
+                              symbol="AAA", underlying="AAA", quantity=7,
+                              max_entry_price=Decimal("50.50"), atr_pct=Decimal(2))
+
+    class Racing(RecordingNotifier):
+        async def post_message(self, text: str) -> str | None:
+            await mark_posted(desk_store, p.id, NOW, NOW + timedelta(minutes=10), "other")
+            return await super().post_message(text)
+
+    with caplog.at_level(logging.WARNING, logger="tc.desk.post"):
+        posted = await post_proposals(desk_store, Racing(client), RULES, DESK, NOW, None)
+    assert posted == []
+    [q] = await pending_proposals(desk_store)
+    assert q.message_id == "other"
+    assert "already posted" in caplog.text

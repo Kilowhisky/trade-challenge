@@ -129,11 +129,18 @@ async def create_proposal(
 async def mark_posted(
     store: Store, proposal_id: int, posted_at: datetime, veto_deadline: datetime,
     message_id: str | None,
-) -> None:
-    await store.execute(
-        "UPDATE proposals SET posted_at=?, veto_deadline=?, message_id=? WHERE id=?",
-        (utc_iso(posted_at), utc_iso(veto_deadline), message_id, proposal_id),
-    )
+) -> bool:
+    """Claim the post: True only for the one caller that marked it first.
+    Two processes (the serving engine and a `tc run --once pm`) can both post
+    the same unposted proposal; the second must not overwrite the first's
+    message id, or the veto that counts would be read off the wrong message."""
+    async with store.transaction() as c:
+        cur = await c.execute(
+            "UPDATE proposals SET posted_at=?, veto_deadline=?, message_id=?"
+            " WHERE id=? AND posted_at IS NULL",
+            (utc_iso(posted_at), utc_iso(veto_deadline), message_id, proposal_id),
+        )
+        return bool(cur.rowcount)
 
 
 async def unposted_proposals(store: Store) -> list[Proposal]:

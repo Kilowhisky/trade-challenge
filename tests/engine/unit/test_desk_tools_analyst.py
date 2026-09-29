@@ -167,16 +167,19 @@ def test_caller_job_prefers_the_header_over_the_active_job() -> None:
     assert tools_desk._caller_job(deps, ctx) == "analyst_news"
 
 
-def test_caller_job_falls_back_to_the_active_job_with_no_header_present() -> None:
+def test_a_live_request_without_the_header_is_refused_not_attributed() -> None:
+    """Final review M4: a second MCP client holding the research bearer,
+    calling during the evening chain, must not be filed as the running
+    analyst."""
     deps = _deps_stub("analyst_macro")
     ctx = cast(Any, _FakeCtx({}))
-    assert tools_desk._caller_job(deps, ctx) == "analyst_macro"
+    assert tools_desk._caller_job(deps, ctx) is None
 
 
-def test_caller_job_falls_back_to_the_active_job_with_no_live_request() -> None:
+def test_a_context_with_no_live_request_is_refused_too() -> None:
     deps = _deps_stub("analyst_macro")
     ctx = cast(Any, _FakeCtx(None))
-    assert tools_desk._caller_job(deps, ctx) == "analyst_macro"
+    assert tools_desk._caller_job(deps, ctx) is None
 
 
 def test_caller_job_falls_back_to_the_active_job_with_no_context_at_all() -> None:
@@ -185,6 +188,8 @@ def test_caller_job_falls_back_to_the_active_job_with_no_context_at_all() -> Non
 
 
 def test_caller_job_never_raises_when_the_context_has_no_request_context_at_all() -> None:
+    """It answers "nobody" rather than raising, and does not fall back to the
+    running job either: only a call with no context at all does (M4)."""
     deps = _deps_stub("analyst_macro")
     ctx = cast(Any, _CtxWithNoRequestContextAtAll())
-    assert tools_desk._caller_job(deps, ctx) == "analyst_macro"
+    assert tools_desk._caller_job(deps, ctx) is None

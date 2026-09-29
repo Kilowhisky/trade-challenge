@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -17,6 +17,8 @@ from tc.desk.bars import bars_symbols, carried_symbols, refresh_bars
 from tc.store.db import Store
 
 NOW = datetime(2026, 9, 28, 20, 10, tzinfo=UTC)
+TODAY = date(2026, 9, 28)
+LAST_CANDLE_300 = date(2026, 6, 28)     # _candles(300): 2025-09-02 plus 299 days
 
 
 def _candles(n: int) -> dict[str, list[dict[str, float | int]]]:
@@ -71,17 +73,39 @@ async def test_refresh_fetches_a_year_for_a_new_symbol_and_ten_days_after(
 
     broker = Spy(_fx(tmp_path, ["AAA"], n=300), NOW)
     desk = DeskConfig(bars_request_spacing_s=0)
-    rep = await refresh_bars(broker, desk_store, ["AAA"], desk)
+    rep = await refresh_bars(broker, desk_store, ["AAA"], desk, today=LAST_CANDLE_300)
     assert (rep.fetched, rep.failed, rep.blind) == (1, [], False)
-    rep = await refresh_bars(broker, desk_store, ["AAA"], desk)
+    rep = await refresh_bars(broker, desk_store, ["AAA"], desk, today=LAST_CANDLE_300)
     assert asked == [("AAA", 260), ("AAA", 10)]
+
+
+async def test_a_symbol_whose_bars_went_stale_refetches_the_full_history(
+    tmp_path: Path, desk_store: Store,
+) -> None:
+    """Final review M11: a blind stretch longer than the ten-bar top-up must
+    not leave a permanent hole in the bars."""
+    asked: list[tuple[str, int]] = []
+
+    class Spy(FakeBroker):
+        async def daily_bars(self, symbol: str, days: int) -> list[DailyBar]:
+            asked.append((symbol, days))
+            return await super().daily_bars(symbol, days)
+
+    broker = Spy(_fx(tmp_path, ["AAA"], n=300), NOW)
+    desk = DeskConfig(bars_request_spacing_s=0)
+    await refresh_bars(broker, desk_store, ["AAA"], desk, today=LAST_CANDLE_300)
+    # Three calendar weeks later: fifteen sessions with no refresh.
+    await refresh_bars(broker, desk_store, ["AAA"], desk,
+                       today=LAST_CANDLE_300 + timedelta(days=21))
+    assert asked == [("AAA", 260), ("AAA", 260)]
 
 
 async def test_a_symbol_the_broker_cannot_answer_is_named_not_fatal(
     tmp_path: Path, desk_store: Store,
 ) -> None:
     broker = FakeBroker(_fx(tmp_path, ["AAA"]), NOW)  # no bars-BBB.json
-    rep = await refresh_bars(broker, desk_store, ["AAA", "BBB"], DeskConfig(bars_request_spacing_s=0))
+    rep = await refresh_bars(broker, desk_store, ["AAA", "BBB"], DeskConfig(bars_request_spacing_s=0),
+                             today=TODAY)
     assert (rep.fetched, rep.failed, rep.blind) == (1, ["BBB"], False)
 
 
@@ -99,7 +123,7 @@ async def test_a_dead_token_mid_sweep_stops_and_says_blind(
 
     broker = DiesAfterOne(_fx(tmp_path, ["AAA", "BBB", "CCC"]), NOW)
     rep = await refresh_bars(broker, desk_store, ["AAA", "BBB", "CCC"],
-                             DeskConfig(bars_request_spacing_s=0))
+                             DeskConfig(bars_request_spacing_s=0), today=TODAY)
     assert rep.blind is True and rep.fetched == 1
     assert await desk_store.bar_counts() == {"AAA": 5}   # what was fetched is kept
 
@@ -112,5 +136,5 @@ async def test_requests_are_paced(tmp_path: Path, desk_store: Store) -> None:
 
     broker = FakeBroker(_fx(tmp_path, ["AAA", "BBB"]), NOW)
     await refresh_bars(broker, desk_store, ["AAA", "BBB"], DeskConfig(bars_request_spacing_s=0.5),
-                       sleep=sleep)
+                       today=TODAY, sleep=sleep)
     assert slept == [0.5]  # between calls, never after the last

@@ -774,7 +774,9 @@ class Engine:
         symbols = await bars_symbols(
             self._store, self._s.desk, await carried_symbols(self._store)
         )
-        rep = await refresh_bars(self._broker, self._store, symbols, self._s.desk)
+        rep = await refresh_bars(
+            self._broker, self._store, symbols, self._s.desk, today=self._et(now).date()
+        )
         detail: dict[str, Any] = {
             "requested": rep.requested,
             "fetched": rep.fetched,

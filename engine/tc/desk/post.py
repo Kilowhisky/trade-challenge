@@ -3,6 +3,7 @@ their veto window (spec §9.4)."""
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -17,6 +18,8 @@ from tc.desk.sizing import SizingRefused, entry_stop
 from tc.notify import Notifier
 from tc.rules.model import Rules
 from tc.store.db import Store
+
+log = logging.getLogger(__name__)
 
 
 def render_proposal(p: Proposal, call: Call, deadline_et: str, stop: str) -> str:
@@ -109,7 +112,12 @@ async def post_proposals(
             await record_outcome(store, p.id, now, "expired", vetoed=False, approved=False,
                                  detail={"reason": "post failed"})
             continue
-        await mark_posted(store, p.id, now, deadline, mid)
+        if not await mark_posted(store, p.id, now, deadline, mid):
+            # Another process posted and marked it first; its message is the
+            # one whose reactions count. This one is a duplicate to ignore.
+            log.warning("proposal %s was already posted by another process; message %s is a"
+                        " duplicate", p.id, mid)
+            continue
         posted.append(p.id)
     return posted
 

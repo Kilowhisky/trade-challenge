@@ -60,9 +60,12 @@ paper book's equity. Conviction sets the size:
   at which point they count as positions.
 - Share funding requires daily ATR ≤ **6%**<!--rule:strategy_max_daily_atr_pct-->;
   a noisier name can be expressed only as an option.
-- `CLAUDE.md` §3.1 (single position), §3.2 (option premium, per position and
-  open) and §3.8 (the correlated cluster) are checked in code at proposal
-  time. **§3.8 is a cap, never a same-sector ban**: correlated means the same
+- `CLAUDE.md` §3.1 (single position, counting what is already held or
+  pending in the same name), §3.2 (option premium, per position and open)
+  and §3.8 (the correlated cluster) are checked in code at proposal time —
+  with every pending proposal counted at its worst case (maximum entry price
+  × quantity), so the calls of one PM run cannot jointly breach what each
+  clears alone — and again at the paper fill, at the price actually paid. **§3.8 is a cap, never a same-sector ban**: correlated means the same
   sector benchmark (SPY clusters nothing) or a 60-day return correlation over
   the manual's threshold.
 
@@ -143,8 +146,18 @@ approval gate as any other order (`CLAUDE.md` §0).
 
 Every pitch and every call resolves once, from daily bars: target touched,
 invalidation touched (both on one day counts as invalidation), or the
-horizon's close. Return is signed by direction; **excess** is that return
-minus SPY's over the same window, and separately minus the benchmark's.
+horizon's close. Return is signed by direction. **Excess** is measured two
+ways, and they are deliberately not symmetric:
+
+- **against SPY**, the call's signed return minus SPY's *plain* (unsigned)
+  return over the same window — the opportunity cost of the call against
+  simply holding SPY, whichever way the call pointed;
+- **against the benchmark**, the call's signed return minus the benchmark's
+  return *signed by the call's direction* — a relative call: a down call
+  wins against its sector by falling further than the sector.
+
+The checkpoint's comparisons against SPY, the stop test's included, use the
+SPY measure.
 
 **The checkpoint.** On 2026-12-31, or the first day after it with at least
 **40**<!--rule:strategy_checkpoint_min_pm_calls--> resolved PM calls:
@@ -158,6 +171,11 @@ minus SPY's over the same window, and separately minus the benchmark's.
 - Any analyst with **15**<!--rule:strategy_analyst_review_min_pitches-->+
   resolved pitches and negative mean excess against its benchmarks is dropped
   or rebuilt.
+
+The paper book's return is measured from its **start date: the day of the
+first PM run that actually dispatches** (a PM fire skipped as blind, outside
+its window or with no runner starts nothing), with SPY's return taken from
+that session's close.
 
 This is a decision rule, not a significance test: bootstrap intervals are
 shown once a group has **20**<!--rule:strategy_scorecard_ci_min_n-->
@@ -187,9 +205,21 @@ doing (`CLAUDE.md` §0):
 
 ## 10. The paper book and going live
 
-The paper book starts at the first PM run with the account's value as cash
-(legacy positions count as cash) and applies every cap above. Vetoed
-proposals still fill in it, flagged, because it records Claude's decisions.
+The paper book starts at the first PM run that actually dispatches, with the
+account's value as cash (legacy positions count as cash), and applies every
+cap above. Vetoed proposals still fill in it, flagged, because it records
+Claude's decisions.
+
+Two things the paper book does not model, stated so nobody reads them into
+it:
+
+- **No settled/unsettled split** (`CLAUDE.md` §5). A sale's proceeds are
+  cash at once, so a same-day round trip that would be a good-faith
+  violation at Schwab is legal in paper. Revised Plan 1's settlement gates
+  are therefore stricter than the book they will be compared against.
+- **No §3.6 halt analogue.** The paper book never halts on its own
+  drawdown. The real account's `CLAUDE.md` §3.6 halt governs the real
+  money; the checkpoint's stop test (§8) is what judges the paper record.
 
 Real orders are switched on only when all three hold:
 

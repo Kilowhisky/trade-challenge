@@ -12,12 +12,21 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
+from datetime import date
 
 from tc.broker.client import Broker, BrokerError, BrokerUnauthorized
+from tc.clock import trading_days_between
 from tc.config import DeskConfig
 from tc.store.db import Store
 
 TOP_UP_DAYS = 10
+# A symbol whose newest bar is more than this many sessions old gets the full
+# history again, not the top-up: after a blind stretch longer than the top-up,
+# ten bars would leave a permanent hole that every item spanning it -- and
+# every ATR/SMA read across it -- would inherit. Set a little inside
+# TOP_UP_DAYS so a late daily candle cannot open a one-session gap either
+# (and `trading_days_between` counts holidays as sessions, erring early).
+STALE_AFTER_SESSIONS = TOP_UP_DAYS - 2
 
 
 async def carried_symbols(store: Store) -> set[str]:
@@ -55,9 +64,12 @@ async def refresh_bars(
     store: Store,
     symbols: Sequence[str],
     desk: DeskConfig,
+    *,
+    today: date,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> BarsReport:
-    """A year for a symbol with little history, ten days to top one up.
+    """A year for a symbol with little or stale history, ten days to top one
+    up.
 
     A dead token stops the sweep at once -- every further call would fail the
     same way -- and keeps what was already written; the job reports `failed`
@@ -66,12 +78,15 @@ async def refresh_bars(
     skipped: one bad symbol must not cost the evening's scoring.
     """
     counts = await store.bar_counts()
+    latest = await store.bar_latest()
     fetched = 0
     failed: list[str] = []
     for i, sym in enumerate(symbols):
         have = counts.get(sym, 0)
         need = desk.bars_history_days - TOP_UP_DAYS
-        days = desk.bars_history_days if have < need else TOP_UP_DAYS
+        newest = latest.get(sym)
+        stale = newest is None or trading_days_between(newest, today) > STALE_AFTER_SESSIONS
+        days = desk.bars_history_days if have < need or stale else TOP_UP_DAYS
         try:
             bars = await broker.daily_bars(sym, days)
         except BrokerUnauthorized:

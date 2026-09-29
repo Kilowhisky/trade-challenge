@@ -768,3 +768,8 @@ class Store:
     async def bar_counts(self) -> dict[str, int]:
         rows = await self.fetchall("SELECT symbol, COUNT(*) AS n FROM bars GROUP BY symbol")
         return {r["symbol"]: int(r["n"]) for r in rows}
+
+    async def bar_latest(self) -> dict[str, date]:
+        """The newest stored bar's date, per symbol."""
+        rows = await self.fetchall("SELECT symbol, MAX(date) AS d FROM bars GROUP BY symbol")
+        return {r["symbol"]: date.fromisoformat(r["d"]) for r in rows}

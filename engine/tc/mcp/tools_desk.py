@@ -107,35 +107,35 @@ def _caller_job(deps: McpDeps, ctx: DeskContext | None) -> str | None:
     """Whose job this call belongs to.
 
     The runner stamps the job it is running as an `X-TC-Job` header on every
-    MCP call (runner/tc_runner/app.py `mcp_servers`) -- read FIRST, because
-    the caller and the engine serving this request are not always the same
-    process. `tc run --once analyst_technical` (the deploy plan's seeding
-    path) dials the SERVING engine's HTTP mount from a separate one-off
-    process; that serving engine's own `deps.active` was never touched by the
-    one-off run, so it would answer "no analyst job is running" for a job that
-    plainly is. `deps.active.name` (set only around the calls THIS engine
-    dispatches itself, tc/main.py `_job_claude`) is the fallback, for the
-    ordinary scheduled-fire case where runner and engine are one process and
-    no header ever had to travel anywhere.
+    MCP call (runner/tc_runner/app.py `mcp_servers`), and a call that came
+    over MCP answers from that header ALONE, because the caller and the
+    engine serving this request are not always the same process: `tc run
+    --once analyst_technical` dials the SERVING engine's HTTP mount from a
+    separate one-off process, whose run that engine's `deps.active` never
+    saw.
 
-    Never raises: `ctx` is None on a direct `_tool_manager.call_tool` call
-    (every desk-tool unit test drives the tools this way), and a request with
-    no header -- or a context with no live HTTP request behind it at all --
-    both fall through to the same default rather than erroring.
+    A live request with no header is refused (None), never attributed to
+    whatever job this engine happens to be running: a second MCP client
+    holding the research bearer -- a laptop session tunnelled to the server,
+    say -- calling `pitch_submit` during the evening chain would otherwise be
+    filed as the running analyst's pitch. The same goes for a context with
+    no request behind it: nothing served over MCP arrives that way.
+
+    `deps.active.name` (set only around the calls THIS engine dispatches
+    itself, tc/main.py `_job_claude`) answers only when there is no context
+    at all -- a direct in-process `_tool_manager.call_tool`, which is how
+    every desk-tool unit test drives the tools.
     """
-    if ctx is not None:
-        try:
-            request = ctx.request_context.request
-        except ValueError:
-            # Context constructed with no request context at all (no request
-            # is currently being served) -- not this module's problem to
-            # raise on; the ActiveJob fallback below answers instead.
-            request = None
-        if request is not None:
-            job = request.headers.get("x-tc-job")
-            if job:
-                return job
-    return deps.active.name
+    if ctx is None:
+        return deps.active.name
+    try:
+        request = ctx.request_context.request
+    except ValueError:
+        return None
+    if request is None:
+        return None
+    job = request.headers.get("x-tc-job")
+    return str(job) if job else None
 
 
 def _analyst(deps: McpDeps, ctx: DeskContext | None) -> Analyst:

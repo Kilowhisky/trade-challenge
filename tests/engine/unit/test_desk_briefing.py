@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from desk_fixtures import bar, sessions
 
@@ -47,7 +49,15 @@ def test_an_earnings_gap_two_sessions_back_is_found() -> None:
     assert earnings_screen({"ERN": bars}, set()) == [("ERN", "earnings_gap_1d_ago")]
 
 
+def _row(symbol: str) -> dict[str, Any]:
+    return {"symbol": symbol, "price": Decimal(110), "adv10": Decimal(1_000_000),
+            "dollar_vol": Decimal(50_000_000), "pct_from_52wk_high": Decimal(1),
+            "optionable": True, "leverage": Decimal(0), "last_earnings": "", "is_etf": False,
+            "session_range_pct": Decimal("1.5"), "description": symbol, "qualified": True}
+
+
 async def _seed(store: Store) -> None:
+    await store.replace_universe(date(2026, 9, 26), [_row("UPP")])
     await store.upsert_bars("SPY", _flat())
     await store.upsert_bars("UPP", _with_last(100, 111, 100, 110, 3000))
     await store.upsert_bars("XLK", _with_last(100, 101, 99, 101, 1000))
@@ -61,6 +71,16 @@ async def test_the_technical_briefing_carries_rows_and_asof(desk_store: Store) -
     assert b.asof == DAYS[-2].isoformat()
     assert [r.symbol for r in b.rows] == ["UPP"] and b.rows[0].screen == "breakout"
     assert b.rows[0].option_band is False     # 110 > $100 and not an ETF
+
+
+async def test_a_carried_name_that_left_the_universe_is_not_screened(desk_store: Store) -> None:
+    """Final review M13: bars are kept for carried names, but a screen row an
+    analyst cannot pitch (pitch_submit refuses it) is noise."""
+    await _seed(desk_store)
+    await desk_store.upsert_bars("GONE", _with_last(100, 111, 100, 110, 3000))
+    b = await build_briefing(desk_store, FakeBroker(FIX, NOW), "technical",
+                             DeskConfig(etf_list=["XLK"]))
+    assert [r.symbol for r in b.rows] == ["UPP"]
 
 
 async def test_the_news_briefing_reads_movers_and_survives_their_failure(

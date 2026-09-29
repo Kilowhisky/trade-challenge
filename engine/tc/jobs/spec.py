@@ -160,10 +160,11 @@ class JobSpec:
     max_turns: int
     timeout_s: float
     window: tuple[time, time]
-    # Typed as the registry's `Role`, not a bare `str`: every job here is
-    # "research" (registry.py — no job in this file holds an account or
-    # order tool), and typing it precisely is what lets `ROLE_TOOLS[spec.role]`
-    # type-check anywhere a spec is inspected, rather than needing a cast.
+    # Typed as the registry's `Role`, not a bare `str`: the analysts are
+    # "research" and the PM runs are "decide" (registry.py -- no job in this
+    # file holds an order tool; only "decide" reads the account), and typing
+    # it precisely is what lets `ROLE_TOOLS[spec.role]` type-check anywhere a
+    # spec is inspected, rather than needing a cast.
     role: Role
     noop_when: Callable[[BaseModel], bool] | None
     # Only the PM carries this (spec §14): a failure inside the market's one

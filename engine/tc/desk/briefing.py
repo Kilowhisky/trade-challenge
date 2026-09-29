@@ -15,7 +15,7 @@ from tc.broker.models import DailyBar
 from tc.config import DeskConfig
 from tc.desk import indicators as ind
 from tc.desk.models import Analyst
-from tc.desk.pitches import open_pitches
+from tc.desk.pitches import open_pitches, tradeable_symbols
 from tc.desk.scoring import RecordRow, analyst_record
 from tc.store.db import Store
 
@@ -193,6 +193,12 @@ async def build_briefing(
 ) -> Briefing:
     counts = await store.bar_counts()
     series = {s: await store.bars_for(s, limit=HISTORY) for s in counts}
+    # Bars are kept for every symbol the desk still carries, including names
+    # that have left the qualified universe; a screen row on one of those is
+    # a pitch `pitch_submit` would then refuse. Screens see only what can be
+    # pitched; SPY and the context rows are read from `series` as context.
+    tradeable = await tradeable_symbols(store, desk)
+    screened = {s: b for s, b in series.items() if s in tradeable}
     spy = series.get("SPY", [])
     etfs = set(desk.etf_list)
     skip = etfs | {"SPY"} | set(desk.context_symbols)
@@ -205,14 +211,15 @@ async def build_briefing(
     movers_error: str | None = None
     if analyst == "technical":
         rows = [
-            row_for(s, series[s], spy, scr, etfs) for s, scr in technical_screen(series, spy, skip)
+            row_for(s, series[s], spy, scr, etfs)
+            for s, scr in technical_screen(screened, spy, skip)
         ]
     elif analyst == "earnings":
         rows = [
-            row_for(s, series[s], spy, scr, etfs) for s, scr in earnings_screen(series, skip)
+            row_for(s, series[s], spy, scr, etfs) for s, scr in earnings_screen(screened, skip)
         ]
     elif analyst == "news":
-        rows = [row_for(s, series[s], spy, scr, etfs) for s, scr in gap_screen(series, skip)]
+        rows = [row_for(s, series[s], spy, scr, etfs) for s, scr in gap_screen(screened, skip)]
         try:
             for direction in ("up", "down"):
                 got = await broker.movers("EQUITY_ALL", direction)
