@@ -153,70 +153,10 @@ else
   note "no ungated-broker flag anywhere in docker/, scripts/, .claude/"
 fi
 
-# --- 5. the schedule matches what the command files claim -----------------
-# The times live in two places by necessity: docker/crontab makes them happen,
-# and the command files document them. This is the same drift class as check 1 —
-# a schedule edit that never reaches the docs leaves every reader believing a
-# time that has not been true for weeks.
-echo "== schedule matches the command files =="
-if [ -f docker/crontab ]; then
-  sched=0
-  check_slot() { # job  expected-HH:MM  file  human-label
-    local job="$1" want="$2" file="$3" label="$4" line hh mm got
-    line="$(grep -E "scheduled-run\.sh[[:space:]]+$job\b" docker/crontab | grep -vE '^[[:space:]]*#' | head -1)"
-    if [ -z "$line" ]; then bad "docker/crontab has no entry for '$job'"; return; fi
-    mm="$(awk '{print $1}' <<<"$line")"; hh="$(awk '{print $2}' <<<"$line")"
-    got="$(printf '%02d:%02d' "$hh" "$mm")"
-    sched=$((sched+1))
-    # The crontab minute is deliberately nudged off the documented mark to dodge
-    # the :00/:15/:30 herd, so agreement is to the hour, not the minute.
-    if [ "${got%%:*}" != "${want%%:*}" ]; then
-      bad "docker/crontab runs '$job' at $got ET but $file documents $want ($label)"
-    fi
-  }
-  check_slot preopen   "08:15" ".claude/commands/deep-research.md" "§Dispatch / §P"
-  check_slot postclose "16:20" ".claude/commands/deep-research.md" "§Dispatch / §D"
-  check_slot sector-tag "09:40" ".claude/commands/sector-tag.md" "§Dispatch"
-
-  # research is RECURRING inside the session, like tick, but hourly. What must
-  # agree with research.md is that it is scheduled at all — the pass that
-  # promotes to HOT went unscheduled for two weeks while the executor idled —
-  # and the hour span the command file documents.
-  rline="$(grep -E 'scheduled-run\.sh[[:space:]]+research\b' docker/crontab | grep -vE '^[[:space:]]*#' | head -1)"
-  if [ -z "$rline" ]; then
-    bad "docker/crontab has no entry for 'research' — nothing can promote a candidate to HOT, so nothing can ever be entered"
-  else
-    rhours="$(awk '{print $2}' <<<"$rline")"; rmin="$(awk '{print $1}' <<<"$rline")"
-    if ! grep -qF "hourly at :$rmin" .claude/commands/research.md \
-       || ! grep -qF "hours $rhours" .claude/commands/research.md; then
-      bad "docker/crontab runs 'research' at :$rmin over hours $rhours but research.md §Scheduled documents something else"
-    else
-      sched=$((sched+1))
-    fi
-  fi
-
-  # tick is a RECURRING slot, so the hour-match above does not apply: what must
-  # agree with tick.md §F is the CADENCE. The baseline there is 15 minutes with
-  # every stop confirmed; if §F's baseline moves and the crontab does not, the
-  # monitoring loop quietly runs at a frequency no document claims.
-  tickline="$(grep -E 'scheduled-run\.sh[[:space:]]+tick\b' docker/crontab | grep -vE '^[[:space:]]*#' | head -1)"
-  if [ -z "$tickline" ]; then
-    bad "docker/crontab has no entry for 'tick' — the book is unwatched between 09:30 and 16:00"
-  else
-    cron_every="$(awk '{print $1}' <<<"$tickline" | grep -oE '/[0-9]+$' | tr -d '/')"
-    want_every="$(grep -oE '\*\*15 min\*\* baseline' .claude/commands/tick.md >/dev/null 2>&1 && echo 15)"
-    if [ -z "$cron_every" ]; then
-      bad "the 'tick' crontab entry has no */N step — cannot verify it against tick.md §F"
-    elif [ -n "$want_every" ] && [ "$cron_every" != "$want_every" ]; then
-      bad "docker/crontab ticks every ${cron_every}m but tick.md §F documents a ${want_every}m baseline"
-    else
-      sched=$((sched+1))
-    fi
-  fi
-  [ "$sched" -gt 0 ] && note "$sched scheduled job(s) checked against their command files"
-else
-  note "docker/crontab absent — skipping (not deployed on this machine)"
-fi
+# --- 5. (retired 2026-09-27) ----------------------------------------------
+# This compared docker/crontab against the v2 command files. The v2 runtime
+# was retired 2026-09-07 and those command files are tombstones; the v3
+# schedule is data in config.yml, checked by engine/tc/rules/consistency.py.
 
 # --- 6. the sidecar paths stay out of the public repo ---------------------
 # research/, status/ and trade-log.csv are symlinks into the PRIVATE store repo.

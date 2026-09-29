@@ -67,7 +67,7 @@ from tc.loops.tick import TickResult, run_tick
 from tc.loops.token import token_check
 from tc.loops.universe import UniverseUnavailable, counts_detail, run_weekly_universe
 from tc.mcp import server as mcp_server
-from tc.mcp import tools_desk, tools_read, tools_research
+from tc.mcp import tools_desk, tools_read
 from tc.mcp.server import McpDeps, build_servers
 from tc.notify import BotChannel, Notifier, Pinger
 from tc.research.docs import DocStore
@@ -77,12 +77,13 @@ from tc.store.db import Store, Verdict
 
 log = logging.getLogger(__name__)
 
-# The jobs that are a Claude run rather than engine code — scout, catalyst,
-# preopen, postclose, research, sector_tag. Each reads its whole definition
-# (agent, allowlist, verdict shape, budget, window) from `JOB_SPECS`, and is
-# dispatched through `JobRunner` (jobs/dispatch.py). DERIVED from that table
-# rather than retyped: a hand-kept copy of a dict's keys is a job that either
-# has no spec or has one nothing dispatches, and both fail quietly.
+# The jobs that are a Claude run rather than engine code — the trading desk's
+# analysts and PM (`DESK_SPECS`, jobs/spec.py). Each reads its whole
+# definition (agent, allowlist, verdict shape, budget, window) from
+# `JOB_SPECS`, and is dispatched through `JobRunner` (jobs/dispatch.py).
+# DERIVED from that table rather than retyped: a hand-kept copy of a dict's
+# keys is a job that either has no spec or has one nothing dispatches, and
+# both fail quietly.
 CLAUDE_JOBS: tuple[str, ...] = tuple(JOB_SPECS)
 
 # The job table. A name not in here is a config error, not a job that quietly
@@ -128,11 +129,10 @@ def _wire_mcp_registrars() -> None:
     if _mcp_wired:
         return
     # The read tools go to both roles; `tools_read` itself withholds `book`
-    # from research. The research writers go to the research role only, and
-    # `build_servers` would refuse to build `decide` with them anyway.
+    # from research. The research role now carries the desk's analyst tools
+    # (tools_desk) rather than the old v2 research writers.
     mcp_server.register("research", tools_read.register)
     mcp_server.register("decide", tools_read.register)
-    mcp_server.register("research", tools_research.register)
     mcp_server.register("research", tools_desk.register)
     mcp_server.register("decide", tools_desk.register)
     _mcp_wired = True

@@ -282,18 +282,6 @@ def check_endgame(root: Path, rules: Rules) -> tuple[list[Finding], int]:
     return out, len(files)
 
 
-# The one Claude job whose cadence is prose in its own command file rather
-# than a single clock time, and therefore the one that can drift without
-# anything noticing. `research.md` states the cadence twice over -- a minute
-# ("hourly at :57") and an hour span ("hours 9-14") -- and check-consistency.sh
-# greps for both literal strings, so the phrases are load-bearing in two
-# checkers at once and are read here rather than restated.
-RESEARCH_DOC = ".claude/commands/research.md"
-DOC_MINUTE = re.compile(r"hourly at :(\d{2})")
-DOC_HOURS = re.compile(r"hours (\d{1,2})-(\d{1,2})")
-CLOCK = re.compile(r"(\d{1,2}):(\d{2})")
-
-
 def _schedule(root: Path, out: list[Finding]) -> dict[str, str]:
     """config.yml's schedule block, or an empty one plus a Finding."""
     path = root / "config.yml"
@@ -310,8 +298,8 @@ def _schedule(root: Path, out: list[Finding]) -> dict[str, str]:
 
 
 def check_schedule_vs_doc(root: Path, rules: Rules) -> tuple[list[Finding], int]:
-    """config.yml's schedule names only real jobs, and `research`'s cadence
-    still matches the sentence its command file states it in.
+    """config.yml's schedule names only real jobs, and every job spec that
+    should fire has a schedule entry.
 
     The bash checker's check 5 compared `docker/crontab` against the command
     files. The crontab is gone; the schedule is data in config.yml now, and the
@@ -341,47 +329,7 @@ def check_schedule_vs_doc(root: Path, rules: Rules) -> tuple[list[Finding], int]
             "schedule_vs_doc", "config.yml", None,
             f"{job!r} has a job spec but no schedule entry: it can never fire",
         ))
-    out.extend(_check_research_cadence(root, schedule.get("research")))
-    return out, len(schedule) + 1
-
-
-def _check_research_cadence(root: Path, spec: str | None) -> list[Finding]:
-    if spec is None:
-        return []  # already reported by the missing-entry loop above
-    doc = root / RESEARCH_DOC
-    try:
-        body = doc.read_text()
-    except OSError as e:
-        return [Finding("schedule_vs_doc", RESEARCH_DOC, None, f"unreadable: {e}")]
-    minute, hours = DOC_MINUTE.search(body), DOC_HOURS.search(body)
-    if minute is None or hours is None:
-        return [Finding(
-            "schedule_vs_doc", RESEARCH_DOC, None,
-            "no longer states the research cadence as 'hourly at :MM, hours H-H'",
-        )]
-    times = CLOCK.findall(spec)
-    if not times:
-        return [Finding(
-            "schedule_vs_doc", "config.yml", None,
-            f"research schedule {spec!r} states no clock time to compare",
-        )]
-    minutes = {mm for _, mm in times}
-    span = (int(times[0][0]), int(times[-1][0]))
-    want_span = (int(hours[1]), int(hours[2]))
-    findings = []
-    if minutes != {minute[1]}:
-        findings.append(Finding(
-            "schedule_vs_doc", "config.yml", None,
-            f"research runs at minutes {sorted(minutes)} but {RESEARCH_DOC} says "
-            f"hourly at :{minute[1]}",
-        ))
-    if span != want_span:
-        findings.append(Finding(
-            "schedule_vs_doc", "config.yml", None,
-            f"research runs hours {span[0]}-{span[1]} but {RESEARCH_DOC} says "
-            f"hours {want_span[0]}-{want_span[1]}",
-        ))
-    return findings
+    return out, len(schedule)
 
 
 def check_tool_registry(root: Path, rules: Rules) -> tuple[list[Finding], int]:

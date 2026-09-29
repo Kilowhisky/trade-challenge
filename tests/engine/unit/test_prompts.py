@@ -11,9 +11,8 @@ from tc.jobs.spec import JOB_SPECS
 from tc.mcp.registry import ROLE_TOOLS, Role
 
 ROOT = Path(__file__).resolve().parents[3]
-LIVE_COMMANDS = ["research", "deep-research", "scout", "catalyst", "sector-tag"]
+LIVE_COMMANDS: list[str] = []
 LIVE_AGENTS = [
-    "research-scout", "deep-research", "scout", "catalyst", "sector-tagger",
     "analyst-technical", "analyst-earnings", "analyst-news", "analyst-macro", "pm",
 ]
 # The MCP role each live agent's tools are checked against. Everything not
@@ -27,6 +26,11 @@ RETIRED = [
     ".claude/commands/weekly-universe.md", ".claude/commands/tick.md",
     ".claude/agents/weekly-universe.md", ".claude/agents/tick-watch.md",
     ".claude/agents/session-close.md", ".claude/agents/trader.md",
+    ".claude/commands/research.md", ".claude/commands/deep-research.md",
+    ".claude/commands/scout.md", ".claude/commands/catalyst.md",
+    ".claude/commands/sector-tag.md", ".claude/agents/research-scout.md",
+    ".claude/agents/deep-research.md", ".claude/agents/scout.md",
+    ".claude/agents/catalyst.md", ".claude/agents/sector-tagger.md",
 ]
 
 
@@ -120,9 +124,9 @@ def test_shared_agent_tools_equal_the_union_of_every_job_that_dispatches_it() ->
     """An agent file's `tools:` is the SDK-enforced ceiling (0c-sdk-facts
     §1.5/§5), not a per-job overlay -- one file's header has to work for
     every mode it might run in. When two JobSpecs name the same agent (e.g.
-    "preopen" and "postclose" both run `deep-research`), the fix is to widen
-    BOTH job specs to the union rather than narrow the frontmatter, so the
-    ceiling stays honest about what either mode can actually reach. This
+    "analyst_news" and "preopen_news" both run `analyst-news`), the fix is to
+    widen BOTH job specs to the union rather than narrow the frontmatter, so
+    the ceiling stays honest about what either mode can actually reach. This
     pins that invariant for every agent shared by 2+ jobs: its declared
     tools are exactly the union of those jobs' allowed_tools -- not a
     subset (a stale, narrower frontmatter silently strands a job's tools,
@@ -189,8 +193,3 @@ def test_tick_tombstone_does_not_carry_the_cadence_string_check_5_greps() -> Non
     # comparison; with the string present in a tombstone it would compare a
     # cadence no document owns any more.
     assert "**15 min** baseline" not in (ROOT / ".claude/commands/tick.md").read_text()
-
-
-def test_research_md_keeps_the_schedule_strings_check_5_greps() -> None:
-    body = (ROOT / ".claude/commands/research.md").read_text()
-    assert "hourly at :57" in body and "hours 9-14" in body

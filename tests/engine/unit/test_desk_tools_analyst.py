@@ -45,8 +45,7 @@ async def call(server: FastMCP, tool: str, /, **arguments: Any) -> Any:
 # off whatever is handed in -- so a minimal stand-in exercises the REAL tool
 # function's real header-reading code path (tools_desk._caller_job) without
 # standing up streamable-http transport end to end, which nothing else in
-# this test module (or test_tools_research.py / test_tools_read.py) does
-# either.
+# this test module (or test_tools_read.py) does either.
 
 
 class _FakeHeaders:

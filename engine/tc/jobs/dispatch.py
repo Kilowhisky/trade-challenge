@@ -18,16 +18,18 @@ Three layers, deliberately separable:
   Claude-driven or not.
 
 **Why `content_failed` exists.** The v2 runner recorded exit-0-with-no-content
-as `{"verdict":"ok"}`, so a research run that produced nothing pinged green and
+as `{"verdict":"ok"}`, so an analyst pass that produced nothing pinged green and
 the deadman saw a healthy day. Here a run that answers without a structured
 verdict is its own verdict, it pings `/fail`, and the `job_verdict_not:
 content_failed` expectation already watches for it. "The job ran" and "the job
 answered" are different claims and the ledger now distinguishes them.
 
-**Why an empty cohort is `noop` and not `done`.** `done` on sixty consecutive
-empty passes is the "every job green, nothing ever happens" failure the design
-exists to catch. Each spec carries its own `noop_when`, because only the job
-knows what "there was nothing to do" looks like for it.
+**Why a spec can mark a pass `noop` instead of `done`.** `done` on sixty
+consecutive empty passes is the "every job green, nothing ever happens"
+failure the design exists to catch. Each spec carries its own `noop_when`,
+because only the job knows what "there was nothing to do" looks like for it
+-- no desk job currently sets one (an analyst that pitches nothing has still
+done its job), but the field stays general for whatever job needs it next.
 
 There is no line-matching whitelist here. v2 relayed by grepping stdout for a
 first line that matched a known prefix, and the whitelist did not include
@@ -49,15 +51,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from tc.clock import ET
-from tc.jobs.spec import (
-    JOB_SPECS,
-    CatalystVerdict,
-    DeepVerdict,
-    JobSpec,
-    ResearchVerdict,
-    ScoutVerdict,
-    output_schema,
-)
+from tc.jobs.spec import JOB_SPECS, JobSpec, output_schema
 from tc.notify import Notifier
 from tc.store.db import Verdict
 
@@ -68,10 +62,7 @@ log = logging.getLogger(__name__)
 # narrate its whole session cannot fill a Discord message or a detail column.
 MAX_TEXT = 200
 MAX_ERRORS = 5
-# The jobs whose one-line `summary` is worth a message of its own. The scout
-# and catalyst passes already relay per-escalation, and `research` relays per
-# hot-fresh candidate; posting their summary too would say the same pass twice.
-SUMMARY_JOBS = frozenset({"preopen", "postclose", "sector_tag", "pm", "pm_midday"})
+SUMMARY_JOBS = frozenset({"pm", "pm_midday"})
 # The verdicts that mean nobody got an answer: each gets one ⚠️ line here, and
 # `Engine._dispatch` pings healthchecks `/fail` for them rather than `/ok`.
 # One set, shared, because "the job did not work" must mean the same thing to
@@ -496,14 +487,6 @@ class JobRunner:
             return
         if model is None:
             return
-        if isinstance(model, ResearchVerdict | DeepVerdict):
-            for h in model.hot_fresh:
-                await self._notifier.post(
-                    f"🔥 HOT-FRESH: {h.symbol} sleeve={h.sleeve} ref={h.ref} — {h.thesis}"
-                )
-        if isinstance(model, ScoutVerdict | CatalystVerdict):
-            for e in model.escalations:
-                await self._notifier.post(f"📌 ESCALATE: {e.symbol} — {e.claim}")
         if verdict == "done" and spec.name in SUMMARY_JOBS:
             summary = str(detail.get("summary", "")).strip()
             if summary:
@@ -523,16 +506,8 @@ def _reason(detail: dict[str, Any]) -> str:
 
 
 def _prompt_extra(spec: JobSpec, day: date) -> str:
-    """The two things a job cannot read off its own command file.
-
-    The date, because the container clock is UTC, the laptop's is Pacific, and
-    every deadline the command files describe is Eastern; and the mode, because
-    preopen and postclose share one command file and one agent and differ only
-    by which half of it they execute.
-    """
-    lines = [f"Today's date is {day.isoformat()} (Eastern)."]
-    if spec.name in ("preopen", "postclose"):
-        lines.append(
-            f'Run in "{spec.name}" mode; the verdict\'s kind field must be "{spec.name}".'
-        )
-    return " ".join(lines)
+    """The one thing a job cannot read off its own command file: the date,
+    because the container clock is UTC, the laptop's is Pacific, and every
+    deadline the command files describe is Eastern. Each desk job's own mode
+    (evening vs. pre-open) already lives in its own spec's prompt."""
+    return f"Today's date is {day.isoformat()} (Eastern)."

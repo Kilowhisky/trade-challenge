@@ -57,7 +57,7 @@ from tc.desk.sizing import conviction_pct
 from tc.mcp.registry import Role
 from tc.rules.arith import cap_dollars
 
-if TYPE_CHECKING:  # pragma: no cover -- import-cycle guard, as in tools_research
+if TYPE_CHECKING:  # pragma: no cover -- import-cycle guard
     from tc.mcp.server import McpDeps
 
 # `Context` must be a REAL (not TYPE_CHECKING-only) import: FastMCP finds the

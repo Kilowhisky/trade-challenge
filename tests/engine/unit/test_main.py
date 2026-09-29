@@ -982,9 +982,9 @@ MCP_ENV = (
     "TC_MCP_RESEARCH_TOKEN=research-token-not-real\n"
     "TC_MCP_DECIDE_TOKEN=decide-token-not-real\n"
 )
-SCOUT_AT = datetime(2026, 9, 4, 11, 15, tzinfo=UTC)  # 07:15 ET, inside scout's window
-SCOUT_RESULT: dict[str, Any] = {
-    "verdict_raw": {"cohort": 3, "observed": 2, "escalations": [], "summary": "SCOUT ok"},
+ANALYST_AT = datetime(2026, 9, 4, 20, 45, tzinfo=UTC)  # 16:45 ET, inside the analysts' window
+ANALYST_RESULT: dict[str, Any] = {
+    "verdict_raw": {"pitched": [], "withdrawn": [], "summary": "TECHNICAL 0"},
     "result_text": "{}",
     "is_error": False,
     "subtype": "success",
@@ -1030,14 +1030,14 @@ async def test_a_claude_job_dispatches_through_the_job_runner(
 ) -> None:
     s = _settings(tmp_path)
     e = _engine(
-        s, store, FakeBroker(_fx(tmp_path), NOW), Clock(SCOUT_AT),
+        s, store, FakeBroker(_fx(tmp_path), NOW), Clock(ANALYST_AT),
         RecordingNotifier(client), client, jobs=JobRunner(
-            _fake_runner(SCOUT_RESULT), RecordingNotifier(client), lambda: SCOUT_AT
+            _fake_runner(ANALYST_RESULT), RecordingNotifier(client), lambda: ANALYST_AT
         ),
     )
-    assert await e.run_job("scout", SCOUT_AT) == "done"
+    assert await e.run_job("analyst_technical", ANALYST_AT) == "done"
     rows = await _job_runs(store)
-    assert [r[0] for r in rows] == ["scout"]
+    assert [r[0] for r in rows] == ["analyst_technical"]
     assert rows[0][1] == "done"
 
 
@@ -1048,18 +1048,18 @@ async def test_run_job_can_ignore_the_window_and_does_not_by_default(
     only from there: nothing on the scheduled path passes it, so the default
     stays the gate."""
     s = _settings(tmp_path)
-    out_of_window = SCOUT_AT + timedelta(hours=8)
+    out_of_window = ANALYST_AT + timedelta(hours=8)
 
     def build() -> Engine:
         return _engine(
             s, store, FakeBroker(_fx(tmp_path), NOW), Clock(out_of_window),
             RecordingNotifier(client), client, jobs=JobRunner(
-                _fake_runner(SCOUT_RESULT), RecordingNotifier(client), lambda: out_of_window
+                _fake_runner(ANALYST_RESULT), RecordingNotifier(client), lambda: out_of_window
             ),
         )
 
-    assert await build().run_job("scout", out_of_window) == "noop"
-    assert await build().run_job("scout", out_of_window, ignore_window=True) == "done"
+    assert await build().run_job("analyst_technical", out_of_window) == "noop"
+    assert await build().run_job("analyst_technical", out_of_window, ignore_window=True) == "done"
 
 
 def test_the_cli_refuses_ignore_window_without_once(
@@ -1081,9 +1081,9 @@ async def test_a_claude_job_with_no_runner_is_a_noop_row_not_a_failure(
     `failed` row every weekday at 07:12 for a service nobody installed is how
     a deadman gets muted."""
     s = _settings(tmp_path)
-    e = _engine(s, store, FakeBroker(_fx(tmp_path), NOW), Clock(SCOUT_AT),
+    e = _engine(s, store, FakeBroker(_fx(tmp_path), NOW), Clock(ANALYST_AT),
                 RecordingNotifier(client), client)
-    assert await e.run_job("scout", SCOUT_AT) == "noop"
+    assert await e.run_job("analyst_technical", ANALYST_AT) == "noop"
     assert (await _job_runs(store))[0][1] == "noop"
 
 
@@ -1100,7 +1100,7 @@ async def test_token_check_refreshes_the_runners_health(
     def h(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/health"):
             return httpx.Response(200, json={"ok": alive["ok"], "busy": False})
-        return httpx.Response(200, json=SCOUT_RESULT)
+        return httpx.Response(200, json=ANALYST_RESULT)
 
     runner = RunnerClient(
         "http://runner", "runner-token-not-real",
@@ -1141,7 +1141,7 @@ async def test_start_mounts_the_mcp_surface_and_reads_the_runners_health(
     s = _settings(tmp_path, env_extra=MCP_ENV)
     e = _engine(
         s, store, FakeBroker(_fx(tmp_path), NOW), Clock(NOW), RecordingNotifier(client),
-        client, jobs=JobRunner(_fake_runner(SCOUT_RESULT), RecordingNotifier(client),
+        client, jobs=JobRunner(_fake_runner(ANALYST_RESULT), RecordingNotifier(client),
                                lambda: NOW),
     )
     await e.start()
@@ -1153,7 +1153,7 @@ async def test_start_mounts_the_mcp_surface_and_reads_the_runners_health(
         # No `allow_stubs`: every declared tool has a real registrar, which is
         # what makes "the role lists what the registry declares" mean anything.
         research = {t.name for t in e.mcp.servers["research"]._tool_manager.list_tools()}
-        assert "quotes" in research and "doc_write" in research
+        assert "quotes" in research and "pitch_submit" in research
         assert "book" not in research  # the research roles hold no account tool
     finally:
         await e.stop()
@@ -1240,19 +1240,20 @@ async def test_the_mounted_research_role_answers_ping_only_with_its_bearer(
 def test_run_once_accepts_a_claude_job(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`tc run --once scout` is the operator's way to fire a research pass by
-    hand. Before the six jobs joined JOBS it was refused as an unknown job."""
+    """`tc run --once analyst_technical` is the operator's way to fire a desk
+    analyst pass by hand. Before the desk jobs joined JOBS it was refused as
+    an unknown job."""
     fx = _fx(tmp_path)
     monkeypatch.setenv("TC_MODE", "paper")
     monkeypatch.setenv("TC_FIXTURES", str(fx))
-    monkeypatch.setattr(main, "_now", lambda: SCOUT_AT)
+    monkeypatch.setattr(main, "_now", lambda: ANALYST_AT)
 
     async def fake_run(
         self: RunnerClient, spec: Any, *, prompt_extra: str = ""
     ) -> Any:
         from tc.jobs.dispatch import RunnerReply, RunResultView
 
-        return RunnerReply(result=RunResultView.model_validate(SCOUT_RESULT))
+        return RunnerReply(result=RunResultView.model_validate(ANALYST_RESULT))
 
     async def fake_health(self: RunnerClient) -> bool:
         return True
@@ -1260,11 +1261,11 @@ def test_run_once_accepts_a_claude_job(
     monkeypatch.setattr(RunnerClient, "run", fake_run)
     monkeypatch.setattr(RunnerClient, "health", fake_health)
     args = _cli_args(tmp_path, env_extra=MCP_ENV)
-    assert cli.main([*args, "run", "--once", "scout"]) == 0
+    assert cli.main([*args, "run", "--once", "analyst_technical"]) == 0
 
 
 CONTENT_FAILED_RESULT: dict[str, Any] = {
-    **SCOUT_RESULT, "verdict_raw": None, "result_text": "I ran out of turns"
+    **ANALYST_RESULT, "verdict_raw": None, "result_text": "I ran out of turns"
 }
 
 
@@ -1278,16 +1279,16 @@ async def test_a_job_that_returns_a_failure_pings_fail_not_ok(
     s = _settings(tmp_path)
     pinger = RecordingPinger(client)
     e = _engine(
-        s, store, FakeBroker(_fx(tmp_path), NOW), Clock(SCOUT_AT),
+        s, store, FakeBroker(_fx(tmp_path), NOW), Clock(ANALYST_AT),
         RecordingNotifier(client), client,
         jobs=JobRunner(_fake_runner(CONTENT_FAILED_RESULT), RecordingNotifier(client),
-                       lambda: SCOUT_AT),
+                       lambda: ANALYST_AT),
         pinger=pinger,
     )
-    assert await e.run_job("scout", SCOUT_AT) == "content_failed"
-    assert pinger.pings == [("start", "scout"), ("fail", "content_failed")]
+    assert await e.run_job("analyst_technical", ANALYST_AT) == "content_failed"
+    assert pinger.pings == [("start", "analyst_technical"), ("fail", "content_failed")]
     # And the streak grows, so /health can see a job that never works.
-    assert e.state.consecutive_failures["scout"] == 1
+    assert e.state.consecutive_failures["analyst_technical"] == 1
 
 
 async def test_a_job_that_worked_still_pings_ok_and_clears_the_streak(
@@ -1296,16 +1297,16 @@ async def test_a_job_that_worked_still_pings_ok_and_clears_the_streak(
     s = _settings(tmp_path)
     pinger = RecordingPinger(client)
     e = _engine(
-        s, store, FakeBroker(_fx(tmp_path), NOW), Clock(SCOUT_AT),
+        s, store, FakeBroker(_fx(tmp_path), NOW), Clock(ANALYST_AT),
         RecordingNotifier(client), client,
-        jobs=JobRunner(_fake_runner(SCOUT_RESULT), RecordingNotifier(client),
-                       lambda: SCOUT_AT),
+        jobs=JobRunner(_fake_runner(ANALYST_RESULT), RecordingNotifier(client),
+                       lambda: ANALYST_AT),
         pinger=pinger,
     )
-    e.state.consecutive_failures["scout"] = 3
-    assert await e.run_job("scout", SCOUT_AT) == "done"
-    assert pinger.pings == [("start", "scout"), ("ok", "done")]
-    assert e.state.consecutive_failures["scout"] == 0
+    e.state.consecutive_failures["analyst_technical"] = 3
+    assert await e.run_job("analyst_technical", ANALYST_AT) == "done"
+    assert pinger.pings == [("start", "analyst_technical"), ("ok", "done")]
+    assert e.state.consecutive_failures["analyst_technical"] == 0
 
 
 def test_run_once_exits_1_on_a_run_that_answered_nothing(
@@ -1316,7 +1317,7 @@ def test_run_once_exits_1_on_a_run_that_answered_nothing(
     fx = _fx(tmp_path)
     monkeypatch.setenv("TC_MODE", "paper")
     monkeypatch.setenv("TC_FIXTURES", str(fx))
-    monkeypatch.setattr(main, "_now", lambda: SCOUT_AT)
+    monkeypatch.setattr(main, "_now", lambda: ANALYST_AT)
 
     async def fake_run(self: RunnerClient, spec: Any, *, prompt_extra: str = "") -> Any:
         from tc.jobs.dispatch import RunnerReply, RunResultView
@@ -1328,7 +1329,7 @@ def test_run_once_exits_1_on_a_run_that_answered_nothing(
 
     monkeypatch.setattr(RunnerClient, "run", fake_run)
     monkeypatch.setattr(RunnerClient, "health", fake_health)
-    assert cli.main([*_cli_args(tmp_path, env_extra=MCP_ENV), "run", "--once", "scout"]) == 1
+    assert cli.main([*_cli_args(tmp_path, env_extra=MCP_ENV), "run", "--once", "analyst_technical"]) == 1
 
 
 async def test_build_engine_prefers_the_bot_over_the_webhook(tmp_path: Path) -> None:

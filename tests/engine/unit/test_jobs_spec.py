@@ -1,8 +1,8 @@
 """Task 12: job specs and verdict models — allowlists, budgets, noop predicates.
 
 `JOB_SPECS` is typed data, not prose: a typo in a tool name is a `KeyError` at
-import time (`tools_for`), not a tool the model silently cannot call and not a
-runtime 403 from the MCP gate discovered mid-job.
+import time (`tools_for_role`), not a tool the model silently cannot call and
+not a runtime 403 from the MCP gate discovered mid-job.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from tc.jobs.spec import JOB_SPECS, DeepVerdict, ScoutVerdict, output_schema, tools_for
+from tc.jobs.spec import JOB_SPECS, AnalystVerdict, PmVerdict, output_schema, tools_for_role
 from tc.mcp.registry import ROLE_TOOLS
 
 REPO = Path(__file__).resolve().parents[3]
@@ -45,11 +45,12 @@ def test_no_job_is_allowed_a_write_surface_tool() -> None:
 
 
 def test_no_allowed_tool_is_order_shaped() -> None:
-    """Spec §10, checked again at the job-spec layer: `tools_for` only ever
-    draws from `ROLE_TOOLS["research"]`, which `test_mcp_no_order_tools.py`
-    already proves is order-free — this pins that guarantee survives the
-    trip through `JOB_SPECS` too, so a future job spec cannot smuggle an
-    order-shaped name in by hand-typing the `mcp__engine__` prefix."""
+    """Spec §10, checked again at the job-spec layer: `tools_for_role` only
+    ever draws from a role's own `ROLE_TOOLS` entry, which
+    `test_mcp_no_order_tools.py` already proves is order-free — this pins
+    that guarantee survives the trip through `JOB_SPECS` too, so a future
+    job spec cannot smuggle an order-shaped name in by hand-typing the
+    `mcp__engine__` prefix."""
     from tc.mcp.registry import FORBIDDEN
 
     for spec in JOB_SPECS.values():
@@ -59,15 +60,16 @@ def test_no_allowed_tool_is_order_shaped() -> None:
 
 
 def test_schema_forbids_extra_keys_so_a_stray_field_fails_the_verdict() -> None:
-    schema = output_schema(ScoutVerdict)
+    schema = output_schema(AnalystVerdict)
     assert schema["additionalProperties"] is False
-    assert set(schema["required"]) >= {"cohort", "observed", "escalations", "summary"}
+    assert set(schema["required"]) == {"pitched", "withdrawn", "summary"}
 
 
 def test_no_job_schema_carries_a_ref_or_defs() -> None:
     """The schema goes to the CLI as `--output-format json_schema`, and a
-    `$ref` puts the constraints on `escalations[]` somewhere the object being
-    described does not point at in plain sight. Every nested model is inlined.
+    `$ref` puts the constraints on a nested field (e.g. `held[]`) somewhere
+    the object being described does not point at in plain sight. Every
+    nested model is inlined.
     """
     for name, spec in JOB_SPECS.items():
         text = json.dumps(output_schema(spec.verdict))
@@ -76,16 +78,12 @@ def test_no_job_schema_carries_a_ref_or_defs() -> None:
 
 
 def test_the_inlined_schema_still_constrains_the_nested_model() -> None:
-    """Inlining must move the definition, not drop it: the `Escalation` object
-    keeps its own `additionalProperties: false` and its own required keys."""
-    escalation = output_schema(ScoutVerdict)["properties"]["escalations"]["items"]
-    assert escalation["type"] == "object"
-    assert escalation["additionalProperties"] is False
-    assert set(escalation["required"]) == {"symbol", "claim"}
-    assert escalation["properties"]["evidence_ids"]["items"] == {"type": "string"}
-    fresh = output_schema(DeepVerdict)["properties"]["hot_fresh"]["items"]
-    assert fresh["additionalProperties"] is False
-    assert fresh["properties"]["sleeve"]["enum"] == ["core", "catalyst", "option"]
+    """Inlining must move the definition, not drop it: `HeldDecision` keeps
+    its own `additionalProperties: false`, required keys and action enum."""
+    held = output_schema(PmVerdict)["properties"]["held"]["items"]
+    assert held["type"] == "object" and held["additionalProperties"] is False
+    assert set(held["required"]) == {"symbol", "action", "reason"}
+    assert held["properties"]["action"]["enum"] == ["hold", "exit", "tighten"]
 
 
 def test_a_schema_that_cannot_be_flattened_is_a_failure_not_a_dangling_ref() -> None:
@@ -102,50 +100,9 @@ def test_a_schema_that_cannot_be_flattened_is_a_failure_not_a_dangling_ref() -> 
 
 def test_tools_for_rejects_a_tool_no_role_has() -> None:
     with pytest.raises(KeyError):
-        tools_for("doc_delete")
-
-
-def test_noop_predicates_fire_only_on_a_genuinely_empty_pass() -> None:
-    scout = JOB_SPECS["scout"]
-    assert scout.noop_when is not None
-    assert scout.noop_when(ScoutVerdict(cohort=0, observed=0, escalations=[], summary="")) is True
-    assert scout.noop_when(ScoutVerdict(cohort=4, observed=0, escalations=[], summary="")) is False
-
-
-def test_deep_verdict_accepts_a_postclose_with_no_hot_fresh() -> None:
-    v = DeepVerdict(kind="postclose", wrote=["scorecard"], hot_fresh=[], notes="", summary="ok")
-    assert v.hot_fresh == []
-
-
-def test_research_and_sector_tag_noop_predicates_are_none() -> None:
-    """§ brief: zero HOT / zero new tags are ordinary results of a pass that
-    did its work, not an empty pass — these two jobs never noop."""
-    assert JOB_SPECS["research"].noop_when is None
-    assert JOB_SPECS["sector_tag"].noop_when is None
-
-
-def test_catalyst_and_deep_noop_predicates() -> None:
-    from tc.jobs.spec import CatalystVerdict
-
-    catalyst = JOB_SPECS["catalyst"]
-    assert catalyst.noop_when is not None
-    assert catalyst.noop_when(
-        CatalystVerdict(scanned=0, observed=0, escalations=[], summary="")
-    ) is True
-    assert catalyst.noop_when(
-        CatalystVerdict(scanned=3, observed=0, escalations=[], summary="")
-    ) is False
-
-    for kind in ("preopen", "postclose"):
-        spec = JOB_SPECS[kind]
-        noop_when = spec.noop_when
-        assert noop_when is not None
-        assert noop_when(
-            DeepVerdict(kind=kind, wrote=[], hot_fresh=[], notes="", summary="")
-        ) is True
-        assert noop_when(
-            DeepVerdict(kind=kind, wrote=["x"], hot_fresh=[], notes="", summary="")
-        ) is False
+        tools_for_role("research", "doc_delete")
+    with pytest.raises(KeyError):
+        tools_for_role("research", "call_submit")      # a decide tool
 
 
 def test_every_spec_has_a_sane_window_and_budget() -> None:
@@ -161,4 +118,4 @@ def test_verdict_models_forbid_extra_fields() -> None:
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        ScoutVerdict(cohort=0, observed=0, escalations=[], summary="", bogus=1)  # type: ignore[call-arg]
+        AnalystVerdict(pitched=[], withdrawn=[], summary="", bogus=1)  # type: ignore[call-arg]
