@@ -54,7 +54,10 @@ paper book's equity. Conviction sets the size:
 | 5 | **20%**<!--rule:strategy_size_shares_pct_conviction_5--> | **10%**<!--rule:strategy_size_option_premium_pct_conviction_5--> (the §3.2 cap) |
 
 - At most **8**<!--rule:strategy_max_funded_positions--> funded positions,
-  legacy holdings and pending proposals included.
+  legacy holdings and pending proposals included. **In the paper phase** the
+  count is paper positions plus pending proposals — legacy holdings sit in
+  the paper book as cash (§10) and count for nothing until the book is real,
+  at which point they count as positions.
 - Share funding requires daily ATR ≤ **6%**<!--rule:strategy_max_daily_atr_pct-->;
   a noisier name can be expressed only as an option.
 - `CLAUDE.md` §3.1 (single position), §3.2 (option premium, per position and
@@ -121,14 +124,20 @@ above the last; if the ask has run past it at execution, the entry is skipped
 and the call is still scored. Proposals go out between 10:00 and 15:00;
 unfilled entries end at 15:55 (§4.2).
 
-**Exits are engine code, with no veto** — closing orders only reduce risk:
+**Exits without a veto are engine code carrying out a standing rule, never a
+fresh discretionary call** — a protective stop, the §3.3 5-DTE close, a §3.5
+forced close, or a call resolving at its recorded target, invalidation or
+horizon:
 - Shares carry a stop whose trigger is the **higher** of the §3.4 formula and
   the call's invalidation (a trigger may be raised, never lowered).
 - Target reached → sell at the bid. Options exit on their underlying crossing
   the invalidation or reaching the target, and at 5 DTE (§3.3).
 - A funded call that resolved at the previous close exits after 10:00 unless
   the PM extends it — once.
-- The PM may exit or tighten at 09:50 and 12:30.
+
+**A discretionary PM exit or tighten (09:50, 12:30) is not veto-free.** It is
+paper-only today; once real orders exist it goes through the same Discord
+approval gate as any other order (`CLAUDE.md` §0).
 
 ## 8. Scoring and the checkpoint — pre-registered
 
@@ -173,7 +182,7 @@ is a defect to fix before anything else), §3.6 from the latest session close,
 doing (`CLAUDE.md` §0):
 - No `🗂️ DESK evening` post by 18:30 ET on a trading day → the chain did not
   run.
-- No PM summary by 10:35 ET → the PM missed its window; no entries that day.
+- No PM summary by 10:50 ET → the PM missed its window; no entries that day.
 - `bars_refresh` `failed` → no scoring that evening; it catches up next time.
 
 ## 10. The paper book and going live

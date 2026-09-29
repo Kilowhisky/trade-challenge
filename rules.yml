@@ -114,19 +114,33 @@ strategy:
   # option windows and the catalyst share granularity were retired 2026-09-27
   # with the trading desk (strategy.md §12). engine/tc/rules/consistency.py
   # fails the build if any of them returns.
+  #
+  # These two did NOT retire with them, but survive for a narrower reason:
+  # both are read only by the tightness-check tables
+  # (engine/tc/rules/consistency.py TIGHTNESS, scripts/check-consistency.sh)
+  # that assert every strategy value sits on the tight side of the manual
+  # value it references — not by the desk playbook, which never names either
+  # key. sleeve_leveraged_pct in particular ties to §3.5, a manual limit the
+  # desk currently never reaches: strategy.md §6 trades no leveraged or
+  # inverse ETFs at all.
   sleeve_options_open_pct: 30
   sleeve_leveraged_pct: 20
 
-  # Playbook §4 — selection
+  # strategy.md §3 — share funding requires daily ATR at or under this;
+  # a noisier name can only be expressed as an option.
   # Was "reject if 10% ÷ daily ATR% < 3", i.e. reject ATR% > 3.33 — a filter
   # that existed only because the stop was fixed at 10%. With an ATR-scaled
   # stop the binding constraint is the stop cap: reject a name only when
   # 2.5 x ATR% would exceed manual stop_trigger_max_pct.
   max_daily_atr_pct: 6
 
-  # Playbook §4 — takeover-stub rejection. A survivor whose latest session
+  # Read by engine/tc/loops/universe.py's weekly universe builder, not
+  # described in strategy.md — the write-up of core/catalyst selection this
+  # once lived under (old §4) was retired 2026-09-27 with the sleeves
+  # (strategy.md §12). Still live and still means what it always did:
+  # takeover-stub rejection. A survivor whose latest session
   # high-low range is under this percentage of its price is pinned, not
-  # quiet, and is rejected by /weekly-universe's --qualified-only pass.
+  # quiet, and is rejected by the weekly universe pass.
   #
   # Why it exists: on 2026-08-19, nine of fifteen names on the shortlist were
   # announced all-cash deal targets trading pinned under their deal price.
@@ -165,19 +179,31 @@ strategy:
   # evidence rather than guessed twice.
   working_universe_size: 500
 
-  # Playbook §6 — options, tighter than manual §3.2
+  # strategy.md §6 — Calls and options.
   option_min_delta: 0.45               # = the manual band floor (2026-09-27, trading-desk design §9.3: selection ranks toward option_target_delta instead of flooring above the manual)
+  # leveraged_exit_session is NOT read by strategy.md §6 or any desk code —
+  # §6 trades no leveraged or inverse ETFs at all. It survives, like
+  # sleeve_leveraged_pct above, only because the tightness-check tables
+  # (engine/tc/rules/consistency.py TIGHTNESS, scripts/check-consistency.sh)
+  # assert it stays inside manual leveraged_max_hold_sessions (5).
   leveraged_exit_session: 4            # manual limit is 5
 
-  # Playbook §8 — monitoring cadence, seconds
+  # Not read by any current job. The old §8 "monitoring cadence" these three
+  # were sized for was retired with the sleeves 2026-09-27 (strategy.md
+  # §12); the v3 tick job instead runs on config.yml's fixed schedule
+  # (strategy.md §4, "every 15 min"). Retained un-consumed — verify with
+  # a grep for `tick_interval` before relying on any of them.
   tick_interval_naked_s: 60
   tick_interval_working_order_s: 300
   tick_interval_positions_s: 900
 
-  # Playbook §10 — endgame calendar DELETED 2026-08-31 alongside manual §8.
+  # Endgame calendar DELETED 2026-08-31 alongside manual §8 (CHANGELOG.md).
   # all_options_flat_by and last_leveraged_entry were dates in a contest that
   # no longer exists; §3.3's 5-DTE close and §3.5's 5-session hold are the
-  # clocks that actually bind, and both survive untouched.
+  # clocks that actually bind, and both survive untouched. (This block used
+  # to cite the old strategy.md §10, "Continuation" — the 2026-09-27 rewrite
+  # reused §10 for "The paper book and going live," an unrelated topic, so
+  # the reference is dropped rather than left pointing at the wrong section.)
 
   # Trading desk (docs/superpowers/specs/2026-09-27-claude-trading-desk-design.md).
   # §5 pitches
