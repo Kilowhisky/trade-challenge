@@ -19,7 +19,13 @@ from tc.broker.models import AccountSnapshot, MarketWindow
 from tc.broker.token import TokenStore
 from tc.clock import ET
 from tc.desk.calls import NewCall, insert_call
-from tc.desk.paper import book_row, create_proposal, pending_proposals
+from tc.desk.paper import (
+    book_row,
+    book_state,
+    create_proposal,
+    ensure_book,
+    pending_proposals,
+)
 from tc.jobs.dispatch import JobRunner, RunnerClient
 from tc.main import Engine
 from tc.notify import Notifier, Pinger
@@ -285,3 +291,36 @@ async def test_a_pm_run_that_raises_still_posts_what_it_proposed(
     assert await e.run_job("pm", PM_AT) == "failed"
     [p] = await pending_proposals(desk_store)
     assert p.posted_at is not None and p.message_id is not None
+
+
+async def test_yesterdays_unfilled_proposal_is_expired_before_the_pm_sizes(
+    tmp_path: Path, desk_store: Store, client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The 09:50 PM runs before the first desk_watch; a proposal left over
+    from yesterday must already be expired when the PM's tools size."""
+    await _account(desk_store)
+    yesterday = PM_AT - timedelta(days=1)
+    await ensure_book(desk_store, yesterday.date(), Decimal("3700.00"), yesterday)
+    call = await insert_call(desk_store, NewCall(
+        made_at=yesterday, session=yesterday.date(), origin="pm", pitch_id=None,
+        extends_call_id=None, symbol="AAA", direction="up", thesis="t" * 12,
+        target=Decimal(55), invalidation=Decimal(48), horizon_days=5, conviction=3,
+        benchmark="XLK", ref_price=Decimal(50), spy_ref=Decimal(500), bench_ref=Decimal(200),
+        funding="shares"))
+    await create_proposal(desk_store, call_id=call.id, created_at=yesterday, instrument="shares",
+                          symbol="AAA", underlying="AAA", quantity=7,
+                          max_entry_price=Decimal("50.50"), atr_pct=Decimal(2))
+    e = _engine(tmp_path, desk_store, client, PM_AT, [])
+    assert e._jobs is not None
+    seen_cash: list[Decimal] = []
+
+    async def pm_run(job: str, now: datetime | None = None, *, ignore_window: bool = False,
+                     on_dispatch: Any = None) -> Any:
+        seen_cash.append((await book_state(desk_store)).cash)
+        return "done", {}
+
+    monkeypatch.setattr(e._jobs, "execute", pm_run)
+    assert await e.run_job("pm", PM_AT) == "done"
+    assert seen_cash == [Decimal("3700.00")]
+    assert await pending_proposals(desk_store) == []

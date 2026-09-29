@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from tc.clock import ET
 from tc.desk.calls import current_call_id, get_call
 from tc.desk.models import DeskRefused, Instrument, utc_iso
 from tc.desk.sizing import BookState, Holding
@@ -270,6 +271,23 @@ async def committed_proposals(store: Store) -> list[Proposal]:
         " AND id NOT IN (SELECT proposal_id FROM paper_fills WHERE side='buy') ORDER BY id"
     )
     return [_proposal(r) for r in rows]
+
+
+async def expire_stale_proposals(store: Store, now: datetime) -> list[int]:
+    """Expire every unfilled proposal made on an earlier ET session. None of
+    them can fill any more (CLAUDE.md §4.2: entries are day-only; desk_watch
+    and post_proposals both refuse them), but until an outcome is written
+    `book_state` still counts each as a commitment. The PM runs at 09:50,
+    before the first desk_watch, so one left over from an early close or a
+    missed 15:55 fire would otherwise shrink the morning's sizing."""
+    today = now.astimezone(ET).date()
+    out: list[int] = []
+    for p in await committed_proposals(store):
+        if p.created_at.astimezone(ET).date() < today:
+            await record_outcome(store, p.id, now, "expired", vetoed=False, approved=False,
+                                 detail={"reason": "stale"})
+            out.append(p.id)
+    return out
 
 
 async def book_state(store: Store, *, exclude_proposal: int | None = None) -> BookState:

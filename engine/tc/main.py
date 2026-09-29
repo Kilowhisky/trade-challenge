@@ -52,7 +52,7 @@ from tc.config import Settings
 from tc.desk.approval import DiscordReactions, NoReactions, Reactions
 from tc.desk.bars import bars_symbols, carried_symbols, refresh_bars
 from tc.desk.models import ActiveJob
-from tc.desk.paper import ensure_book
+from tc.desk.paper import ensure_book, expire_stale_proposals
 from tc.desk.post import desk_summary, pitch_counts_since, post_proposals
 from tc.desk.scorecard import build_scorecard, render_scorecard
 from tc.desk.scoring import score
@@ -505,6 +505,10 @@ class Engine:
                 " could be priced -- no PM decisions this run"
             )
             return "noop", {"skipped": "blind"}
+        if job == "pm":
+            # Yesterday's unfilled proposals can never fill; they must not
+            # count as commitments against this morning's sizing.
+            await expire_stale_proposals(self._store, now)
         # The paper book's start date is the day a PM run first actually
         # dispatches (spec §8, strategy.md §8): the hook runs after the
         # runner/token/window gates, never for a noop or a late fire.

@@ -26,6 +26,7 @@ from tc.desk.paper import (
     closed_trades,
     create_proposal,
     ensure_book,
+    expire_stale_proposals,
     mark_exit_done,
     mark_posted,
     open_positions,
@@ -154,6 +155,32 @@ async def test_a_pending_proposal_is_committed_at_its_worst_case(desk_store: Sto
     await record_outcome(desk_store, opt.id, NOW, "expired", vetoed=False, approved=False,
                          detail={})
     assert (await book_state(desk_store)).open_premium == 0
+
+
+async def test_a_proposal_from_an_earlier_session_is_expired_and_stops_committing(
+    desk_store: Store,
+) -> None:
+    """A proposal left unfilled overnight (an early close, a missed 15:55
+    fire) can never fill, so it must stop spending the book's cash before
+    the next morning's PM sizes."""
+    await ensure_book(desk_store, TODAY, Decimal("3700"), NOW)
+    c = await insert_call(desk_store, _call())
+    old = await create_proposal(desk_store, call_id=c.id, created_at=NOW - timedelta(days=1),
+                                instrument="shares", symbol="AAA", underlying="AAA",
+                                quantity=7, max_entry_price=Decimal("50.50"),
+                                atr_pct=Decimal(2))
+    fresh = await create_proposal(desk_store, call_id=c.id, created_at=NOW, instrument="shares",
+                                  symbol="AAA", underlying="AAA", quantity=2,
+                                  max_entry_price=Decimal("50.00"), atr_pct=Decimal(2))
+    assert (await book_state(desk_store)).cash == Decimal("3700") - Decimal("353.50") - 100
+    assert await expire_stale_proposals(desk_store, NOW) == [old.id]
+    state = await book_state(desk_store)
+    assert state.cash == Decimal("3700") - 100 and state.pending == 1
+    row = await desk_store.fetchone(
+        "SELECT outcome, detail_json FROM proposal_outcomes WHERE proposal_id=?", (old.id,))
+    assert row is not None and row["outcome"] == "expired" and "stale" in row["detail_json"]
+    assert [p.id for p in await pending_proposals(desk_store)] == [fresh.id]
+    assert await expire_stale_proposals(desk_store, NOW) == []       # idempotent
 
 
 async def test_book_state_refuses_before_the_book_starts(desk_store: Store) -> None:
