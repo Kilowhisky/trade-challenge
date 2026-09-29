@@ -152,3 +152,4 @@ async def test_the_two_roles_have_disjoint_write_surfaces(
     assert "book" in decide and "book" not in research
     assert "evidence_append" in research and "evidence_append" not in decide
     assert "pitch_submit" in research and "pitch_submit" not in decide
+    assert "call_submit" in decide and "call_submit" not in research

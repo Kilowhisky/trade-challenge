@@ -27,7 +27,9 @@ from starlette.requests import Request
 
 from tc.broker.client import BrokerError, BrokerUnauthorized
 from tc.desk.briefing import Briefing, build_briefing
-from tc.desk.models import JOB_ANALYST, Analyst, DeskRefused, Direction
+from tc.desk.models import JOB_ANALYST, PM_JOBS, Analyst, DeskRefused, Direction, Funding
+from tc.desk.options import OptionCandidate, fetch_candidates
+from tc.desk.paper import book_state
 from tc.desk.pitches import (
     EvidenceItem,
     PitchIn,
@@ -36,8 +38,24 @@ from tc.desk.pitches import (
     tradeable_symbols,
     withdraw_pitch,
 )
+from tc.desk.pm import (
+    CallIn,
+    CallOut,
+    PaperBookOut,
+    PitchesOut,
+    PmContext,
+    extend_call,
+    paper_book_view,
+    pitches_view,
+    request_exit_for,
+    submit_call,
+    tighten_call,
+)
+from tc.desk.scorecard import Scorecard, build_scorecard
 from tc.desk.scoring import RecordRow, analyst_record
+from tc.desk.sizing import conviction_pct
 from tc.mcp.registry import Role
+from tc.rules.arith import cap_dollars
 
 if TYPE_CHECKING:  # pragma: no cover -- import-cycle guard, as in tools_research
     from tc.mcp.server import McpDeps
@@ -133,6 +151,8 @@ def _analyst(deps: McpDeps, ctx: DeskContext | None) -> Analyst:
 def register(server: FastMCP, deps: McpDeps, role: Role) -> None:
     if role == "research":
         _register_analyst(server, deps)
+    elif role == "decide":
+        _register_pm(server, deps)
 
 
 def _register_analyst(server: FastMCP, deps: McpDeps) -> None:
@@ -203,3 +223,126 @@ def _register_analyst(server: FastMCP, deps: McpDeps) -> None:
     @server.tool(name="my_record", description="Your last 10 resolved pitches, newest first.")
     async def my_record(ctx: DeskContext | None = None) -> Record:
         return Record(rows=await analyst_record(deps.store, _analyst(deps, ctx)))
+
+
+class Candidates(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    premium_cap: str
+    rows: list[OptionCandidate]
+
+
+class Tightened(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    call_id: int
+    invalidation: str
+
+
+class ExitQueued(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    symbol: str
+    book: str
+
+
+def _pm(deps: McpDeps, ctx: DeskContext | None, *, making_calls: bool = False) -> PmContext:
+    name = _caller_job(deps, ctx) or ""
+    if name not in PM_JOBS:
+        raise ToolError(
+            "no PM job is running: the desk's PM tools answer only inside a scheduled PM run"
+        )
+    if making_calls and name != "pm":
+        raise ToolError("no new calls at midday: exit, tighten or hold only (spec §4)")
+    return PmContext(store=deps.store, broker=deps.broker, rules=deps.rules,
+                     desk=deps.settings.desk, reserve=deps.settings.engine.reserve_usd,
+                     now=deps.clock())
+
+
+def _register_pm(server: FastMCP, deps: McpDeps) -> None:
+    @server.tool(name="paper_book", description=(
+        "The desk's paper book: equity, cash, open premium, positions with their call's"
+        " target/invalidation/horizon, pending proposals, and the real account's legacy"
+        " positions with any legacy call attached."))
+    async def paper_book(ctx: DeskContext | None = None) -> PaperBookOut:
+        return await paper_book_view(_pm(deps, ctx))
+
+    @server.tool(name="pitches_read", description=(
+        "Every open pitch from every analyst, plus each analyst's resolved count and mean"
+        " excess return."))
+    async def pitches_read(ctx: DeskContext | None = None) -> PitchesOut:
+        return await pitches_view(_pm(deps, ctx))
+
+    @server.tool(
+        name="scorecard",
+        description="The desk scorecard (spec §7.3) and checkpoint status.",
+    )
+    async def scorecard(ctx: DeskContext | None = None) -> Scorecard:
+        pctx = _pm(deps, ctx)
+        return await build_scorecard(pctx.store, pctx.rules, pctx.desk, pctx.today)
+
+    @server.tool(name="option_candidates", description=(
+        "Up to 3 live contracts that clear every manual §3.2 floor for this direction and"
+        " horizon, within this conviction's premium cap. Fund an option call ONLY with one"
+        " of these symbols."))
+    async def option_candidates(symbol: str, direction: Direction, horizon_days: int,
+                                conviction: Annotated[int, Field(ge=1, le=5)],
+                                ctx: DeskContext | None = None) -> Candidates:
+        pctx = _pm(deps, ctx)
+        with refusals():
+            cap = cap_dollars(conviction_pct("option", conviction, pctx.rules),
+                              (await book_state(pctx.store)).equity)
+            rows = await fetch_candidates(pctx.broker, symbol.strip().upper(), direction,
+                                          horizon_days, cap, pctx.rules, pctx.today)
+        return Candidates(premium_cap=str(cap), rows=rows)
+
+    @server.tool(name="call_submit", description=(
+        "Make one call (max 5 new a day): adopt a pitch by pitch_id or originate your own."
+        " Prices are decimal strings. funding: none | shares (up only; needs"
+        " max_entry_price) | call | put (needs option_symbol from option_candidates)."
+        " Conviction 1-2 is never funded. legacy=true records a view on a real-account"
+        " position (funding none). The engine stamps the reference from a live quote."))
+    async def call_submit(
+        symbol: Annotated[str, Field(max_length=10)], direction: Direction,
+        thesis: Annotated[str, Field(min_length=10, max_length=400)], target: str,
+        invalidation: str, horizon_days: int, conviction: Annotated[int, Field(ge=1, le=5)],
+        benchmark: str, pitch_id: int | None = None, funding: Funding = "none",
+        max_entry_price: str | None = None, option_symbol: str | None = None,
+        legacy: bool = False, ctx: DeskContext | None = None,
+    ) -> CallOut:
+        pctx = _pm(deps, ctx, making_calls=True)
+        with refusals():
+            return await submit_call(pctx, CallIn(
+                pitch_id=pitch_id, symbol=symbol, direction=direction, thesis=thesis,
+                target=target, invalidation=invalidation, horizon_days=horizon_days,
+                conviction=conviction, benchmark=benchmark, funding=funding,
+                max_entry_price=max_entry_price, option_symbol=option_symbol, legacy=legacy,
+            ))
+
+    @server.tool(name="call_extend", description=(
+        "Extend a funded call that reached its horizon at the last close, ONCE: opens a new"
+        " call with new levels and horizon and keeps the paper position."))
+    async def call_extend(call_id: int, target: str, invalidation: str, horizon_days: int,
+                          thesis: Annotated[str, Field(min_length=10, max_length=400)],
+                          ctx: DeskContext | None = None) -> CallOut:
+        pctx = _pm(deps, ctx)
+        with refusals():
+            return await extend_call(pctx, call_id, target=target, invalidation=invalidation,
+                                     horizon_days=horizon_days, thesis=thesis)
+
+    @server.tool(name="call_tighten", description=(
+        "Move a held call's invalidation toward the price (never away). The paper stop follows."))
+    async def call_tighten(call_id: int, invalidation: str,
+                           ctx: DeskContext | None = None) -> Tightened:
+        pctx = _pm(deps, ctx)
+        with refusals():
+            new = await tighten_call(pctx, call_id, invalidation)
+        return Tightened(call_id=call_id, invalidation=str(new))
+
+    @server.tool(name="exit_request", description=(
+        "Exit every paper position on this underlying at the next desk_watch; on a legacy"
+        " real-account position, posts a recommendation for Chris instead."))
+    async def exit_request(symbol: str,
+                           reason: Annotated[str, Field(min_length=5, max_length=300)],
+                           ctx: DeskContext | None = None) -> ExitQueued:
+        pctx = _pm(deps, ctx)
+        with refusals():
+            where = await request_exit_for(pctx, symbol, reason)
+        return ExitQueued(symbol=symbol.strip().upper(), book=where)

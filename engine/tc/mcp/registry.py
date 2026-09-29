@@ -57,13 +57,21 @@ RESEARCH_TOOLS: tuple[str, ...] = (
 # server keeps working; the analyst's identity comes from the running job.
 ANALYST_TOOLS: tuple[str, ...] = ("briefing", "pitch_submit", "pitch_withdraw", "my_record")
 
+# The trading desk's PM tools (trading-desk design §6, §13), on the `decide`
+# role. None is order-shaped: the paper phase fills nothing at Schwab, and
+# Plan 1's propose_* family is what will turn a funded call into an order.
+PM_TOOLS: tuple[str, ...] = (
+    "paper_book", "pitches_read", "scorecard", "option_candidates", "call_submit",
+    "call_extend", "call_tighten", "exit_request",
+)
+
 # Empty on purpose: Plan 1 adds propose_entry / propose_exit /
 # propose_option_close / get_proposal here and nowhere else.
 DECIDE_TOOLS: tuple[str, ...] = ()
 
 ROLE_TOOLS: dict[Role, tuple[str, ...]] = {
     "research": COMMON_TOOLS + READ_TOOLS + RESEARCH_TOOLS + ANALYST_TOOLS,
-    "decide": COMMON_TOOLS + READ_TOOLS + DECIDE_ONLY_READ_TOOLS + DECIDE_TOOLS,
+    "decide": COMMON_TOOLS + READ_TOOLS + DECIDE_ONLY_READ_TOOLS + PM_TOOLS + DECIDE_TOOLS,
 }
 
 # Spec §10. Substring, not a whole-name match: `get_orders`, `order_status`
