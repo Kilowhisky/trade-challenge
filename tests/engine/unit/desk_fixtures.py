@@ -4,12 +4,18 @@ from. The store fixture is in conftest.py."""
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+from tc.broker.client import Broker
 from tc.broker.models import DailyBar
+from tc.config import Settings, load_settings
+from tc.desk.models import ActiveJob
+from tc.mcp.server import McpDeps
+from tc.research.docs import DocStore
 from tc.rules.model import Rules
+from tc.store.db import Store
 
 REPO = Path(__file__).resolve().parents[3]
 RULES = Rules.load(REPO / "rules.yml")
@@ -52,3 +58,35 @@ def trend_bars(start: date, n: int, first: str = "50", step: str = "0.5",
                             close=p + s, volume=volume))
         p += s
     return out
+
+
+DESK_CONFIG = """
+engine:
+  data_dir: {p}
+  repo_dir: {repo}
+  research_dir: {p}/research
+token:
+  reauth_after_days: 5
+  hard_expiry_days: 7
+  callback_url: https://pi.example.ts.net/oauth/callback
+runner:
+  url: http://127.0.0.1:8090
+desk:
+  etf_list: [SPY, XLK, XLF]
+  context_symbols: [UUP]
+"""
+
+
+def desk_settings(tmp_path: Path, env_extra: str = "") -> Settings:
+    (tmp_path / "config.yml").write_text(DESK_CONFIG.format(p=tmp_path, repo=REPO))
+    (tmp_path / ".env").write_text("TC_SCHWAB_APP_KEY=k\nTC_SCHWAB_APP_SECRET=s\n" + env_extra)
+    return load_settings(tmp_path / "config.yml", tmp_path / ".env")
+
+
+def desk_deps(store: Store, tmp_path: Path, broker: Broker, now: datetime,
+              job: str | None = None) -> McpDeps:
+    return McpDeps(
+        store=store, broker=broker, docs=DocStore(tmp_path / "research", store),
+        rules=RULES, settings=desk_settings(tmp_path), clock=lambda: now,
+        active=ActiveJob(job),
+    )

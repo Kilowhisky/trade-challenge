@@ -26,8 +26,8 @@ from __future__ import annotations
 import contextlib
 import hmac
 from collections.abc import AsyncIterator, Callable, Iterable
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
@@ -48,12 +48,17 @@ from starlette.types import ASGIApp
 
 from tc.broker.client import Broker
 from tc.config import Settings
+from tc.desk.models import ActiveJob
 from tc.mcp.registry import FORBIDDEN, ROLE_TOOLS, Role
 from tc.research.docs import DocStore
 from tc.rules.model import Rules
 from tc.store.db import Store
 
 SERVER_NAME = "engine"
+
+
+def _is_weekday(d: date) -> bool:
+    return d.weekday() < 5
 
 
 @dataclass
@@ -71,6 +76,13 @@ class McpDeps:
     rules: Rules
     settings: Settings
     clock: Callable[[], datetime]
+    # Which Claude job is running (tc/desk/models.ActiveJob), set by the engine
+    # around every dispatch: the desk tools read the analyst's identity here,
+    # never from the model's arguments.
+    active: ActiveJob = field(default_factory=ActiveJob)
+    # The engine's trading-day answer (broker calendar for today, weekday
+    # otherwise), for a pitch's reference session.
+    trading_day: Callable[[date], bool] = _is_weekday
 
 
 class Pong(BaseModel):

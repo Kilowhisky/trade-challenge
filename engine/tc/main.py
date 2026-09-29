@@ -50,6 +50,7 @@ from tc.broker.token import TokenStore
 from tc.clock import ET, fallback_window, trading_days_between
 from tc.config import Settings
 from tc.desk.bars import bars_symbols, carried_symbols, refresh_bars
+from tc.desk.models import ActiveJob
 from tc.desk.scoring import score
 from tc.http.app import EngineState, McpMounts, build_app
 from tc.jobs.dispatch import FAILED_VERDICTS, JobRunner, RunnerClient
@@ -61,7 +62,7 @@ from tc.loops.tick import TickResult, run_tick
 from tc.loops.token import token_check
 from tc.loops.universe import UniverseUnavailable, counts_detail, run_weekly_universe
 from tc.mcp import server as mcp_server
-from tc.mcp import tools_read, tools_research
+from tc.mcp import tools_desk, tools_read, tools_research
 from tc.mcp.server import McpDeps, build_servers
 from tc.notify import BotChannel, Notifier, Pinger
 from tc.research.docs import DocStore
@@ -126,6 +127,8 @@ def _wire_mcp_registrars() -> None:
     mcp_server.register("research", tools_read.register)
     mcp_server.register("decide", tools_read.register)
     mcp_server.register("research", tools_research.register)
+    mcp_server.register("research", tools_desk.register)
+    mcp_server.register("decide", tools_desk.register)
     _mcp_wired = True
 
 
@@ -183,6 +186,10 @@ class Engine:
         # without a runner records every Claude job as a `noop` naming the
         # reason, rather than failing a job nobody installed.
         self._jobs = jobs
+        # Which Claude job is running right now, read by the desk tools
+        # (tc/desk/models.ActiveJob) so an analyst's identity comes from the
+        # dispatch itself, never from an argument the model supplies.
+        self._active = ActiveJob()
         # Built in `start()`, once the store is open: the MCP surface the
         # runner reaches back through. `None` means no role tokens were
         # configured, and `serve()` then mounts nothing.
@@ -252,6 +259,8 @@ class Engine:
             rules=self._rules,
             settings=self._s,
             clock=self._clock,
+            active=self._active,
+            trading_day=self._trading_day,
         )
         return McpMounts(servers=build_servers(deps), tokens=tokens)
 
@@ -464,7 +473,13 @@ class Engine:
     ) -> tuple[Verdict, dict[str, Any]]:
         if self._jobs is None:
             return "noop", {"skipped": "no runner configured"}
-        return await self._jobs.execute(job, now, ignore_window=ignore_window)
+        # The desk tools read WHO is calling from here (tc/desk/models.ActiveJob);
+        # set for exactly the life of the dispatch, cleared even on a raise.
+        self._active.name = job
+        try:
+            return await self._jobs.execute(job, now, ignore_window=ignore_window)
+        finally:
+            self._active.name = None
 
     # --- jobs --------------------------------------------------------------
 

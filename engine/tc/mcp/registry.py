@@ -52,12 +52,17 @@ RESEARCH_TOOLS: tuple[str, ...] = (
     "cohort", "universe_symbols", "universe_names_page", "alert_read",
 )
 
+# The trading desk's analyst tools (trading-desk design §5, §13). The desk
+# reuses the `research` role for its analysts so the bearer installed on the
+# server keeps working; the analyst's identity comes from the running job.
+ANALYST_TOOLS: tuple[str, ...] = ("briefing", "pitch_submit", "pitch_withdraw", "my_record")
+
 # Empty on purpose: Plan 1 adds propose_entry / propose_exit /
 # propose_option_close / get_proposal here and nowhere else.
 DECIDE_TOOLS: tuple[str, ...] = ()
 
 ROLE_TOOLS: dict[Role, tuple[str, ...]] = {
-    "research": COMMON_TOOLS + READ_TOOLS + RESEARCH_TOOLS,
+    "research": COMMON_TOOLS + READ_TOOLS + RESEARCH_TOOLS + ANALYST_TOOLS,
     "decide": COMMON_TOOLS + READ_TOOLS + DECIDE_ONLY_READ_TOOLS + DECIDE_TOOLS,
 }
 
