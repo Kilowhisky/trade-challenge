@@ -49,10 +49,12 @@ from tc.broker.models import MarketWindow
 from tc.broker.token import TokenStore
 from tc.clock import ET, fallback_window, trading_days_between
 from tc.config import Settings
+from tc.desk.approval import DiscordReactions, NoReactions, Reactions
 from tc.desk.bars import bars_symbols, carried_symbols, refresh_bars
 from tc.desk.models import ActiveJob
 from tc.desk.scorecard import build_scorecard, render_scorecard
 from tc.desk.scoring import score
+from tc.desk.watch import run_desk_watch
 from tc.http.app import EngineState, McpMounts, build_app
 from tc.jobs.dispatch import FAILED_VERDICTS, JobRunner, RunnerClient
 from tc.jobs.spec import JOB_SPECS
@@ -86,7 +88,7 @@ CLAUDE_JOBS: tuple[str, ...] = tuple(JOB_SPECS)
 # argument, both before anything is opened.
 JOBS: tuple[str, ...] = (
     "tick", "session_close", "token_check", "expectations", "backup", "weekly_universe",
-    "bars_refresh", "scorecard_weekly", *CLAUDE_JOBS,
+    "bars_refresh", "scorecard_weekly", "desk_watch", *CLAUDE_JOBS,
 )
 
 BACKUPS_KEPT = 14  # ~3 weeks of trading days; the store is small and the disk is not
@@ -157,6 +159,7 @@ class Engine:
         sleep_s: float = LOOP_INTERVAL_S,
         client: httpx.AsyncClient | None = None,
         jobs: JobRunner | None = None,
+        reactions: Reactions | None = None,
     ) -> None:
         self._s = settings
         self._broker = broker
@@ -164,6 +167,7 @@ class Engine:
         self._token = token
         self._pinger = pinger
         self._clock = clock
+        self._reactions = reactions or NoReactions()
         self._sleep_s = sleep_s
         # The shared HTTP client Notifier and Pinger already hold. The weekly
         # sweep fetches the Nasdaq directory over it; a job that needs it and
@@ -468,6 +472,8 @@ class Engine:
             return await self._job_bars_refresh(now)
         if job == "scorecard_weekly":
             return await self._job_scorecard_weekly(now)
+        if job == "desk_watch":
+            return await self._job_desk_watch(now)
         if job in CLAUDE_JOBS:
             return await self._job_claude(job, now, ignore_window=ignore_window)
         raise ValueError(f"unknown job {job!r}")
@@ -669,6 +675,21 @@ class Engine:
                 f"⚠️ desk: {len(rep_score.stuck)} item(s) missing bars 3+ sessions — "
                 + ", ".join(rep_score.stuck[:10])
             )
+        return "done", detail
+
+    async def _job_desk_watch(self, now: datetime) -> tuple[Verdict, dict[str, Any]]:
+        rep = await run_desk_watch(
+            store=self._store, broker=self._broker, notifier=self.notifier,
+            reactions=self._reactions, rules=self._rules, desk=self._s.desk, now=now,
+        )
+        detail: dict[str, Any] = {
+            "filled": rep.filled, "skipped": rep.skipped, "exits": rep.exits,
+            "recommended": rep.recommended,
+        }
+        if rep.blind:
+            # Not `failed` every five minutes: the tick already reports BLIND,
+            # and a dead token is one state, not seventy-two failures a day.
+            return "noop", {**detail, "skipped_reason": "blind"}
         return "done", detail
 
     async def _scorecard_json(self) -> dict[str, Any]:
@@ -923,8 +944,11 @@ def build_engine(
     client: httpx.AsyncClient,
 ) -> Engine:
     shadow = settings.shadow.enabled
-    notifier = Notifier(
-        _discord_target(settings, shadow), client, "[shadow] " if shadow else ""
+    target = _discord_target(settings, shadow)
+    notifier = Notifier(target, client, "[shadow] " if shadow else "")
+    reactions: Reactions = (
+        DiscordReactions(target, client, settings.discord_approver_id)
+        if isinstance(target, BotChannel) else NoReactions()
     )
     return Engine(
         settings,
@@ -932,6 +956,7 @@ def build_engine(
         store=Store(settings.engine.data_dir / "engine.db"),
         token=token_store(settings),
         notifier=notifier,
+        reactions=reactions,
         pinger=Pinger(
             None
             if settings.healthchecks_base_url is None
