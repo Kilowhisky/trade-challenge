@@ -116,13 +116,13 @@ async def test_a_desk_day_end_to_end(desk_store: Store, tmp_path: Path) -> None:
     })
     assert call.origin == "pitch" and call.proposal.quantity == 10   # 555.00 // 50.50
     notes = Notes()
-    posted = await post_proposals(desk_store, notes, RULES, desk, PM_AT)
+    posted = await post_proposals(desk_store, notes, RULES, desk, PM_AT, None)
 
     # 10:10: the veto window closes and desk_watch fills at the ask.
     _quotes(fx, FILL_AT, AAA=(50.1, 50.08, 50.12))
     rep = await run_desk_watch(store=desk_store, broker=FakeBroker(fx, FILL_AT), notifier=notes,
                                reactions=NoReactions(), rules=RULES, desk=desk,
-                               reserve=Decimal("900.00"), now=FILL_AT)
+                               reserve=Decimal("900.00"), window=None, now=FILL_AT)
     assert rep.filled == posted
 
     # Bars arrive; AAA reaches 55.5 on Thursday. Both predictions hit.
@@ -139,7 +139,7 @@ async def test_a_desk_day_end_to_end(desk_store: Store, tmp_path: Path) -> None:
     _quotes(fx, EXIT_AT, AAA=(55.2, 55.1, 55.3))
     rep = await run_desk_watch(store=desk_store, broker=FakeBroker(fx, EXIT_AT), notifier=notes,
                                reactions=NoReactions(), rules=RULES, desk=desk,
-                               reserve=Decimal("900.00"), now=EXIT_AT)
+                               reserve=Decimal("900.00"), window=None, now=EXIT_AT)
     assert rep.exits == [(posted[0], "target")]
 
     sc = await build_scorecard(desk_store, RULES, desk, D01)

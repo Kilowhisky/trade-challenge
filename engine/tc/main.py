@@ -501,7 +501,8 @@ class Engine:
             # Funded calls became proposals during the run; they go to Discord
             # now, each with its own veto deadline (spec §9.4).
             posted = await post_proposals(
-                self._store, self.notifier, self._rules, self._s.desk, self._clock()
+                self._store, self.notifier, self._rules, self._s.desk, self._clock(),
+                self._window,
             )
             detail = {**detail, "proposals_posted": posted}
         return verdict, detail
@@ -726,12 +727,16 @@ class Engine:
         rep = await run_desk_watch(
             store=self._store, broker=self._broker, notifier=self.notifier,
             reactions=self._reactions, rules=self._rules, desk=self._s.desk,
-            reserve=self._s.engine.reserve_usd, now=now,
+            reserve=self._s.engine.reserve_usd, window=self._window, now=now,
         )
         detail: dict[str, Any] = {
             "filled": rep.filled, "skipped": rep.skipped, "exits": rep.exits,
             "recommended": rep.recommended,
         }
+        if rep.outside_rth:
+            # An early close: the schedule still fires until 15:55, but
+            # nothing may fill or exit on post-close quotes.
+            return "noop", {**detail, "skipped": "outside RTH"}
         if rep.blind:
             # Not `failed` every five minutes: the tick already reports BLIND,
             # and a dead token is one state, not seventy-two failures a day.

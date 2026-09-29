@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
+from tc.broker.models import MarketWindow
 from tc.clock import ET
 from tc.config import DeskConfig
 from tc.desk.calls import Call, effective_invalidation, get_call
@@ -50,12 +51,27 @@ async def _stop_text(store: Store, rules: Rules, p: Proposal, call: Call) -> str
     return f"{stop.trigger}/{stop.limit} (trigger/limit, planned off the {p.max_entry_price} limit)"
 
 
+def posting_end(
+    desk: DeskConfig, veto: timedelta, day: date, window: MarketWindow | None
+) -> datetime:
+    """The last moment a proposal may be posted: the entry window's end, or
+    the session's close less the veto window when that is earlier. On an
+    early close (13:00) a 14:30 post would open a veto window that ends after
+    the market has shut, and desk_watch would never see it fill in RTH."""
+    end = datetime.combine(day, desk.entry_window_end, tzinfo=ET)
+    if window is not None and window.date == day and window.rth_end is not None:
+        end = min(end, window.rth_end.astimezone(ET) - veto)
+    return end
+
+
 async def post_proposals(
-    store: Store, notifier: Notifier, rules: Rules, desk: DeskConfig, now: datetime
+    store: Store, notifier: Notifier, rules: Rules, desk: DeskConfig, now: datetime,
+    window: MarketWindow | None,
 ) -> list[int]:
     et = now.astimezone(ET)
-    window = timedelta(minutes=int(rules.get("strategy", "veto_window_minutes")))
+    veto = timedelta(minutes=int(rules.get("strategy", "veto_window_minutes")))
     opens = datetime.combine(et.date(), desk.entry_window_start, tzinfo=ET)
+    end = posting_end(desk, veto, et.date(), window)
     posted: list[int] = []
     for p in await unposted_proposals(store):
         if p.created_at.astimezone(ET).date() < et.date():
@@ -67,9 +83,10 @@ async def post_proposals(
             await record_outcome(store, p.id, now, "expired", vetoed=False, approved=False,
                                  detail={"reason": "stale"})
             continue
-        if et.time() >= desk.entry_window_end:
+        if et >= end:
             await record_outcome(store, p.id, now, "expired", vetoed=False, approved=False,
-                                 detail={"reason": "proposed after the entry window"})
+                                 detail={"reason": "proposed after the entry window",
+                                         "posting_end": end.strftime("%H:%M")})
             continue
         call = await get_call(store, p.call_id)
         if call is None:
@@ -77,7 +94,7 @@ async def post_proposals(
             # miss here is a data-integrity bug, not a routine skip, and
             # must surface rather than silently drop the proposal.
             raise RuntimeError(f"proposal {p.id} names call {p.call_id}, which does not exist")
-        deadline = max(now, opens) + window
+        deadline = max(now, opens) + veto
         stop = await _stop_text(store, rules, p, call)
         mid = await notifier.post_message(
             render_proposal(p, call, deadline.astimezone(ET).strftime("%H:%M"), stop)

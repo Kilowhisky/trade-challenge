@@ -10,8 +10,8 @@ from datetime import datetime, time
 from decimal import ROUND_CEILING, Decimal
 
 from tc.broker.client import Broker, BrokerError, BrokerUnauthorized
-from tc.broker.models import Quote
-from tc.clock import ET
+from tc.broker.models import MarketWindow, Quote
+from tc.clock import ET, fallback_window, phase_for
 from tc.config import DeskConfig
 from tc.desk.approval import Reaction, Reactions
 from tc.desk.calls import current_call_id, effective_invalidation, get_call
@@ -29,7 +29,7 @@ from tc.desk.paper import (
     record_outcome,
     upsert_mark,
 )
-from tc.desk.pm import correlated_with
+from tc.desk.pm import QUOTE_MAX_AGE_S, correlated_with
 from tc.desk.scoring import resolution_for
 from tc.desk.sizing import SizingRefused, check_book, entry_stop
 from tc.money import CENT, floor_cents
@@ -51,10 +51,18 @@ class WatchReport:
     exits: list[tuple[int, str]] = field(default_factory=list)
     recommended: list[str] = field(default_factory=list)
     blind: bool = False
+    outside_rth: bool = False
 
 
 async def _quote(broker: Broker, symbols: list[str]) -> dict[str, Quote]:
     return await broker.quotes(sorted(set(symbols)))
+
+
+def _stale(q: Quote | None, now: datetime) -> bool:
+    """CLAUDE.md §4.10: a quote more than a few minutes old is re-fetched or
+    the action deferred -- the same QUOTE_MAX_AGE_S the PM's calls use. A
+    stale quote is transient, like a BrokerError: the next pass tries again."""
+    return q is not None and (now - q.quote_time).total_seconds() > QUOTE_MAX_AGE_S
 
 
 async def _entries(
@@ -88,6 +96,10 @@ async def _entries(
             continue
         except BrokerError:
             continue            # transient: the next run tries again
+        if _stale(quotes.get(p.symbol), now) or _stale(quotes.get(p.underlying), now):
+            log.warning("desk_watch: stale quote for proposal %s (%s); fill deferred",
+                        p.id, p.symbol)
+            continue
         await _fill_entry(store, notifier, rules, reserve, p, quotes.get(p.symbol),
                           quotes.get(p.underlying), r, now, rep)
 
@@ -206,10 +218,10 @@ async def _exits(
         wanted = {r.proposal_id: r for r in requests if r.proposal_id is not None}
         for pos in positions:
             u, t = quotes.get(pos.underlying), quotes.get(pos.symbol)
-            if u is None or t is None:
+            if u is None or t is None or _stale(u, now) or _stale(t, now):
                 log.warning(
-                    "desk_watch: no quote for %s (underlying %s) -- exit check skipped this pass",
-                    pos.symbol, pos.underlying,
+                    "desk_watch: no fresh quote for %s (underlying %s) -- exit check skipped"
+                    " this pass", pos.symbol, pos.underlying,
                 )
                 continue
             mark_price = t.bid if pos.instrument != "shares" else u.last
@@ -245,9 +257,20 @@ async def _exits(
 
 async def run_desk_watch(
     *, store: Store, broker: Broker, notifier: Notifier, reactions: Reactions, rules: Rules,
-    desk: DeskConfig, reserve: Decimal, now: datetime,
+    desk: DeskConfig, reserve: Decimal, window: MarketWindow | None, now: datetime,
 ) -> WatchReport:
+    """Acts only while the regular session is open by the engine's own
+    market window. The schedule runs 09:55-15:55 on every trading day, and on
+    an early close (2026-11-27, 2026-12-24) that is three hours of post-close
+    asks and extended-hours prints no real order could have met (spec §10:
+    the paper book does "exactly as the real one would"). Without the
+    broker's calendar the weekday guess stands in, as it does for the tick."""
     rep = WatchReport()
+    et_date = now.astimezone(ET).date()
+    w = window if window is not None and window.date == et_date else fallback_window(et_date)
+    if phase_for(now, w) != "RTH":
+        rep.outside_rth = True
+        return rep
     await _entries(store, broker, notifier, reactions, rules, reserve, now, rep)
     await _exits(store, broker, notifier, rules, now, rep)
     return rep

@@ -16,7 +16,8 @@ from desk_fixtures import RULES, trend_bars
 
 from tc.broker.client import BrokerUnauthorized
 from tc.broker.fake import FakeBroker
-from tc.broker.models import Quote
+from tc.broker.models import MarketWindow, Quote
+from tc.clock import ET
 from tc.config import DeskConfig
 from tc.desk.approval import Reaction
 from tc.desk.calls import NewCall, insert_call, tighten
@@ -91,10 +92,10 @@ NOBODY = Reaction(veto=False, approve=False)
 
 
 async def _run(store: Store, fx: Path, now: datetime, r: Reaction = NOBODY,
-               notes: Notes | None = None) -> Any:
+               notes: Notes | None = None, window: MarketWindow | None = None) -> Any:
     return await run_desk_watch(store=store, broker=FakeBroker(fx, now), notifier=notes or Notes(),
                                 reactions=Fixed(r), rules=RULES, desk=DeskConfig(),
-                                reserve=RESERVE, now=now)
+                                reserve=RESERVE, window=window, now=now)
 
 
 async def test_a_proposal_waits_for_its_window_then_fills_at_the_ask(
@@ -254,7 +255,7 @@ async def test_a_dead_token_is_reported_not_raised(desk_store: Store, tmp_path: 
     now = T0 + timedelta(minutes=10)
     rep = await run_desk_watch(store=desk_store, broker=Dead(tmp_path, now), notifier=Notes(),
                                reactions=Fixed(Reaction(False, False)), rules=RULES,
-                               desk=DeskConfig(), reserve=RESERVE, now=now)
+                               desk=DeskConfig(), reserve=RESERVE, window=None, now=now)
     assert rep.blind is True and rep.skipped[0][1] == "skipped_blind"
 
 
@@ -366,3 +367,58 @@ async def test_a_fill_that_would_breach_a_cap_is_skipped_as_invalid(
     assert row is not None and "at the fill price" in row["detail_json"]
     assert "reserve" in row["detail_json"]
     assert [p.symbol for p in await open_positions(desk_store)] == ["ZZZ"]
+
+
+# --- final review I1: the market window and quote age -------------------
+
+EARLY_CLOSE = MarketWindow(
+    date=TODAY, is_trading_day=True,
+    rth_start=datetime(2026, 9, 29, 9, 30, tzinfo=ET), rth_end=datetime(2026, 9, 29, 13, 0, tzinfo=ET),
+)
+
+
+async def test_nothing_fills_or_exits_after_an_early_close(desk_store: Store, tmp_path: Path) -> None:
+    """2026-11-27 and 2026-12-24 close at 13:00 while desk_watch still fires
+    until 15:55: a post-close ask is not a fill, and a post-close print is
+    not a stop or a target."""
+    pid = await _held(desk_store, tmp_path)                       # filled at 10:10
+    _, pending = await _setup_second(desk_store)
+    after = datetime(2026, 9, 29, 17, 5, tzinfo=UTC)              # 13:05 ET
+    _quotes(tmp_path, after, AAA=(56.0, 55.9, 56.1), BBB=(50.0, 49.98, 50.02))
+    rep = await _run(desk_store, tmp_path, after, window=EARLY_CLOSE)
+    assert rep.outside_rth and (rep.filled, rep.exits, rep.skipped) == ([], [], [])
+    assert [p.proposal_id for p in await open_positions(desk_store)] == [pid]
+    assert [p.id for p in await pending_proposals(desk_store)] == [pending]
+    # The same prices inside the session do act.
+    before = datetime(2026, 9, 29, 16, 55, tzinfo=UTC)            # 12:55 ET
+    _quotes(tmp_path, before, AAA=(56.0, 55.9, 56.1), BBB=(50.0, 49.98, 50.02))
+    rep = await _run(desk_store, tmp_path, before, window=EARLY_CLOSE)
+    assert rep.exits == [(pid, "target")] and rep.filled == [pending]
+
+
+async def _setup_second(store: Store) -> tuple[int, int]:
+    await store.upsert_bars("BBB", trend_bars(date(2026, 6, 1), 80, first="40", step="0.125"))
+    call = await insert_call(store, NewCall(
+        made_at=T0, session=TODAY, origin="pm", pitch_id=None, extends_call_id=None, symbol="BBB",
+        direction="up", thesis="t" * 12, target=Decimal(55), invalidation=Decimal(48),
+        horizon_days=5, conviction=3, benchmark="XLF", ref_price=Decimal(50),
+        spy_ref=Decimal(500), bench_ref=Decimal(40), funding="shares"))
+    p = await create_proposal(store, call_id=call.id, created_at=T0, instrument="shares",
+                              symbol="BBB", underlying="BBB", quantity=7,
+                              max_entry_price=Decimal("50.50"), atr_pct=Decimal(2))
+    await mark_posted(store, p.id, T0, T0 + timedelta(minutes=10), "m2")
+    return call.id, p.id
+
+
+async def test_a_stale_quote_defers_the_fill_and_the_exit(desk_store: Store, tmp_path: Path) -> None:
+    pid = await _held(desk_store, tmp_path)
+    _, pending = await _setup_second(desk_store)
+    now = T0 + timedelta(minutes=30)
+    _quotes(tmp_path, now - timedelta(minutes=6), AAA=(56.0, 55.9, 56.1),
+            BBB=(50.0, 49.98, 50.02))                              # six minutes old
+    rep = await _run(desk_store, tmp_path, now)
+    assert (rep.filled, rep.exits, rep.skipped) == ([], [], [])   # deferred, not skipped
+    assert [p.id for p in await pending_proposals(desk_store)] == [pending]
+    _quotes(tmp_path, now, AAA=(56.0, 55.9, 56.1), BBB=(50.0, 49.98, 50.02))
+    rep = await _run(desk_store, tmp_path, now)
+    assert rep.exits == [(pid, "target")] and rep.filled == [pending]

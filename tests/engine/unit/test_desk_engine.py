@@ -15,8 +15,9 @@ import pytest
 from desk_fixtures import desk_settings
 
 from tc.broker.fake import FakeBroker
-from tc.broker.models import AccountSnapshot
+from tc.broker.models import AccountSnapshot, MarketWindow
 from tc.broker.token import TokenStore
+from tc.clock import ET
 from tc.desk.calls import NewCall, insert_call
 from tc.desk.paper import book_row, create_proposal, pending_proposals
 from tc.jobs.dispatch import JobRunner, RunnerClient
@@ -132,3 +133,18 @@ async def test_the_pm_run_starts_the_book_and_posts_its_proposals(
     # Posted at 09:50, before the 10:00 entry window opens: the ten-minute
     # veto window runs from 10:00, so nothing can execute before 10:10.
     assert p.veto_deadline == datetime(2026, 9, 29, 14, 0, tzinfo=UTC) + timedelta(minutes=10)
+
+
+async def test_desk_watch_reads_the_engines_market_window(
+    tmp_path: Path, desk_store: Store, client: httpx.AsyncClient,
+) -> None:
+    """Final review I1: an early close is the engine's window, not the
+    schedule's -- the 13:05 fire records a noop and touches nothing."""
+    at = datetime(2026, 11, 27, 13, 5, tzinfo=ET)
+    e = _engine(tmp_path, desk_store, client, at, [])
+    e._window = MarketWindow(date=at.date(), is_trading_day=True,
+                             rth_start=datetime(2026, 11, 27, 9, 30, tzinfo=ET),
+                             rth_end=datetime(2026, 11, 27, 13, 0, tzinfo=ET))
+    assert await e.run_job("desk_watch", at) == "noop"
+    row = await desk_store.fetchone("SELECT detail_json FROM job_runs WHERE job='desk_watch'")
+    assert row is not None and json.loads(row["detail_json"])["skipped"] == "outside RTH"
