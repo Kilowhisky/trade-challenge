@@ -207,12 +207,25 @@ async def _fund(
             f"{cin.option_symbol} is not among the contracts that clear §3.2 right now:"
             f" {[c.osi for c in cands]}"
         )
-    ask = Decimal(chosen.ask)
-    max_entry = (parse_price(cin.max_entry_price, "max_entry_price") if cin.max_entry_price
-                 else cents(ask * (1 + chase / 100)))
-    qty = option_quantity(cin.conviction, book.equity, ask, rules)
-    check_book(book, symbol=symbol, benchmark=bench, notional=ask * 100 * qty, is_option=True,
-               correlated=correlated, rules=rules, reserve=ctx.reserve)
+    # The chain fetch above can be stale by the time a decision is made; the
+    # contract actually funded is priced off its OWN fresh quote (§4.10),
+    # never the chain snapshot's ask.
+    ask = (await fresh_quotes(ctx, [chosen.osi]))[chosen.osi].ask
+    ceiling = cents(ask * (1 + chase / 100))
+    if cin.max_entry_price is not None:
+        max_entry = parse_price(cin.max_entry_price, "max_entry_price")
+        if max_entry > ceiling:
+            raise DeskRefused(
+                f"max_entry_price {max_entry} chases more than {chase}% above the ask {ask}"
+            )
+    else:
+        max_entry = ceiling
+    # Quantity and the book check both size off max_entry_price, never the raw
+    # ask: a conviction-5 fill up to max_entry_price must itself clear the
+    # manual §3.2 caps, not merely the (lower) ask-priced notional.
+    qty = option_quantity(cin.conviction, book.equity, max_entry, rules)
+    check_book(book, symbol=symbol, benchmark=bench, notional=max_entry * 100 * qty,
+               is_option=True, correlated=correlated, rules=rules, reserve=ctx.reserve)
     return _Plan(want, chosen.osi, qty, max_entry, None)
 
 

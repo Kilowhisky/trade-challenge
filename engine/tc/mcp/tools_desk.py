@@ -318,11 +318,14 @@ def _register_pm(server: FastMCP, deps: McpDeps) -> None:
 
     @server.tool(name="call_extend", description=(
         "Extend a funded call that reached its horizon at the last close, ONCE: opens a new"
-        " call with new levels and horizon and keeps the paper position."))
+        " call with new levels and horizon and keeps the paper position. Not at midday (spec"
+        " §6): exit, tighten or hold only."))
     async def call_extend(call_id: int, target: str, invalidation: str, horizon_days: int,
                           thesis: Annotated[str, Field(min_length=10, max_length=400)],
                           ctx: DeskContext | None = None) -> CallOut:
-        pctx = _pm(deps, ctx)
+        # An extension inserts a new call row exactly as call_submit does, and
+        # spec §6 draws the midday line at "no new calls" -- extending is one.
+        pctx = _pm(deps, ctx, making_calls=True)
         with refusals():
             return await extend_call(pctx, call_id, target=target, invalidation=invalidation,
                                      horizon_days=horizon_days, thesis=thesis)

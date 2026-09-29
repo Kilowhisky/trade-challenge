@@ -20,6 +20,7 @@ from tc.desk.models import DeskRefused
 from tc.desk.paper import create_proposal, ensure_book, record_fill
 from tc.desk.pm import CallIn, PmContext, extend_call, request_exit_for, submit_call, tighten_call
 from tc.mcp import tools_desk
+from tc.rules.arith import cap_dollars
 from tc.store.db import Store
 
 NOW = datetime(2026, 9, 29, 13, 50, tzinfo=UTC)      # Tue 09:50 ET
@@ -132,6 +133,15 @@ async def test_the_sixth_call_of_the_day_is_refused(desk_store: Store, tmp_path:
         await submit_call(ctx, _in())
 
 
+async def test_a_second_open_call_on_the_same_symbol_and_direction_is_refused(
+    desk_store: Store, tmp_path: Path,
+) -> None:
+    ctx = await _ctx(desk_store, tmp_path)
+    first = await submit_call(ctx, _in())
+    with pytest.raises(DeskRefused, match=f"call {first.call_id} on AAA up is still open"):
+        await submit_call(ctx, _in())
+
+
 async def test_shares_funding_sizes_by_conviction(desk_store: Store, tmp_path: Path) -> None:
     ctx = await _ctx(desk_store, tmp_path)
     out = await submit_call(ctx, _in(funding="shares", max_entry_price="50.50"))
@@ -166,7 +176,29 @@ async def test_call_submit_accepts_an_option_symbol_without_padding(
     out = await submit_call(ctx, _in(conviction=4, funding="call",
                                      option_symbol="AAA261120C00050000"))
     assert out.proposal is not None
-    assert (out.proposal.symbol, out.proposal.quantity) == (OSI, 1)   # 277.50 // 250
+    # max_entry_price defaults to the fresh ask (2.50) x (1 + 5% chase), 2.62;
+    # the cap is 277.50, and 277.50 // 262 == 1.
+    assert (out.proposal.symbol, out.proposal.quantity, out.proposal.max_entry_price) == (
+        OSI, 1, "2.62")
+
+
+async def test_option_funding_refuses_a_chase_above_the_ask(desk_store: Store, tmp_path: Path) -> None:
+    ctx = await _ctx(desk_store, tmp_path)
+    with pytest.raises(DeskRefused, match="chases more than 5"):
+        await submit_call(ctx, _in(conviction=4, funding="call",
+                                   option_symbol="AAA261120C00050000", max_entry_price="10"))
+
+
+async def test_option_funding_stays_under_the_conviction_premium_cap(
+    desk_store: Store, tmp_path: Path,
+) -> None:
+    ctx = await _ctx(desk_store, tmp_path)
+    out = await submit_call(ctx, _in(conviction=4, funding="call",
+                                     option_symbol="AAA261120C00050000"))
+    assert out.proposal is not None
+    cap = cap_dollars(RULES.get("strategy", "size_option_premium_pct_conviction_4"), Decimal("3700"))
+    notional = out.proposal.quantity * Decimal(out.proposal.max_entry_price) * 100
+    assert notional <= cap
 
 
 async def test_an_option_the_floors_did_not_offer_is_refused(desk_store: Store, tmp_path: Path) -> None:
@@ -257,3 +289,18 @@ async def test_midday_cannot_make_calls(desk_store: Store, tmp_path: Path) -> No
         })
     book = await server._tool_manager.call_tool("paper_book", {})
     assert book.started is True
+
+
+async def test_midday_cannot_extend_calls(desk_store: Store, tmp_path: Path) -> None:
+    await _ctx(desk_store, tmp_path)
+    cid = await _held_call(desk_store, how="horizon")
+    server = FastMCP(name="engine", streamable_http_path="/", stateless_http=False)
+    tools_desk.register(
+        server, desk_deps(desk_store, tmp_path, FakeBroker(_fx(tmp_path), NOW), NOW, "pm_midday"),
+        "decide",
+    )
+    with pytest.raises(ToolError, match="no new calls at midday"):
+        await server._tool_manager.call_tool("call_extend", {
+            "call_id": cid, "target": "56", "invalidation": "48.5", "horizon_days": 5,
+            "thesis": "the move is intact, the clock ran out",
+        })
