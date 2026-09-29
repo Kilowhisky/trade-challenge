@@ -31,6 +31,7 @@ schedule:                      # ET. weekdays = trading days per get_market_hour
   expectations:  "at 07:30 daily"
   backup:        "at 23:30 daily"
   weekly_universe: "at 07:40 sat"   # the market is shut; the regular-session close is the screening price
+  bars_refresh: "at 16:10 weekdays"   # trading-desk design §4: bars, then scoring
   # Task 12 (jobs/spec.py): the six research-role jobs, unchanged from the v2
   # docker/crontab times (scout 07:12, catalyst 18:33, preopen 08:17,
   # postclose 16:22, sector_tag Sat 09:40). `research` keeps its "hourly at

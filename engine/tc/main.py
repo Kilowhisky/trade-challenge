@@ -49,6 +49,7 @@ from tc.broker.models import MarketWindow
 from tc.broker.token import TokenStore
 from tc.clock import ET, fallback_window, trading_days_between
 from tc.config import Settings
+from tc.desk.bars import bars_symbols, carried_symbols, refresh_bars
 from tc.http.app import EngineState, McpMounts, build_app
 from tc.jobs.dispatch import FAILED_VERDICTS, JobRunner, RunnerClient
 from tc.jobs.spec import JOB_SPECS
@@ -82,7 +83,7 @@ CLAUDE_JOBS: tuple[str, ...] = tuple(JOB_SPECS)
 # argument, both before anything is opened.
 JOBS: tuple[str, ...] = (
     "tick", "session_close", "token_check", "expectations", "backup", "weekly_universe",
-    *CLAUDE_JOBS,
+    "bars_refresh", *CLAUDE_JOBS,
 )
 
 BACKUPS_KEPT = 14  # ~3 weeks of trading days; the store is small and the disk is not
@@ -451,6 +452,8 @@ class Engine:
             return await self._job_backup(now)
         if job == "weekly_universe":
             return await self._job_weekly_universe(now)
+        if job == "bars_refresh":
+            return await self._job_bars_refresh(now)
         if job in CLAUDE_JOBS:
             return await self._job_claude(job, now, ignore_window=ignore_window)
         raise ValueError(f"unknown job {job!r}")
@@ -619,6 +622,26 @@ class Engine:
             f" {counts.chunks_failed} of {counts.chunks} chunks failed"
         )
         return "done", counts_detail(counts)
+
+    async def _job_bars_refresh(self, now: datetime) -> tuple[Verdict, dict[str, Any]]:
+        """The desk's evening price history (trading-desk design §4). Scoring
+        runs on what this wrote (Task 6 extends this method)."""
+        symbols = await bars_symbols(
+            self._store, self._s.desk, await carried_symbols(self._store)
+        )
+        rep = await refresh_bars(self._broker, self._store, symbols, self._s.desk)
+        detail: dict[str, Any] = {
+            "requested": rep.requested,
+            "fetched": rep.fetched,
+            "failed_n": len(rep.failed),
+            "failed": rep.failed[:20],
+        }
+        if rep.blind:
+            await self.notifier.post(
+                f"⚠️ bars_refresh: token died after {rep.fetched} of {rep.requested}"
+            )
+            return "failed", {**detail, "error": "BrokerUnauthorized"}
+        return "done", detail
 
     # --- broker/window helpers ---------------------------------------------
 
