@@ -140,6 +140,9 @@ class Secrets(BaseSettings):
     discord_shadow_channel_id: str | None = None
     discord_webhook_url: AnyHttpUrl | None = None
     discord_shadow_webhook_url: AnyHttpUrl | None = None
+    # The Discord user whose ✅/❌ on a desk proposal counts. None: any
+    # non-bot user in the channel (the paper phase). Revised Plan 1 requires it.
+    discord_approver_id: str | None = None
     healthchecks_base_url: AnyHttpUrl | None = None
     # The runner's inbound bearer, and one bearer per MCP role. All optional:
     # an engine with no runner still ticks, closes the session and serves
@@ -199,6 +202,10 @@ class Settings(BaseModel):
     @property
     def discord_shadow_webhook_url(self) -> AnyHttpUrl | None:
         return self.secrets.discord_shadow_webhook_url
+
+    @property
+    def discord_approver_id(self) -> str | None:
+        return self.secrets.discord_approver_id
 
     @property
     def healthchecks_base_url(self) -> AnyHttpUrl | None:

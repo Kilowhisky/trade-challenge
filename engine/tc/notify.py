@@ -53,31 +53,53 @@ class Notifier:
         self._c = client
         self._prefix = prefix
 
-    async def post(self, text: str) -> bool:
+    async def _send(self, text: str, *, wait: bool) -> httpx.Response | None:
         if self._target is None:
-            return False
+            return None
         text = f"{self._prefix}{text}"
         if len(text) > DISCORD_MAX:
             text = text[: DISCORD_MAX - 1] + "…"
+        params: dict[str, str] = {}
         if isinstance(self._target, BotChannel):
             url = self._target.url
             headers = {"Authorization": f"Bot {self._target.token}"}
         else:
             url, headers = self._target, {}
+            if wait:
+                # A webhook answers 204 with no body unless asked to wait; the
+                # message id is only in the body.
+                params = {"wait": "true"}
         try:
             r = await self._c.post(
-                url, json={"content": text}, headers=headers, timeout=10
+                url, json={"content": text}, headers=headers, params=params, timeout=10
             )
         except httpx.HTTPError as e:
-            log.warning("discord post failed: %s", e)
-            return False
+            log.warning("discord post failed: %s", type(e).__name__)
+            return None
         if not 200 <= r.status_code < 300:
             # Status only. A revoked bot token answers 401 and an operator
             # needs to see that, but this line is exactly where the token
             # would leak if the request were logged instead.
             log.warning("discord post rejected: HTTP %d", r.status_code)
-            return False
-        return True
+            return None
+        return r
+
+    async def post(self, text: str) -> bool:
+        return await self._send(text, wait=False) is not None
+
+    async def post_message(self, text: str) -> str | None:
+        """Post and return the message's id -- a proposal's veto is read off
+        its own message. None on any failure; the caller treats that as
+        'nobody can react to this', never as an approval."""
+        r = await self._send(text, wait=True)
+        if r is None:
+            return None
+        try:
+            body = r.json()
+        except ValueError:
+            return None
+        mid = body.get("id") if isinstance(body, dict) else None
+        return None if mid is None else str(mid)
 
 
 class Pinger:
