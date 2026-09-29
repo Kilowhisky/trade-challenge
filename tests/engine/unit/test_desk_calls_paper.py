@@ -1,0 +1,136 @@
+"""Task 11: call rows and the paper book's arithmetic."""
+
+from __future__ import annotations
+
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+
+import pytest
+
+from tc.desk.calls import (
+    NewCall,
+    calls_made_on,
+    current_call_id,
+    effective_invalidation,
+    get_call,
+    insert_call,
+    is_extended,
+    open_call_for,
+    tighten,
+)
+from tc.desk.models import DeskRefused
+from tc.desk.paper import (
+    book_row,
+    book_state,
+    cash,
+    closed_trades,
+    create_proposal,
+    ensure_book,
+    mark_exit_done,
+    mark_posted,
+    open_positions,
+    pending_exit_requests,
+    pending_proposals,
+    record_fill,
+    record_outcome,
+    request_exit,
+    unposted_proposals,
+    upsert_mark,
+)
+from tc.store.db import Store
+
+NOW = datetime(2026, 9, 29, 13, 55, tzinfo=UTC)
+TODAY = date(2026, 9, 29)
+
+
+def _call(**kw: object) -> NewCall:
+    base: dict[str, object] = dict(
+        made_at=NOW, session=TODAY, origin="pm", pitch_id=None, extends_call_id=None,
+        symbol="AAA", direction="up", thesis="a thesis long enough", target=Decimal(55),
+        invalidation=Decimal(48), horizon_days=10, conviction=3, benchmark="XLK",
+        ref_price=Decimal(50), spy_ref=Decimal(500), bench_ref=Decimal(200), funding="shares",
+    )
+    base.update(kw)
+    return NewCall.model_validate(base)
+
+
+async def test_calls_round_trip_and_count_only_fresh_non_legacy_calls(desk_store: Store) -> None:
+    c = await insert_call(desk_store, _call())
+    assert (await get_call(desk_store, c.id)) == c
+    await insert_call(desk_store, _call(symbol="BBB", origin="legacy", funding="none"))
+    await insert_call(desk_store, _call(symbol="CCC", extends_call_id=c.id))
+    assert await calls_made_on(desk_store, TODAY) == 1
+    assert (await open_call_for(desk_store, "AAA", "up")) is not None
+    assert (await open_call_for(desk_store, "BBB", "up")) is None
+    assert (await open_call_for(desk_store, "BBB", "up", legacy=True)) is not None
+
+
+async def test_an_extension_chain_is_followed_forward(desk_store: Store) -> None:
+    a = await insert_call(desk_store, _call())
+    b = await insert_call(desk_store, _call(extends_call_id=a.id))
+    assert await current_call_id(desk_store, a.id) == b.id
+    assert await is_extended(desk_store, a.id) and not await is_extended(desk_store, b.id)
+
+
+async def test_tightening_moves_the_effective_invalidation(desk_store: Store) -> None:
+    c = await insert_call(desk_store, _call())
+    assert await effective_invalidation(desk_store, c) == 48
+    await tighten(desk_store, c.id, Decimal("49.5"), NOW)
+    assert await effective_invalidation(desk_store, c) == Decimal("49.5")
+
+
+async def test_the_book_row_is_written_once(desk_store: Store) -> None:
+    assert await ensure_book(desk_store, TODAY, Decimal("3700"), NOW) == (TODAY, Decimal("3700"))
+    later = TODAY + timedelta(days=1)
+    assert await ensure_book(desk_store, later, Decimal("9999"), NOW) == (TODAY, Decimal("3700"))
+    assert await book_row(desk_store) == (TODAY, Decimal("3700"))
+
+
+async def test_a_proposal_is_pending_until_it_has_an_outcome(desk_store: Store) -> None:
+    c = await insert_call(desk_store, _call())
+    p = await create_proposal(desk_store, call_id=c.id, created_at=NOW, instrument="shares",
+                              symbol="AAA", underlying="AAA", quantity=7,
+                              max_entry_price=Decimal("50.50"), atr_pct=Decimal(2))
+    assert [x.id for x in await unposted_proposals(desk_store)] == [p.id]
+    await mark_posted(desk_store, p.id, NOW, NOW + timedelta(minutes=10), "m1")
+    assert await unposted_proposals(desk_store) == []
+    assert [x.message_id for x in await pending_proposals(desk_store)] == ["m1"]
+    await record_outcome(desk_store, p.id, NOW, "filled", vetoed=False, approved=False, detail={})
+    assert await pending_proposals(desk_store) == []
+
+
+async def test_fills_drive_positions_cash_and_closed_trades(desk_store: Store) -> None:
+    await ensure_book(desk_store, TODAY, Decimal("3700"), NOW)
+    c = await insert_call(desk_store, _call())
+    shares = await create_proposal(desk_store, call_id=c.id, created_at=NOW, instrument="shares",
+                                   symbol="AAA", underlying="AAA", quantity=7,
+                                   max_entry_price=Decimal("50.50"), atr_pct=Decimal(2))
+    opt = await create_proposal(desk_store, call_id=c.id, created_at=NOW, instrument="call",
+                                symbol="AAA   261120C00050000", underlying="AAA", quantity=1,
+                                max_entry_price=Decimal("2.60"), atr_pct=None)
+    await record_fill(desk_store, shares.id, NOW, "buy", 7, Decimal("50.00"), "entry",
+                      Decimal("48.00"), Decimal("45.60"))
+    await record_fill(desk_store, opt.id, NOW, "buy", 1, Decimal("2.50"), "entry")
+    assert await cash(desk_store, Decimal("3700")) == Decimal("3700") - 350 - 250
+    pos = {p.symbol: p for p in await open_positions(desk_store)}
+    assert pos["AAA"].stop_trigger == Decimal("48.00") and pos["AAA"].quantity == 7
+    await upsert_mark(desk_store, "AAA   261120C00050000", Decimal("3.00"), NOW)
+    state = await book_state(desk_store)
+    assert state.open_premium == 250
+    assert state.equity == Decimal("3100") + 350 + 300     # AAA unmarked -> entry price
+    await record_fill(desk_store, shares.id, NOW, "sell", 7, Decimal("55.00"), "target")
+    assert [p.symbol for p in await open_positions(desk_store)] == ["AAA   261120C00050000"]
+    [t] = await closed_trades(desk_store)
+    assert (t.proposal_id, t.ret_pct) == (shares.id, Decimal(10))
+
+
+async def test_book_state_refuses_before_the_book_starts(desk_store: Store) -> None:
+    with pytest.raises(DeskRefused, match="has not started"):
+        await book_state(desk_store)
+
+
+async def test_exit_requests_queue_until_done(desk_store: Store) -> None:
+    rid = await request_exit(desk_store, "CSX", None, "legacy: thesis gone", NOW)
+    assert [r.id for r in await pending_exit_requests(desk_store)] == [rid]
+    await mark_exit_done(desk_store, rid, NOW)
+    assert await pending_exit_requests(desk_store) == []
