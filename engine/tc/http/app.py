@@ -30,6 +30,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 import httpx
 from authlib.common.errors import AuthlibBaseError
@@ -80,6 +81,9 @@ class EngineState:
     # awaits it and never touches `blind` itself: a token on disk is not a
     # working broker, and only a read that actually succeeded may clear BLIND.
     on_token_installed: Callable[[], Awaitable[None]] | None = None
+    # Set by the engine to a coroutine returning the desk scorecard as JSON;
+    # None means this engine has no desk, and /api/scorecard answers 503.
+    scorecard: Callable[[], Awaitable[dict[str, Any]]] | None = None
     # Consecutive `failed` job runs, per job, reset by the first done/noop.
     # /health turns the tick's count into `ok: false` — a job that fails every
     # sweep is an engine that is not working, however healthy its parts look.
@@ -210,11 +214,17 @@ def build_app(state: EngineState, *, mcp: McpMounts | None = None) -> Starlette:
         rows = await state.store.ticks_for(date_str)
         return JSONResponse({"rows": [r.model_dump(mode="json") for r in rows]})
 
+    async def api_scorecard(request: Request) -> Response:
+        if state.scorecard is None:
+            return JSONResponse({"detail": "no desk on this engine"}, status_code=503)
+        return JSONResponse(await state.scorecard())
+
     routes: list[BaseRoute] = [
         Route("/health", health, methods=["GET"]),
         Route("/oauth/callback", oauth_callback, methods=["GET"]),
         Route("/api/status", api_status, methods=["GET"]),
         Route("/api/ticks", api_ticks, methods=["GET"]),
+        Route("/api/scorecard", api_scorecard, methods=["GET"]),
     ]
     middleware: list[Middleware] = []
     lifespan: Lifespan[Starlette] | None = None

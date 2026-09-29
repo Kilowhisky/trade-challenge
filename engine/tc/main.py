@@ -51,6 +51,7 @@ from tc.clock import ET, fallback_window, trading_days_between
 from tc.config import Settings
 from tc.desk.bars import bars_symbols, carried_symbols, refresh_bars
 from tc.desk.models import ActiveJob
+from tc.desk.scorecard import build_scorecard, render_scorecard
 from tc.desk.scoring import score
 from tc.http.app import EngineState, McpMounts, build_app
 from tc.jobs.dispatch import FAILED_VERDICTS, JobRunner, RunnerClient
@@ -85,7 +86,7 @@ CLAUDE_JOBS: tuple[str, ...] = tuple(JOB_SPECS)
 # argument, both before anything is opened.
 JOBS: tuple[str, ...] = (
     "tick", "session_close", "token_check", "expectations", "backup", "weekly_universe",
-    "bars_refresh", *CLAUDE_JOBS,
+    "bars_refresh", "scorecard_weekly", *CLAUDE_JOBS,
 )
 
 BACKUPS_KEPT = 14  # ~3 weeks of trading days; the store is small and the disk is not
@@ -207,6 +208,7 @@ class Engine:
             shadow=settings.shadow.enabled,
             on_token_installed=self._on_token_installed,
         )
+        self.state.scorecard = self._scorecard_json
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -464,6 +466,8 @@ class Engine:
             return await self._job_weekly_universe(now)
         if job == "bars_refresh":
             return await self._job_bars_refresh(now)
+        if job == "scorecard_weekly":
+            return await self._job_scorecard_weekly(now)
         if job in CLAUDE_JOBS:
             return await self._job_claude(job, now, ignore_window=ignore_window)
         raise ValueError(f"unknown job {job!r}")
@@ -666,6 +670,17 @@ class Engine:
                 + ", ".join(rep_score.stuck[:10])
             )
         return "done", detail
+
+    async def _scorecard_json(self) -> dict[str, Any]:
+        sc = await build_scorecard(
+            self._store, self._rules, self._s.desk, self._et(self._clock()).date()
+        )
+        return sc.model_dump(mode="json")
+
+    async def _job_scorecard_weekly(self, now: datetime) -> tuple[Verdict, dict[str, Any]]:
+        sc = await build_scorecard(self._store, self._rules, self._s.desk, self._et(now).date())
+        await self.notifier.post(render_scorecard(sc))
+        return "done", {"pm_calls": sc.pm_calls.n, "verdict": sc.checkpoint.verdict}
 
     # --- broker/window helpers ---------------------------------------------
 
