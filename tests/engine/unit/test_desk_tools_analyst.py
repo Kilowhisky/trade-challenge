@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from desk_fixtures import bar, desk_deps, flat_bars
@@ -13,6 +13,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 
 from tc.broker.fake import FakeBroker
+from tc.desk.models import ActiveJob
 from tc.mcp import tools_desk
 from tc.store.db import Store
 
@@ -35,6 +36,56 @@ async def _server(store: Store, tmp_path: Path, job: str | None) -> FastMCP:
 
 async def call(server: FastMCP, tool: str, /, **arguments: Any) -> Any:
     return await server._tool_manager.call_tool(tool, arguments)
+
+
+# --- fakes for the MCP `Context` the runner's X-TC-Job header travels in ---
+#
+# `ToolManager.call_tool` and `Tool.run` never check that `context` IS a real
+# `mcp.server.fastmcp.Context` -- they only read `.request_context.request`
+# off whatever is handed in -- so a minimal stand-in exercises the REAL tool
+# function's real header-reading code path (tools_desk._caller_job) without
+# standing up streamable-http transport end to end, which nothing else in
+# this test module (or test_tools_research.py / test_tools_read.py) does
+# either.
+
+
+class _FakeHeaders:
+    def __init__(self, data: dict[str, str]) -> None:
+        self._data = {k.lower(): v for k, v in data.items()}
+
+    def get(self, key: str, default: str | None = None) -> str | None:
+        return self._data.get(key.lower(), default)
+
+
+class _FakeRequest:
+    def __init__(self, headers: dict[str, str]) -> None:
+        self.headers = _FakeHeaders(headers)
+
+
+class _FakeRequestContext:
+    def __init__(self, request: _FakeRequest | None) -> None:
+        self.request = request
+
+
+class _FakeCtx:
+    """Stands in for `Context`: `.request_context.request.headers.get(...)`,
+    with `request=None` for "a context exists but not inside an HTTP
+    request" (`headers=None`)."""
+
+    def __init__(self, headers: dict[str, str] | None) -> None:
+        self.request_context = _FakeRequestContext(
+            _FakeRequest(headers) if headers is not None else None
+        )
+
+
+class _CtxWithNoRequestContextAtAll:
+    """Stands in for the `Context() ` built with no request context at all:
+    `.request_context` itself raises, the way the real property does when
+    `get_context()` is called outside of any request."""
+
+    @property
+    def request_context(self) -> Any:
+        raise ValueError("Context is not available outside of a request")
 
 
 async def test_no_running_analyst_job_means_no_desk_tools(desk_store: Store, tmp_path: Path) -> None:
@@ -83,3 +134,58 @@ async def test_briefing_answers_for_the_running_analyst(desk_store: Store, tmp_p
     server = await _server(desk_store, tmp_path, "analyst_macro")
     b = await call(server, "briefing")
     assert b.analyst == "macro" and [r.symbol for r in b.rows] == ["XLK"]
+
+
+async def test_the_x_tc_job_header_names_the_caller_even_with_no_active_job(
+    desk_store: Store, tmp_path: Path,
+) -> None:
+    """The deploy plan's seeding path: `tc run --once analyst_technical` is a
+    SEPARATE process from the serving engine the runner's MCP calls land on,
+    so that engine's own `deps.active` is None even though a job plainly is
+    running. The runner stamps `X-TC-Job` on every call for exactly this
+    case (runner/tc_runner/app.py `mcp_servers`); this drives the real
+    `pitch_submit` tool with a header-carrying context and no active job at
+    all, and the pitch must still land under the header's analyst."""
+    server = await _server(desk_store, tmp_path, None)
+    ctx = cast(Any, _FakeCtx({"X-TC-Job": "analyst_news"}))
+    out = await server._tool_manager.call_tool("pitch_submit", PITCH, context=ctx)
+    assert out.session == "2026-09-29"
+    row = await desk_store.fetchone("SELECT analyst FROM pitches WHERE id=?", (out.id,))
+    assert row is not None and row["analyst"] == "news"
+
+
+def _deps_stub(active_name: str | None) -> Any:
+    class _DepsStub:
+        def __init__(self) -> None:
+            self.active = ActiveJob(active_name)
+
+    return _DepsStub()
+
+
+def test_caller_job_prefers_the_header_over_the_active_job() -> None:
+    deps = _deps_stub("analyst_macro")
+    ctx = cast(Any, _FakeCtx({"X-TC-Job": "analyst_news"}))
+    assert tools_desk._caller_job(deps, ctx) == "analyst_news"
+
+
+def test_caller_job_falls_back_to_the_active_job_with_no_header_present() -> None:
+    deps = _deps_stub("analyst_macro")
+    ctx = cast(Any, _FakeCtx({}))
+    assert tools_desk._caller_job(deps, ctx) == "analyst_macro"
+
+
+def test_caller_job_falls_back_to_the_active_job_with_no_live_request() -> None:
+    deps = _deps_stub("analyst_macro")
+    ctx = cast(Any, _FakeCtx(None))
+    assert tools_desk._caller_job(deps, ctx) == "analyst_macro"
+
+
+def test_caller_job_falls_back_to_the_active_job_with_no_context_at_all() -> None:
+    deps = _deps_stub("analyst_macro")
+    assert tools_desk._caller_job(deps, None) == "analyst_macro"
+
+
+def test_caller_job_never_raises_when_the_context_has_no_request_context_at_all() -> None:
+    deps = _deps_stub("analyst_macro")
+    ctx = cast(Any, _CtxWithNoRequestContextAtAll())
+    assert tools_desk._caller_job(deps, ctx) == "analyst_macro"

@@ -119,6 +119,12 @@ async def test_the_mcp_bearer_is_written_to_a_private_file_not_the_child_s_argv(
     assert engine["type"] == "http"
     assert engine["url"] == "http://127.0.0.1:8080/mcp/research/"
     assert engine["headers"]["Authorization"] == f"Bearer {ROLE_TOKEN}"
+    # The desk tools' source of caller identity (tc/mcp/tools_desk.py
+    # `_caller_job`): the engine serving this MCP call may be a different
+    # process than the one that dispatched the job (`tc run --once`), so the
+    # job name has to travel with the request rather than live only in that
+    # other process's memory.
+    assert engine["headers"]["X-TC-Job"] == BODY["job"]
     assert seen["mode"] == 0o600, oct(seen["mode"])  # never world-readable, not even briefly
     assert seen["dir_mode"] == 0o700, oct(seen["dir_mode"])
     # And it does not outlive the run: the whole private directory is gone.
