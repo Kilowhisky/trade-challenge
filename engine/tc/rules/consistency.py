@@ -61,6 +61,16 @@ DEAD_KEYS = (
     "window_start", "window_end", "final_session", "lockout_start",
     "lockout_final_sessions", "all_options_flat_by", "last_leveraged_entry",
 )
+# Strategy keys retired with the trading desk (2026-09-27, strategy.md §12).
+# Same practice as DEAD_KEYS: a rule that was removed must not return by
+# accident, because a stale key is a rule a reader still believes in.
+RETIRED_STRATEGY_KEYS = (
+    "sleeve_core_pct", "sleeve_catalyst_pct", "max_deployed_pct", "catalyst_min_whole_shares",
+    "stall_rule_consecutive_closes", "stall_rule_from_session",
+    "ratchet_breakeven_at_gain_pct", "ratchet_entry_plus8_at_gain_pct",
+    "option_expiry_min_days_past_earnings", "option_expiry_max_days_past_earnings",
+    "scout_entry_window_min_days", "scout_entry_window_max_days",
+)
 TIGHTNESS = (  # strategy_key, manual_key, direction, label
     ("option_min_delta", "option_min_delta", "ge", "delta-floor"),
     ("leveraged_exit_session", "leveraged_max_hold_sessions", "le", "leveraged-hold"),
@@ -200,7 +210,13 @@ def check_dead_keys(root: Path, rules: Rules) -> tuple[list[Finding], int]:
                 "dead_keys", "rules.yml", None,
                 f"carries '{k}' — §8 and the endgame calendar were deleted 2026-08-31",
             ))
-    return out, len(DEAD_KEYS)
+    for k in RETIRED_STRATEGY_KEYS:
+        if re.search(rf"^\s+{k}:", text, re.MULTILINE):
+            out.append(Finding(
+                "dead_keys", "rules.yml", None,
+                f"carries '{k}' — retired with the trading desk 2026-09-27 (strategy.md §12)",
+            ))
+    return out, len(DEAD_KEYS) + len(RETIRED_STRATEGY_KEYS)
 
 
 def check_hardcoded(root: Path, rules: Rules) -> tuple[list[Finding], int]:

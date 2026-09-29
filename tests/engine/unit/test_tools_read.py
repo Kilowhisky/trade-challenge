@@ -408,7 +408,7 @@ async def test_a_broker_error_is_one_line_that_names_only_its_class(
 async def test_rules_returns_rules_yml_as_strings(read_server: FastMCP) -> None:
     out = await tool(read_server, "rules")()
     assert out.manual["option_min_dte"] == "18"
-    assert out.strategy["scout_entry_window_min_days"] == "21"
+    assert out.strategy["working_universe_size"] == "500"
     assert out.source.endswith("rules.yml")
 
 

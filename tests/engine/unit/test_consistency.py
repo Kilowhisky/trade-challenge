@@ -223,3 +223,11 @@ def test_a_job_spec_with_no_schedule_entry_is_found(tmp_path: Path) -> None:
     assert any(
         "can never fire" in f.message for f in rep.findings if f.check == "schedule_vs_doc"
     )
+
+
+def test_a_retired_strategy_key_coming_back_is_found(tmp_path: Path) -> None:
+    root = _mini_repo(tmp_path)
+    rules = root / "rules.yml"
+    rules.write_text(rules.read_text().replace("strategy:\n", "strategy:\n  sleeve_core_pct: 50\n", 1))
+    rep = run_checks(root)
+    assert any("sleeve_core_pct" in f.message for f in rep.findings if f.check == "dead_keys")
