@@ -30,7 +30,7 @@ from mcp.server.fastmcp import FastMCP
 from tc.broker.fake import FakeBroker
 from tc.config import Settings, load_settings
 from tc.mcp import server as server_mod
-from tc.mcp import tools_read, tools_research
+from tc.mcp import tools_desk, tools_read
 from tc.mcp.registry import FORBIDDEN, ROLE_TOOLS, Role, forbidden_tools
 from tc.mcp.server import McpDeps, build_servers
 from tc.research.docs import DocStore
@@ -80,7 +80,7 @@ async def engine_servers(
     )
     # The REAL registrars, in the same arrangement `main._wire_mcp_registrars`
     # installs: read tools on both roles (`tools_read` withholds `book` from
-    # research itself), the research writers on research only. Set through
+    # research itself), the desk's analyst tools on research only. Set through
     # `_REGISTRARS` rather than `server.register` because that table is module
     # state -- `register` appends, so calling it per test would build servers
     # with two copies of every tool -- and `monkeypatch.setitem` puts it back.
@@ -92,9 +92,11 @@ async def engine_servers(
     # Building the way production builds means these assertions are about the
     # tools the runner can actually call.
     monkeypatch.setitem(server_mod._REGISTRARS, "research", [
-        tools_read.register, tools_research.register,
+        tools_read.register, tools_desk.register,
     ])
-    monkeypatch.setitem(server_mod._REGISTRARS, "decide", [tools_read.register])
+    monkeypatch.setitem(server_mod._REGISTRARS, "decide", [
+        tools_read.register, tools_desk.register,
+    ])
     try:
         yield build_servers(deps)
     finally:
@@ -148,4 +150,5 @@ async def test_the_two_roles_have_disjoint_write_surfaces(
     research = {t.name for t in await engine_servers["research"].list_tools()}
     decide = {t.name for t in await engine_servers["decide"].list_tools()}
     assert "book" in decide and "book" not in research
-    assert "evidence_append" in research and "evidence_append" not in decide
+    assert "pitch_submit" in research and "pitch_submit" not in decide
+    assert "call_submit" in decide and "call_submit" not in research

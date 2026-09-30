@@ -18,16 +18,18 @@ Three layers, deliberately separable:
   Claude-driven or not.
 
 **Why `content_failed` exists.** The v2 runner recorded exit-0-with-no-content
-as `{"verdict":"ok"}`, so a research run that produced nothing pinged green and
+as `{"verdict":"ok"}`, so an analyst pass that produced nothing pinged green and
 the deadman saw a healthy day. Here a run that answers without a structured
 verdict is its own verdict, it pings `/fail`, and the `job_verdict_not:
 content_failed` expectation already watches for it. "The job ran" and "the job
 answered" are different claims and the ledger now distinguishes them.
 
-**Why an empty cohort is `noop` and not `done`.** `done` on sixty consecutive
-empty passes is the "every job green, nothing ever happens" failure the design
-exists to catch. Each spec carries its own `noop_when`, because only the job
-knows what "there was nothing to do" looks like for it.
+**Why a spec can mark a pass `noop` instead of `done`.** `done` on sixty
+consecutive empty passes is the "every job green, nothing ever happens"
+failure the design exists to catch. Each spec carries its own `noop_when`,
+because only the job knows what "there was nothing to do" looks like for it
+-- no desk job currently sets one (an analyst that pitches nothing has still
+done its job), but the field stays general for whatever job needs it next.
 
 There is no line-matching whitelist here. v2 relayed by grepping stdout for a
 first line that matched a known prefix, and the whitelist did not include
@@ -38,25 +40,18 @@ model, so a job that reports a hot candidate cannot fail to have it said.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from collections.abc import Callable
-from datetime import date, datetime
+from collections.abc import Awaitable, Callable, Mapping
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from tc.clock import ET
-from tc.jobs.spec import (
-    JOB_SPECS,
-    CatalystVerdict,
-    DeepVerdict,
-    JobSpec,
-    ResearchVerdict,
-    ScoutVerdict,
-    output_schema,
-)
+from tc.jobs.spec import JOB_SPECS, JobSpec, output_schema
 from tc.notify import Notifier
 from tc.store.db import Verdict
 
@@ -67,10 +62,9 @@ log = logging.getLogger(__name__)
 # narrate its whole session cannot fill a Discord message or a detail column.
 MAX_TEXT = 200
 MAX_ERRORS = 5
-# The jobs whose one-line `summary` is worth a message of its own. The scout
-# and catalyst passes already relay per-escalation, and `research` relays per
-# hot-fresh candidate; posting their summary too would say the same pass twice.
-SUMMARY_JOBS = frozenset({"preopen", "postclose", "sector_tag"})
+# The PM's runs: each posts its own one-line summary on success, and a
+# missed one is said out loud -- no PM run means no entries that day.
+SUMMARY_JOBS = frozenset({"pm", "pm_midday"})
 # The verdicts that mean nobody got an answer: each gets one ⚠️ line here, and
 # `Engine._dispatch` pings healthchecks `/fail` for them rather than `/ok`.
 # One set, shared, because "the job did not work" must mean the same thing to
@@ -138,28 +132,34 @@ class RunnerClient:
         *,
         connect_timeout_s: float = 10.0,
         role_token: str | None = None,
+        role_tokens: Mapping[str, str] | None = None,
     ) -> None:
         self._base = base_url.rstrip("/") if base_url else None
         self._token = token
         self._c = client
         self._slack_s = slack_s
         self._connect_timeout_s = connect_timeout_s
-        self._role_token = role_token
+        # One bearer per MCP role. `role_token` is the research bearer, kept as
+        # its own argument because every existing caller passes it that way.
+        self._role_tokens: dict[str, str] = {k: v for k, v in (role_tokens or {}).items() if v}
+        if role_token:
+            self._role_tokens.setdefault("research", role_token)
 
     @property
     def configured(self) -> bool:
         return bool(self._base and self._token)
 
-    @property
-    def has_role_token(self) -> bool:
-        """The bearer the runner presents BACK to the engine's MCP mount.
+    def token_for(self, role: str) -> str | None:
+        """The bearer the runner presents BACK to the engine's MCP mount for
+        that role, or `None` if it was never configured.
 
-        Separate from `configured` because it fails differently: a runner with
-        no MCP bearer would start the job, reach its first engine tool, and be
-        refused -- burning the whole budget to arrive at a 401. Better to not
-        dispatch, and to say which half of the configuration is missing.
+        `JobRunner.execute` refuses to dispatch when this is `None` for a
+        spec's own role: a runner with no MCP bearer would start the job,
+        reach its first engine tool, and be refused -- burning the whole
+        budget to arrive at a 401. Better to not dispatch, and to say which
+        role's bearer is missing.
         """
-        return bool(self._role_token)
+        return self._role_tokens.get(role)
 
     async def health(self) -> bool:
         """The runner's own `/health`, for the engine's `/health` and the host
@@ -196,7 +196,7 @@ class RunnerClient:
             "prompt": spec.prompt if not prompt_extra else f"{spec.prompt}\n\n{prompt_extra}",
             "allowed_tools": list(spec.allowed_tools),
             "mcp_role": spec.role,
-            "mcp_role_token": self._role_token or "",
+            "mcp_role_token": self._role_tokens.get(spec.role, ""),
             "output_schema": output_schema(spec.verdict),
             "max_turns": spec.max_turns,
             "timeout_s": spec.timeout_s,
@@ -362,11 +362,15 @@ class JobRunner:
     """
 
     def __init__(
-        self, runner: RunnerClient, notifier: Notifier, clock: Callable[[], datetime]
+        self, runner: RunnerClient, notifier: Notifier, clock: Callable[[], datetime],
+        *, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        busy_retry_s: float = 60.0,
     ) -> None:
         self._runner = runner
         self._notifier = notifier
         self._clock = clock
+        self._sleep = sleep
+        self._busy_retry_s = busy_retry_s
 
     async def health(self) -> bool:
         """Is the other container up? Read once at start and reported by
@@ -376,9 +380,14 @@ class JobRunner:
         return await self._runner.health()
 
     async def execute(
-        self, job: str, now: datetime | None = None, *, ignore_window: bool = False
+        self, job: str, now: datetime | None = None, *, ignore_window: bool = False,
+        on_dispatch: Callable[[], Awaitable[None]] | None = None,
     ) -> tuple[Verdict, dict[str, Any]]:
-        """`ignore_window` is the operator's `tc run --once --ignore-window`.
+        """`on_dispatch` runs once every gate here has passed, immediately
+        before the runner is first called -- the PM's paper book starts there
+        and nowhere earlier, so a noop or a late fire never fixes its start.
+
+        `ignore_window` is the operator's `tc run --once --ignore-window`.
 
         Never the scheduler's: a fire dispatched hours late is a job whose
         premise expired (below), and the whole point of the gate is that
@@ -393,13 +402,9 @@ class JobRunner:
             # deployment; a `failed` row every weekday at 07:12 for a service
             # nobody installed is how a deadman gets muted.
             return "noop", {"skipped": "no runner configured"}
-        if not self._runner.has_role_token:
-            # Half-configured, which is worse than unconfigured: the runner
-            # would take the job, spend its budget, and be 401'd at its first
-            # engine tool. Warned rather than silent -- unlike "no runner",
-            # this state is nobody's intended deployment.
-            log.warning("%s not dispatched: no MCP research token configured", job)
-            return "noop", {"skipped": "no mcp research token"}
+        if self._runner.token_for(spec.role) is None:
+            log.warning("%s not dispatched: no MCP %s token configured", job, spec.role)
+            return "noop", {"skipped": f"no mcp {spec.role} token"}
         et = (now or self._clock()).astimezone(ET)
         start, end = spec.window
         if not ignore_window and not start <= et.time() <= end:
@@ -412,10 +417,73 @@ class JobRunner:
                 "window": window,
                 "at_et": et.strftime("%H:%M"),
             }
-        reply = await self._runner.run(spec, prompt_extra=_prompt_extra(spec, et.date()))
+        extra = _prompt_extra(spec, et.date())
+        if on_dispatch is not None:
+            await on_dispatch()
+        reply = await self._run_with_busy_wait(spec, et, extra)
+        if reply.busy:
+            if spec.name in SUMMARY_JOBS:
+                # Spec §14: "for the PM that means no entries that day,
+                # logged" -- and said, because a `missed` pings /ok and a
+                # day with no PM is otherwise visible only in job_runs.
+                await self._notifier.post(
+                    f"⚠️ {spec.name} missed: the runner stayed busy past its window"
+                    " -- no PM decisions this run"
+                )
+            return "missed", {"skipped": "runner busy past its window"}
         verdict, model, detail = classify(spec, reply)
+        if verdict == "failed" and spec.retry_failed_after_s is not None:
+            # The retry window is judged by the clock AFTER this run finished,
+            # never from the fire time captured before it started: a slow run
+            # that takes most of the window to fail must not still schedule a
+            # retry that lands past `end`.
+            failed_at = self._clock().astimezone(ET)
+            later = failed_at + timedelta(seconds=spec.retry_failed_after_s)
+            if ignore_window or later.time() <= end:
+                await self._sleep(spec.retry_failed_after_s)
+                first = detail
+                retry_et = self._clock().astimezone(ET)
+                retry_reply = await self._run_with_busy_wait(spec, retry_et, extra)
+                if retry_reply.busy:
+                    # The runner is still busy after the retry's own
+                    # busy-wait ran out the window: the retry never got a
+                    # turn. This must not read as `noop` -- `classify` maps a
+                    # busy reply to `noop`, which pings /ok and hides a day
+                    # with no PM entries behind a green check. Keep the
+                    # FIRST run's failed verdict, flagged as retried.
+                    detail = {
+                        **first, "retried": True,
+                        "retry_skipped": "runner busy past its window",
+                    }
+                else:
+                    verdict, model, detail = classify(spec, retry_reply)
+                    detail = {**detail, "retried": True, "first": first}
         await self._relay(spec, verdict, model, detail, et.date())
         return verdict, detail
+
+    async def _run_with_busy_wait(self, spec: JobSpec, et: datetime, extra: str) -> RunnerReply:
+        """One dispatch, queued rather than dropped if the runner is busy
+        (spec §14) -- shared by a job's first attempt and the PM's one
+        retry, so a retry that meets a busy runner is queued exactly like the
+        first attempt was, not classified as a plain `noop`."""
+        reply = await self._runner.run(spec, prompt_extra=extra)
+        if reply.busy:
+            reply = await self._wait_out_busy(spec, et, extra)
+        return reply
+
+    async def _wait_out_busy(self, spec: JobSpec, et: datetime, extra: str) -> RunnerReply:
+        """Queue, don't drop (spec §14): retry every `busy_retry_s` until the
+        job's own window closes. The number of tries is fixed from the time
+        left at the first refusal, so a frozen test clock cannot spin."""
+        end = datetime.combine(et.date(), spec.window[1], tzinfo=et.tzinfo)
+        tries = max(0, int((end - et).total_seconds() // self._busy_retry_s))
+        reply = RunnerReply(busy=True)
+        for _ in range(tries):
+            await self._sleep(self._busy_retry_s)
+            reply = await self._runner.run(spec, prompt_extra=extra)
+            if not reply.busy:
+                return reply
+        return reply
 
     async def _relay(
         self,
@@ -436,14 +504,6 @@ class JobRunner:
             return
         if model is None:
             return
-        if isinstance(model, ResearchVerdict | DeepVerdict):
-            for h in model.hot_fresh:
-                await self._notifier.post(
-                    f"🔥 HOT-FRESH: {h.symbol} sleeve={h.sleeve} ref={h.ref} — {h.thesis}"
-                )
-        if isinstance(model, ScoutVerdict | CatalystVerdict):
-            for e in model.escalations:
-                await self._notifier.post(f"📌 ESCALATE: {e.symbol} — {e.claim}")
         if verdict == "done" and spec.name in SUMMARY_JOBS:
             summary = str(detail.get("summary", "")).strip()
             if summary:
@@ -463,16 +523,8 @@ def _reason(detail: dict[str, Any]) -> str:
 
 
 def _prompt_extra(spec: JobSpec, day: date) -> str:
-    """The two things a job cannot read off its own command file.
-
-    The date, because the container clock is UTC, the laptop's is Pacific, and
-    every deadline the command files describe is Eastern; and the mode, because
-    preopen and postclose share one command file and one agent and differ only
-    by which half of it they execute.
-    """
-    lines = [f"Today's date is {day.isoformat()} (Eastern)."]
-    if spec.name in ("preopen", "postclose"):
-        lines.append(
-            f'Run in "{spec.name}" mode; the verdict\'s kind field must be "{spec.name}".'
-        )
-    return " ".join(lines)
+    """The one thing a job cannot read off its own command file: the date,
+    because the container clock is UTC, the laptop's is Pacific, and every
+    deadline the command files describe is Eastern. Each desk job's own mode
+    (evening vs. pre-open) already lives in its own spec's prompt."""
+    return f"Today's date is {day.isoformat()} (Eastern)."

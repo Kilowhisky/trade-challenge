@@ -3,9 +3,9 @@
 `register(server, deps, role)` adds every one of them to a role except `book`,
 which is the held-position view and stays on `decide` (0c-writers-contract.md
 §4.3: the research roles have never had account tools). Nothing is registered
-at import: the wiring calls `register` explicitly, the same way
-`tools_research` is wired, so importing the module can never widen a server's
-surface as a side effect.
+at import: the wiring calls `register` explicitly, the same way `tools_desk`
+is wired, so importing the module can never widen a server's surface as a
+side effect.
 
 Three properties hold for every tool in this module, and they are the reason
 it is a module rather than a handful of lambdas:

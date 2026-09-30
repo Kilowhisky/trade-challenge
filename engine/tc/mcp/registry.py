@@ -38,18 +38,17 @@ READ_TOOLS: tuple[str, ...] = (
 # tools (0c-writers-contract.md §4.3) and do not get them here.
 DECIDE_ONLY_READ_TOOLS: tuple[str, ...] = ("book",)
 
-RESEARCH_TOOLS: tuple[str, ...] = (
-    # writers. `doc_write` is the whole-document write (v2's
-    # research-replace.sh). It is NOT named `doc_replace`: FORBIDDEN below
-    # matches `replace` as a substring, and §10 is a rule about the model's
-    # vocabulary, not about which tool happens to be dangerous -- a name the
-    # contract test has to be taught to forgive is a contract test with an
-    # exception list, which is the thing this check exists to not have.
-    "evidence_append", "escalation_raise", "escalation_score", "sector_write",
-    "ledger_append", "tombstone", "doc_write",
-    # readers the prompts cannot run without
-    "doc_read", "evidence_read", "escalations_read", "ledger_read", "sectors_read",
-    "cohort", "universe_symbols", "universe_names_page", "alert_read",
+# The trading desk's analyst tools (trading-desk design §5, §13). The desk
+# reuses the `research` role for its analysts so the bearer installed on the
+# server keeps working; the analyst's identity comes from the running job.
+ANALYST_TOOLS: tuple[str, ...] = ("briefing", "pitch_submit", "pitch_withdraw", "my_record")
+
+# The trading desk's PM tools (trading-desk design §6, §13), on the `decide`
+# role. None is order-shaped: the paper phase fills nothing at Schwab, and
+# Plan 1's propose_* family is what will turn a funded call into an order.
+PM_TOOLS: tuple[str, ...] = (
+    "paper_book", "pitches_read", "scorecard", "option_candidates", "call_submit",
+    "call_extend", "call_tighten", "exit_request",
 )
 
 # Empty on purpose: Plan 1 adds propose_entry / propose_exit /
@@ -57,8 +56,8 @@ RESEARCH_TOOLS: tuple[str, ...] = (
 DECIDE_TOOLS: tuple[str, ...] = ()
 
 ROLE_TOOLS: dict[Role, tuple[str, ...]] = {
-    "research": COMMON_TOOLS + READ_TOOLS + RESEARCH_TOOLS,
-    "decide": COMMON_TOOLS + READ_TOOLS + DECIDE_ONLY_READ_TOOLS + DECIDE_TOOLS,
+    "research": COMMON_TOOLS + READ_TOOLS + ANALYST_TOOLS,
+    "decide": COMMON_TOOLS + READ_TOOLS + DECIDE_ONLY_READ_TOOLS + PM_TOOLS + DECIDE_TOOLS,
 }
 
 # Spec §10. Substring, not a whole-name match: `get_orders`, `order_status`

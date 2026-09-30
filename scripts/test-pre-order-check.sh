@@ -198,15 +198,6 @@ for dead in window_start window_end lockout_start lockout_final_sessions \
     || ok "competition key '$dead' removed from rules.yml"
 done
 
-# scripts/cohort.sh (Task B3) needs the scout entry window, and this repo
-# forbids a rule number living anywhere but rules.yml.
-wmin="$(awk -F': *' '/^  scout_entry_window_min_days:/{print $2; exit}' rules.yml | tr -d ' ')"
-wmax="$(awk -F': *' '/^  scout_entry_window_max_days:/{print $2; exit}' rules.yml | tr -d ' ')"
-[ "$wmin" = "21" ] && ok "scout_entry_window_min_days is 21" \
-  || bad "scout_entry_window_min_days is '${wmin:-<unset>}', want 21"
-[ "$wmax" = "42" ] && ok "scout_entry_window_max_days is 42" \
-  || bad "scout_entry_window_max_days is '${wmax:-<unset>}', want 42"
-
 echo "== --account-value alias =="
 # The caps are percentages of ACCOUNT VALUE since 2026-08-31. The old flag name
 # says "competition capital", a figure $900 smaller. Both names must set the

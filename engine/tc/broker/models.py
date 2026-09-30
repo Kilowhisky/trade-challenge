@@ -216,6 +216,9 @@ class DailyBar(BaseModel):
     high: Decimal
     low: Decimal
     close: Decimal
+    # Share volume. 0 when the payload carries none (older fixtures do not);
+    # a volume screen reads 0 as "no data", never as "no trading".
+    volume: int = 0
 
     @classmethod
     def from_payload(cls, c: dict[str, Any]) -> DailyBar:
@@ -226,6 +229,7 @@ class DailyBar(BaseModel):
             high=_dec(c["high"]),
             low=_dec(c["low"]),
             close=_dec(c["close"]),
+            volume=_int(c.get("volume")),
         )
 
 

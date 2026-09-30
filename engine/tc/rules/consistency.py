@@ -61,11 +61,24 @@ DEAD_KEYS = (
     "window_start", "window_end", "final_session", "lockout_start",
     "lockout_final_sessions", "all_options_flat_by", "last_leveraged_entry",
 )
+# Strategy keys retired with the trading desk (2026-09-27, strategy.md §12).
+# Same practice as DEAD_KEYS: a rule that was removed must not return by
+# accident, because a stale key is a rule a reader still believes in.
+RETIRED_STRATEGY_KEYS = (
+    "sleeve_core_pct", "sleeve_catalyst_pct", "max_deployed_pct", "catalyst_min_whole_shares",
+    "stall_rule_consecutive_closes", "stall_rule_from_session",
+    "ratchet_breakeven_at_gain_pct", "ratchet_entry_plus8_at_gain_pct",
+    "option_expiry_min_days_past_earnings", "option_expiry_max_days_past_earnings",
+    "scout_entry_window_min_days", "scout_entry_window_max_days",
+)
 TIGHTNESS = (  # strategy_key, manual_key, direction, label
     ("option_min_delta", "option_min_delta", "ge", "delta-floor"),
     ("leveraged_exit_session", "leveraged_max_hold_sessions", "le", "leveraged-hold"),
     ("sleeve_options_open_pct", "option_open_premium_pct", "le", "options-open"),
     ("sleeve_leveraged_pct", "leveraged_aggregate_pct", "le", "leveraged-aggregate"),
+    ("size_shares_pct_conviction_5", "single_position_pct", "le", "shares-conviction-5"),
+    ("size_option_premium_pct_conviction_5", "option_single_position_pct", "le",
+     "option-conviction-5"),
 )
 
 
@@ -197,7 +210,13 @@ def check_dead_keys(root: Path, rules: Rules) -> tuple[list[Finding], int]:
                 "dead_keys", "rules.yml", None,
                 f"carries '{k}' — §8 and the endgame calendar were deleted 2026-08-31",
             ))
-    return out, len(DEAD_KEYS)
+    for k in RETIRED_STRATEGY_KEYS:
+        if re.search(rf"^\s+{k}:", text, re.MULTILINE):
+            out.append(Finding(
+                "dead_keys", "rules.yml", None,
+                f"carries '{k}' — retired with the trading desk 2026-09-27 (strategy.md §12)",
+            ))
+    return out, len(DEAD_KEYS) + len(RETIRED_STRATEGY_KEYS)
 
 
 def check_hardcoded(root: Path, rules: Rules) -> tuple[list[Finding], int]:
@@ -279,18 +298,6 @@ def check_endgame(root: Path, rules: Rules) -> tuple[list[Finding], int]:
     return out, len(files)
 
 
-# The one Claude job whose cadence is prose in its own command file rather
-# than a single clock time, and therefore the one that can drift without
-# anything noticing. `research.md` states the cadence twice over -- a minute
-# ("hourly at :57") and an hour span ("hours 9-14") -- and check-consistency.sh
-# greps for both literal strings, so the phrases are load-bearing in two
-# checkers at once and are read here rather than restated.
-RESEARCH_DOC = ".claude/commands/research.md"
-DOC_MINUTE = re.compile(r"hourly at :(\d{2})")
-DOC_HOURS = re.compile(r"hours (\d{1,2})-(\d{1,2})")
-CLOCK = re.compile(r"(\d{1,2}):(\d{2})")
-
-
 def _schedule(root: Path, out: list[Finding]) -> dict[str, str]:
     """config.yml's schedule block, or an empty one plus a Finding."""
     path = root / "config.yml"
@@ -307,8 +314,8 @@ def _schedule(root: Path, out: list[Finding]) -> dict[str, str]:
 
 
 def check_schedule_vs_doc(root: Path, rules: Rules) -> tuple[list[Finding], int]:
-    """config.yml's schedule names only real jobs, and `research`'s cadence
-    still matches the sentence its command file states it in.
+    """config.yml's schedule names only real jobs, and every job spec that
+    should fire has a schedule entry.
 
     The bash checker's check 5 compared `docker/crontab` against the command
     files. The crontab is gone; the schedule is data in config.yml now, and the
@@ -323,7 +330,7 @@ def check_schedule_vs_doc(root: Path, rules: Rules) -> tuple[list[Finding], int]
     Neither `rules` nor any rule value is read: this is a check about the
     schedule agreeing with itself, not about a risk parameter.
     """
-    from tc.jobs.spec import JOB_SPECS
+    from tc.jobs.spec import CHAINED_JOBS, JOB_SPECS
     from tc.main import JOBS
 
     out: list[Finding] = []
@@ -333,52 +340,12 @@ def check_schedule_vs_doc(root: Path, rules: Rules) -> tuple[list[Finding], int]
             "schedule_vs_doc", "config.yml", None,
             f"schedules {job!r}, which is not a job the engine knows",
         ))
-    for job in sorted(set(JOB_SPECS) - set(schedule)):
+    for job in sorted(set(JOB_SPECS) - CHAINED_JOBS - set(schedule)):
         out.append(Finding(
             "schedule_vs_doc", "config.yml", None,
             f"{job!r} has a job spec but no schedule entry: it can never fire",
         ))
-    out.extend(_check_research_cadence(root, schedule.get("research")))
-    return out, len(schedule) + 1
-
-
-def _check_research_cadence(root: Path, spec: str | None) -> list[Finding]:
-    if spec is None:
-        return []  # already reported by the missing-entry loop above
-    doc = root / RESEARCH_DOC
-    try:
-        body = doc.read_text()
-    except OSError as e:
-        return [Finding("schedule_vs_doc", RESEARCH_DOC, None, f"unreadable: {e}")]
-    minute, hours = DOC_MINUTE.search(body), DOC_HOURS.search(body)
-    if minute is None or hours is None:
-        return [Finding(
-            "schedule_vs_doc", RESEARCH_DOC, None,
-            "no longer states the research cadence as 'hourly at :MM, hours H-H'",
-        )]
-    times = CLOCK.findall(spec)
-    if not times:
-        return [Finding(
-            "schedule_vs_doc", "config.yml", None,
-            f"research schedule {spec!r} states no clock time to compare",
-        )]
-    minutes = {mm for _, mm in times}
-    span = (int(times[0][0]), int(times[-1][0]))
-    want_span = (int(hours[1]), int(hours[2]))
-    findings = []
-    if minutes != {minute[1]}:
-        findings.append(Finding(
-            "schedule_vs_doc", "config.yml", None,
-            f"research runs at minutes {sorted(minutes)} but {RESEARCH_DOC} says "
-            f"hourly at :{minute[1]}",
-        ))
-    if span != want_span:
-        findings.append(Finding(
-            "schedule_vs_doc", "config.yml", None,
-            f"research runs hours {span[0]}-{span[1]} but {RESEARCH_DOC} says "
-            f"hours {want_span[0]}-{want_span[1]}",
-        ))
-    return findings
+    return out, len(schedule)
 
 
 def check_tool_registry(root: Path, rules: Rules) -> tuple[list[Finding], int]:

@@ -4,10 +4,10 @@
 (`runner/tc_runner/app.py`) from: which agent to dispatch, what it may call,
 what shape its answer must take, and when it is allowed to fire. Everything
 here is typed data rather than prose so a mistake is a startup-time failure —
-`tools_for` raises `KeyError` on a tool no research-role server exposes,
-`output_schema` fails to build if a verdict model is malformed — instead of a
-403 the model discovers mid-job or a stray field a downstream reader has to
-guess about.
+`tools_for_role` raises `KeyError` on a tool the named role's server does not
+expose, `output_schema` fails to build if a verdict model is malformed —
+instead of a 403 the model discovers mid-job or a stray field a downstream
+reader has to guess about.
 
 Every `summary` field on a verdict model carries forward the v2 return line
 (e.g. `"PASS 14:44 | HOT 2 | WATCH 5 …"`, `research.md` §D) as the
@@ -15,10 +15,10 @@ human-readable half of the JSON contract: nothing greps stdout any more
 (spec §4), but the one line Chris reads in Discord still exists, now living
 *inside* the structured result rather than beside it.
 
-Budgets, windows and timeouts are the v2 crontab and `scheduled-run.sh`
-figures carried over unchanged (`.superpowers/research/0c-writers-contract.md`
-§2.0) — operational constants, not `rules.yml` risk parameters, so they are
-not `<!--rule:...-->` numbers and do not appear in `rules.yml`.
+Budgets, windows and timeouts are the desk's own
+(`docs/superpowers/specs/2026-09-27-claude-trading-desk-design.md` §4, §13),
+not v2 carry-overs — operational constants, not `rules.yml` risk parameters,
+so they are not `<!--rule:...-->` numbers and do not appear in `rules.yml`.
 """
 
 from __future__ import annotations
@@ -38,73 +38,39 @@ from tc.mcp.registry import ROLE_TOOLS, Role
 # ---------------------------------------------------------------------------
 
 
-class Escalation(BaseModel):
+class AnalystVerdict(BaseModel):
+    """An analyst pass. The pitches themselves are rows written through
+    `pitch_submit`; the verdict only names them, so a verdict that fails to
+    parse loses nothing but the summary line."""
+
+    model_config = ConfigDict(extra="forbid")
+    pitched: list[int]
+    withdrawn: list[int]
+    summary: str
+
+
+class HeldDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
     symbol: str
-    claim: str
-    evidence_ids: list[str] = []
+    action: Literal["hold", "exit", "tighten"]
+    reason: str
 
 
-class HotFresh(BaseModel):
-    """One candidate newly verified HOT this pass — the v2 `HOT-FRESH:` line,
-    structured. `ref` carries the price AND its quote timestamp together
-    (`"48.99@2026-09-07T14:03:11Z"`) because a reference price with no
-    timestamp is unverifiable the moment it is read back."""
-
+class PmVerdict(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    symbol: str
-    sleeve: Literal["core", "catalyst", "option"]
-    ref: str
-    thesis: str
-
-
-class ScoutVerdict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    cohort: int
-    observed: int
-    escalations: list[Escalation]
+    held: list[HeldDecision]
+    calls: list[int]
     summary: str
 
 
-class CatalystVerdict(BaseModel):
+class MiddayVerdict(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    scanned: int
-    observed: int
-    escalations: list[Escalation]
-    summary: str
-
-
-class DeepVerdict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["preopen", "postclose"]
-    wrote: list[str]
-    hot_fresh: list[HotFresh]
-    notes: str
-    summary: str
-
-
-class ResearchVerdict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    hot: int
-    watch: int
-    tomb: int
-    hot_fresh: list[HotFresh]
-    standing_stale: bool
-    summary: str
-
-
-class SectorVerdict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    names: int
-    tagged: int
-    new: int
-    retired: int
-    cohort: int
+    held: list[HeldDecision]
     summary: str
 
 
 # How deep a `$ref` chain may be before inlining calls it a cycle. The verdict
-# models nest one level (`ScoutVerdict` -> `Escalation`); anything approaching
+# models nest one level (`PmVerdict` -> `HeldDecision`); anything approaching
 # this is a model shape nobody meant to write.
 MAX_REF_DEPTH = 8
 
@@ -114,10 +80,10 @@ def output_schema(model: type[BaseModel]) -> dict[str, Any]:
 
     `model_json_schema()` already emits `additionalProperties: false`, because
     every verdict model above forbids extras — but it also lifts each nested
-    model (`Escalation`, `HotFresh`) into `$defs` and leaves a `$ref` behind.
+    model (`HeldDecision`) into `$defs` and leaves a `$ref` behind.
     That schema is handed straight to the CLI as `--output-format json_schema`,
     and a reference is one more thing between the model and a valid answer:
-    the constraints on `escalations[]` are stated somewhere the object being
+    the constraints on `held[]` are stated somewhere the object being
     described does not point at in plain sight. Inlining costs a few duplicated
     lines and removes the indirection entirely.
 
@@ -160,39 +126,22 @@ def _inline(node: Any, defs: dict[str, Any], seen: tuple[str, ...]) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Allowlist construction. Every scheduled job in this file runs as the
-# "research" MCP role (registry.py: no job here holds an account or order
-# tool by construction) — `tools_for` is scoped to that role for exactly that
-# reason, so a name that only `decide` declares fails the same way a typo
-# would.
+# Allowlist construction. Every job below runs as either the "research" or
+# the "decide" MCP role (registry.py) — `tools_for_role` checks a declared
+# name against that role's own registry, so a typo, or a tool the OTHER role
+# declares, fails at import time rather than as a refusal mid-job.
 # ---------------------------------------------------------------------------
 
 
-def tools_for(*names: str) -> tuple[str, ...]:
-    """Prefix each declared tool name with `mcp__engine__`, after checking it
-    against `ROLE_TOOLS["research"]`.
-
-    Raises `KeyError` — not a silent pass-through — so a typo'd tool name in
-    a job spec is a failure at import time, when this module is first
-    evaluated, rather than a tool the model can never reach discovered only
-    when a job runs and gets refused.
-    """
-    role_tools = ROLE_TOOLS["research"]
+def tools_for_role(role: Role, *names: str) -> tuple[str, ...]:
+    """Prefix each name with `mcp__engine__` after checking it against that
+    role's registry, so a typo -- or a tool of the other role -- fails at
+    import time rather than as a refusal mid-job."""
+    role_tools = ROLE_TOOLS[role]
     for name in names:
         if name not in role_tools:
             raise KeyError(name)
     return tuple(f"mcp__engine__{name}" for name in names)
-
-
-# The harness tools every job may also reach, beyond the engine's own MCP
-# surface: WebSearch/WebFetch are how a job crosses the "non-mainstream
-# source" and "web sweep" steps every command file above describes, and Read
-# is how it follows the instruction (below) to open its own command file.
-# `sector-tagger.md`'s own tool grant excludes WebFetch (§2.6 of the writers
-# contract: "No WebFetch" — one Schwab call, total, and no article fetching),
-# so it is the one job below that does not get it.
-_WEB_AND_READ: tuple[str, ...] = ("WebSearch", "WebFetch", "Read")
-_SEARCH_AND_READ: tuple[str, ...] = ("WebSearch", "Read")
 
 
 # ---------------------------------------------------------------------------
@@ -211,221 +160,104 @@ class JobSpec:
     max_turns: int
     timeout_s: float
     window: tuple[time, time]
-    # Typed as the registry's `Role`, not a bare `str`: every job here is
-    # "research" (registry.py — no job in this file holds an account or
-    # order tool), and typing it precisely is what lets `ROLE_TOOLS[spec.role]`
-    # type-check anywhere a spec is inspected, rather than needing a cast.
+    # Typed as the registry's `Role`, not a bare `str`: the analysts are
+    # "research" and the PM runs are "decide" (registry.py -- no job in this
+    # file holds an order tool; only "decide" reads the account), and typing
+    # it precisely is what lets `ROLE_TOOLS[spec.role]` type-check anywhere a
+    # spec is inspected, rather than needing a cast.
     role: Role
     noop_when: Callable[[BaseModel], bool] | None
+    # Only the PM carries this (spec §14): a failure inside the market's one
+    # daily entry window is worth one retry before falling back to "no
+    # entries today"; every other job's next scheduled fire is retry enough.
+    retry_failed_after_s: float | None = None
 
 
-# `noop_when` predicates. Each takes the base `BaseModel` type (never the
-# narrower verdict subtype) so a job spec is never unsound to call with the
-# "wrong" verdict shape — the `isinstance` assertion below is what actually
-# narrows it, and it is the caller's job (the dispatcher) to hand back the
-# verdict this spec itself declared.
+# ---------------------------------------------------------------------------
+# The trading desk (docs/superpowers/specs/2026-09-27-claude-trading-desk-design.md §4)
+# ---------------------------------------------------------------------------
+
+_WEB: tuple[str, ...] = ("WebSearch", "WebFetch")
+_ANALYST_ALLOW = tools_for_role(
+    "research", "get_datetime", "market_hours", "quotes", "price_history", "instruments",
+    "briefing", "pitch_submit", "pitch_withdraw", "my_record",
+) + _WEB
+_PM_ALLOW = tools_for_role(
+    "decide", "get_datetime", "market_hours", "quotes", "price_history", "option_chain", "book",
+    "paper_book", "pitches_read", "scorecard", "option_candidates", "call_submit", "call_extend",
+    "call_tighten", "exit_request",
+) + _WEB
+
+_EVENING_PROMPT = (
+    "EVENING PASS. Follow your agent instructions for one evening pass: read "
+    "mcp__engine__briefing, file at most five pitches with mcp__engine__pitch_submit, and "
+    "never size, fund or trade. Return a single JSON object matching the AnalystVerdict "
+    "schema and nothing else."
+)
+_PREOPEN_PROMPT = (
+    "PRE-OPEN MODE. It is before the 09:30 open. Read overnight news and pre-market reports "
+    "against your open pitches and your briefing. File at most two NEW pitches, and withdraw "
+    "any of your own open pitches whose premise broke overnight with "
+    "mcp__engine__pitch_withdraw. Return a single JSON object matching the AnalystVerdict "
+    "schema and nothing else."
+)
 
 
-def _scout_noop(v: BaseModel) -> bool:
-    # An empty cohort is a correct answer between earnings seasons and
-    # before the first weekly sweep — `noop`, not `done`, because `done` on
-    # sixty consecutive empty passes is the "every job green, nothing ever
-    # happens" failure the design exists to catch.
-    assert isinstance(v, ScoutVerdict)
-    return v.cohort == 0
+def _evening(name: str, agent: str) -> JobSpec:
+    return JobSpec(
+        name=name, agent=agent, command=f"/desk {name}", prompt=_EVENING_PROMPT,
+        allowed_tools=_ANALYST_ALLOW, verdict=AnalystVerdict, max_turns=40, timeout_s=1500.0,
+        window=(time(16, 25), time(20, 0)), role="research", noop_when=None,
+    )
 
 
-def _catalyst_noop(v: BaseModel) -> bool:
-    # `scanned == 0` means no sectors are tagged yet (research/sectors.tsv
-    # absent) — the channel had nothing to scan, not nothing to say.
-    assert isinstance(v, CatalystVerdict)
-    return v.scanned == 0
+def _preopen(name: str, agent: str) -> JobSpec:
+    return JobSpec(
+        name=name, agent=agent, command=f"/desk {name}", prompt=_PREOPEN_PROMPT,
+        allowed_tools=_ANALYST_ALLOW, verdict=AnalystVerdict, max_turns=20, timeout_s=600.0,
+        window=(time(7, 55), time(9, 0)), role="research", noop_when=None,
+    )
 
 
-def _deep_noop(v: BaseModel) -> bool:
-    # Preopen/postclose always write at least one document on a real pass;
-    # `wrote == []` is the run finding nothing to do at all, e.g. a halted
-    # day or a precondition that stopped it before its first write.
-    assert isinstance(v, DeepVerdict)
-    return v.wrote == []
-
-
-# research and sector_tag have no `noop_when`: zero HOT and zero new tags are
-# ordinary results of a pass that did its work, not a pass that found nothing
-# to do — see the brief's step 3 rationale, restated at each job below.
-
-JOB_SPECS: dict[str, JobSpec] = {
-    "scout": JobSpec(
-        name="scout",
-        agent="scout",
-        command="/scout",
+DESK_SPECS: dict[str, JobSpec] = {
+    "analyst_technical": _evening("analyst_technical", "analyst-technical"),
+    "analyst_earnings": _evening("analyst_earnings", "analyst-earnings"),
+    "analyst_news": _evening("analyst_news", "analyst-news"),
+    "analyst_macro": _evening("analyst_macro", "analyst-macro"),
+    "preopen_news": _preopen("preopen_news", "analyst-news"),
+    "preopen_earnings": _preopen("preopen_earnings", "analyst-earnings"),
+    "pm": JobSpec(
+        name="pm", agent="pm", command="/desk pm",
         prompt=(
-            "Follow .claude/commands/scout.md §B through §D exactly for one "
-            "information-edge scout pass over the active earnings cohort. "
-            "Escalate only evidence that clears the §C corroboration bar — "
-            "gather and corroborate, never form a thesis or trade. Return a "
-            "single JSON object matching the ScoutVerdict schema and nothing "
-            "else."
+            "Follow your agent instructions for the 09:50 run: the book first, then up to "
+            "five calls, then funding. Return a single JSON object matching the PmVerdict "
+            "schema and nothing else."
         ),
-        allowed_tools=tools_for(
-            "get_datetime", "market_hours", "quotes", "instruments", "option_chain",
-            "cohort", "evidence_read", "evidence_append", "escalation_raise",
-            "sector_write", "status_latest", "alert_read",
-        )
-        + _WEB_AND_READ,
-        verdict=ScoutVerdict,
-        # ~2-3 names/pass, a handful of Schwab reads and web samples per name
-        # (scout.md §B2-B4) plus the evidence/escalation writes — 30 turns is
-        # comfortably above the observed shape with room for a retry.
-        max_turns=30,
-        timeout_s=2400.0,  # docker/crontab: scout 07:12 weekdays, job_timeout 2400
-        window=(time(7, 0), time(8, 0)),
-        role="research",
-        noop_when=_scout_noop,
+        allowed_tools=_PM_ALLOW, verdict=PmVerdict, max_turns=40, timeout_s=900.0,
+        # Latest start 10:30 (spec §13): a PM that cannot start by then makes
+        # no entries that day, and the 900s retry must also land inside it.
+        window=(time(9, 45), time(10, 30)), role="decide", noop_when=None,
+        retry_failed_after_s=900.0,
     ),
-    "catalyst": JobSpec(
-        name="catalyst",
-        agent="catalyst",
-        command="/catalyst",
+    "pm_midday": JobSpec(
+        name="pm_midday", agent="pm", command="/desk pm_midday",
         prompt=(
-            "Follow .claude/commands/catalyst.md §B through §D exactly for "
-            "one catalyst sweep of the three in-scope sectors for non-"
-            "calendar stories. Escalate only evidence that clears the same "
-            "§C corroboration bar as /scout — gather and corroborate, never "
-            "form a thesis or trade. Return a single JSON object matching "
-            "the CatalystVerdict schema and nothing else."
+            "MIDDAY MODE. Held positions and today's news only: hold, mcp__engine__exit_request "
+            "or mcp__engine__call_tighten. No new calls. Return a single JSON object matching "
+            "the MiddayVerdict schema and nothing else."
         ),
-        allowed_tools=tools_for(
-            "get_datetime", "market_hours", "quotes", "instruments",
-            "evidence_read", "evidence_append", "escalation_raise",
-            "sector_write", "sectors_read", "status_latest", "alert_read",
-        )
-        + _WEB_AND_READ,
-        verdict=CatalystVerdict,
-        # Same shape as scout, source-driven rather than cohort-driven.
-        max_turns=30,
-        timeout_s=2400.0,  # docker/crontab: catalyst 18:33 weekdays, job_timeout 2400
-        window=(time(18, 0), time(19, 30)),
-        role="research",
-        noop_when=_catalyst_noop,
-    ),
-    "preopen": JobSpec(
-        name="preopen",
-        agent="deep-research",
-        command="/deep-research preopen",
-        prompt=(
-            "Follow .claude/commands/deep-research.md §P exactly, in preopen "
-            "mode. Write exactly one file — the pre-open brief — and never "
-            "ping, promote a candidate, or touch research/candidates.md. "
-            "Return a single JSON object matching the DeepVerdict schema "
-            "(kind=\"preopen\") and nothing else."
-        ),
-        # Identical to `postclose`'s allowlist, not just preopen's own needs:
-        # both jobs share the `deep-research` agent, and an agent's `tools:`
-        # frontmatter is the SDK-enforced ceiling (0c-sdk-facts §1.5/§5), not
-        # a per-job overlay -- one frontmatter list has to work for whichever
-        # of the two modes actually runs, so it is the union of what either
-        # needs, and each job spec must itself grant that union or the
-        # subset check (`test_every_job_spec_agent_exists_and_its_tools_are_a_subset`)
-        # fails. preopen never calls the postclose-only tools in practice
-        # (§P is file-only, per deep-research.md), but it must be GRANTED
-        # them for the shared agent file to be honest about what it can
-        # reach in either mode.
-        allowed_tools=tools_for(
-            "get_datetime", "market_hours", "quotes", "instruments", "option_chain",
-            "expiration_chain", "price_history", "universe_symbols",
-            "ledger_append", "ledger_read", "tombstone", "doc_read", "doc_write",
-            "alert_read", "status_latest", "rules",
-        )
-        + _WEB_AND_READ,
-        verdict=DeepVerdict,
-        # §P budget ~6 Schwab + ~8 API/web calls (writers-contract §2.4).
-        max_turns=40,
-        timeout_s=3600.0,  # docker/crontab: preopen 08:17 weekdays, job_timeout 3600
-        window=(time(8, 0), time(9, 15)),
-        role="research",
-        noop_when=_deep_noop,
-    ),
-    "postclose": JobSpec(
-        name="postclose",
-        agent="deep-research",
-        command="/deep-research postclose",
-        prompt=(
-            "Follow .claude/commands/deep-research.md §D exactly, in "
-            "postclose mode, in its stated priority order — scorecard, "
-            "universe/drift screens, roster chain-checks, ETF track, deeper "
-            "vetting, IV series, standing refresh — logging whatever the "
-            "budget never reached. Return a single JSON object matching the "
-            "DeepVerdict schema (kind=\"postclose\") and nothing else."
-        ),
-        # Kept textually identical to `preopen`'s allowlist (see the comment
-        # there) -- the two jobs share one agent file, whose frontmatter is
-        # the ceiling both must fit under.
-        allowed_tools=tools_for(
-            "get_datetime", "market_hours", "quotes", "instruments", "option_chain",
-            "expiration_chain", "price_history", "universe_symbols",
-            "ledger_append", "ledger_read", "tombstone", "doc_read", "doc_write",
-            "alert_read", "status_latest", "rules",
-        )
-        + _WEB_AND_READ,
-        verdict=DeepVerdict,
-        # §D budget ~15 Schwab + ~15 API/web calls, the largest job here.
-        max_turns=80,
-        timeout_s=3600.0,  # docker/crontab: postclose 16:22 weekdays, job_timeout 3600
-        window=(time(16, 15), time(18, 0)),
-        role="research",
-        noop_when=_deep_noop,
-    ),
-    "research": JobSpec(
-        name="research",
-        agent="research-scout",
-        command="/research",
-        prompt=(
-            "Follow .claude/commands/research.md §B through §D exactly for "
-            "one research pass maintaining research/candidates.md. This is "
-            "read-only against the broker — never place, preview, replace, "
-            "or cancel an order, and never open the entry workflow. Return "
-            "a single JSON object matching the ResearchVerdict schema and "
-            "nothing else."
-        ),
-        allowed_tools=tools_for(
-            "get_datetime", "market_hours", "quotes", "instruments", "option_chain",
-            "expiration_chain", "price_history", "movers", "doc_read", "doc_write",
-            "ledger_read", "alert_read", "status_latest", "rules",
-        )
-        + _WEB_AND_READ,
-        verdict=ResearchVerdict,
-        # §B budget ~8 Schwab calls + ~4 web fetches (research.md §B).
-        max_turns=40,
-        timeout_s=1500.0,  # docker/crontab: research hourly :57, job_timeout 1500
-        window=(time(9, 45), time(15, 15)),
-        role="research",
-        noop_when=None,  # zero HOT / zero new is an ordinary result, not an empty pass
-    ),
-    "sector_tag": JobSpec(
-        name="sector_tag",
-        agent="sector-tagger",
-        command="/sector-tag",
-        prompt=(
-            "Follow .claude/commands/sector-tag.md §B through §D exactly to "
-            "classify the weekly sweep's qualified universe into the three "
-            "scout sectors. Tag only names that clearly belong; leave a "
-            "genuinely unsure name untagged rather than guessing. Return a "
-            "single JSON object matching the SectorVerdict schema and "
-            "nothing else."
-        ),
-        allowed_tools=tools_for(
-            "get_datetime", "sector_write", "universe_names_page", "sectors_read", "cohort",
-        )
-        + _SEARCH_AND_READ,
-        verdict=SectorVerdict,
-        # Chunked reads over ~3,000 universe rows plus batched (<=200-line)
-        # writes — the heaviest turn count of the six despite the lightest
-        # tool grant.
-        max_turns=60,
-        timeout_s=3000.0,  # docker/crontab: sector_tag Sat 09:40, job_timeout 3000
-        window=(time(9, 0), time(13, 0)),
-        role="research",
-        noop_when=None,  # zero new tags is an ordinary result, not an empty pass
+        allowed_tools=_PM_ALLOW, verdict=MiddayVerdict, max_turns=15, timeout_s=300.0,
+        window=(time(12, 25), time(13, 30)), role="decide", noop_when=None,
     ),
 }
+JOB_SPECS: dict[str, JobSpec] = dict(DESK_SPECS)
+
+# Chains run their jobs one after another inside one engine job, so the
+# one-job-at-a-time runner never sees two of them collide (the 2026-09-08
+# catalyst run was lost to "runner busy"). A chained job has no schedule entry
+# of its own.
+DESK_CHAINS: dict[str, tuple[str, ...]] = {
+    "desk_evening": ("analyst_technical", "analyst_earnings", "analyst_news", "analyst_macro"),
+    "desk_preopen": ("preopen_news", "preopen_earnings"),
+}
+CHAINED_JOBS: frozenset[str] = frozenset(j for jobs in DESK_CHAINS.values() for j in jobs)

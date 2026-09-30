@@ -49,9 +49,17 @@ from tc.broker.models import MarketWindow
 from tc.broker.token import TokenStore
 from tc.clock import ET, fallback_window, trading_days_between
 from tc.config import Settings
+from tc.desk.approval import DiscordReactions, NoReactions, Reactions
+from tc.desk.bars import bars_symbols, carried_symbols, refresh_bars
+from tc.desk.models import ActiveJob
+from tc.desk.paper import ensure_book, expire_stale_proposals
+from tc.desk.post import desk_summary, pitch_counts_since, post_proposals
+from tc.desk.scorecard import build_scorecard, render_scorecard
+from tc.desk.scoring import score
+from tc.desk.watch import run_desk_watch
 from tc.http.app import EngineState, McpMounts, build_app
-from tc.jobs.dispatch import FAILED_VERDICTS, JobRunner, RunnerClient
-from tc.jobs.spec import JOB_SPECS
+from tc.jobs.dispatch import FAILED_VERDICTS, SUMMARY_JOBS, JobRunner, RunnerClient
+from tc.jobs.spec import DESK_CHAINS, JOB_SPECS
 from tc.loops.expectations import digest, run_expectations
 from tc.loops.reconcile import reconcile
 from tc.loops.session import close_session
@@ -59,7 +67,7 @@ from tc.loops.tick import TickResult, run_tick
 from tc.loops.token import token_check
 from tc.loops.universe import UniverseUnavailable, counts_detail, run_weekly_universe
 from tc.mcp import server as mcp_server
-from tc.mcp import tools_read, tools_research
+from tc.mcp import tools_desk, tools_read
 from tc.mcp.server import McpDeps, build_servers
 from tc.notify import BotChannel, Notifier, Pinger
 from tc.research.docs import DocStore
@@ -69,12 +77,13 @@ from tc.store.db import Store, Verdict
 
 log = logging.getLogger(__name__)
 
-# The jobs that are a Claude run rather than engine code — scout, catalyst,
-# preopen, postclose, research, sector_tag. Each reads its whole definition
-# (agent, allowlist, verdict shape, budget, window) from `JOB_SPECS`, and is
-# dispatched through `JobRunner` (jobs/dispatch.py). DERIVED from that table
-# rather than retyped: a hand-kept copy of a dict's keys is a job that either
-# has no spec or has one nothing dispatches, and both fail quietly.
+# The jobs that are a Claude run rather than engine code — the trading desk's
+# analysts and PM (`DESK_SPECS`, jobs/spec.py). Each reads its whole
+# definition (agent, allowlist, verdict shape, budget, window) from
+# `JOB_SPECS`, and is dispatched through `JobRunner` (jobs/dispatch.py).
+# DERIVED from that table rather than retyped: a hand-kept copy of a dict's
+# keys is a job that either has no spec or has one nothing dispatches, and
+# both fail quietly.
 CLAUDE_JOBS: tuple[str, ...] = tuple(JOB_SPECS)
 
 # The job table. A name not in here is a config error, not a job that quietly
@@ -82,6 +91,7 @@ CLAUDE_JOBS: tuple[str, ...] = tuple(JOB_SPECS)
 # argument, both before anything is opened.
 JOBS: tuple[str, ...] = (
     "tick", "session_close", "token_check", "expectations", "backup", "weekly_universe",
+    "bars_refresh", "scorecard_weekly", "desk_watch", "desk_evening", "desk_preopen",
     *CLAUDE_JOBS,
 )
 
@@ -119,11 +129,12 @@ def _wire_mcp_registrars() -> None:
     if _mcp_wired:
         return
     # The read tools go to both roles; `tools_read` itself withholds `book`
-    # from research. The research writers go to the research role only, and
-    # `build_servers` would refuse to build `decide` with them anyway.
+    # from research. The research role now carries the desk's analyst tools
+    # (tools_desk) rather than the old v2 research writers.
     mcp_server.register("research", tools_read.register)
     mcp_server.register("decide", tools_read.register)
-    mcp_server.register("research", tools_research.register)
+    mcp_server.register("research", tools_desk.register)
+    mcp_server.register("decide", tools_desk.register)
     _mcp_wired = True
 
 
@@ -151,6 +162,7 @@ class Engine:
         sleep_s: float = LOOP_INTERVAL_S,
         client: httpx.AsyncClient | None = None,
         jobs: JobRunner | None = None,
+        reactions: Reactions | None = None,
     ) -> None:
         self._s = settings
         self._broker = broker
@@ -158,6 +170,7 @@ class Engine:
         self._token = token
         self._pinger = pinger
         self._clock = clock
+        self._reactions = reactions or NoReactions()
         self._sleep_s = sleep_s
         # The shared HTTP client Notifier and Pinger already hold. The weekly
         # sweep fetches the Nasdaq directory over it; a job that needs it and
@@ -181,6 +194,10 @@ class Engine:
         # without a runner records every Claude job as a `noop` naming the
         # reason, rather than failing a job nobody installed.
         self._jobs = jobs
+        # Which Claude job is running right now, read by the desk tools
+        # (tc/desk/models.ActiveJob) so an analyst's identity comes from the
+        # dispatch itself, never from an argument the model supplies.
+        self._active = ActiveJob()
         # Built in `start()`, once the store is open: the MCP surface the
         # runner reaches back through. `None` means no role tokens were
         # configured, and `serve()` then mounts nothing.
@@ -198,6 +215,7 @@ class Engine:
             shadow=settings.shadow.enabled,
             on_token_installed=self._on_token_installed,
         )
+        self.state.scorecard = self._scorecard_json
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -250,6 +268,8 @@ class Engine:
             rules=self._rules,
             settings=self._s,
             clock=self._clock,
+            active=self._active,
+            trading_day=self._trading_day,
         )
         return McpMounts(servers=build_servers(deps), tokens=tokens)
 
@@ -328,6 +348,13 @@ class Engine:
                 continue
             log.warning("missed %s scheduled for %s", fire.job, fire.at)
             await self._store.record_job_run(fire.job, fire.at, fire.at, "missed", {})
+            if fire.job in SUMMARY_JOBS:
+                # A PM fire the engine slept through is a day (or an
+                # afternoon) with no PM decisions; say so once.
+                await self.notifier.post(
+                    f"⚠️ {fire.job} missed: the engine was not running at"
+                    f" {self._et(fire.at).strftime('%H:%M')} ET -- no PM decisions this run"
+                )
         for fire in self.scheduler.due(now):
             self._spawn(self._run_fire(fire))
 
@@ -451,6 +478,14 @@ class Engine:
             return await self._job_backup(now)
         if job == "weekly_universe":
             return await self._job_weekly_universe(now)
+        if job == "bars_refresh":
+            return await self._job_bars_refresh(now)
+        if job == "scorecard_weekly":
+            return await self._job_scorecard_weekly(now)
+        if job == "desk_watch":
+            return await self._job_desk_watch(now)
+        if job in DESK_CHAINS:
+            return await self._job_desk_chain(job, now, ignore_window=ignore_window)
         if job in CLAUDE_JOBS:
             return await self._job_claude(job, now, ignore_window=ignore_window)
         raise ValueError(f"unknown job {job!r}")
@@ -460,7 +495,124 @@ class Engine:
     ) -> tuple[Verdict, dict[str, Any]]:
         if self._jobs is None:
             return "noop", {"skipped": "no runner configured"}
-        return await self._jobs.execute(job, now, ignore_window=ignore_window)
+        if job in SUMMARY_JOBS and self.state.blind:
+            # Spec §14 "Blind: no PM". Every call_submit would be refused
+            # ("broker blind"), so the run would spend the shared subscription
+            # in market hours and could still end `done` with zero calls --
+            # which reads as a clean paper day.
+            await self.notifier.post(
+                f"⚠️ {job} not run: the broker is blind (no working token), so nothing"
+                " could be priced -- no PM decisions this run"
+            )
+            return "noop", {"skipped": "blind"}
+        if job == "pm":
+            # Yesterday's unfilled proposals can never fill; they must not
+            # count as commitments against this morning's sizing.
+            await expire_stale_proposals(self._store, now)
+        # The paper book's start date is the day a PM run first actually
+        # dispatches (spec §8, strategy.md §8): the hook runs after the
+        # runner/token/window gates, never for a noop or a late fire.
+        on_dispatch = (lambda: self._ensure_paper_book(now)) if job == "pm" else None
+        # The desk tools read WHO is calling from here (tc/desk/models.ActiveJob);
+        # set for exactly the life of the dispatch, cleared even on a raise.
+        self._active.name = job
+        post_error: Exception | None = None
+        posted: list[int] | None = None
+        try:
+            verdict, detail = await self._jobs.execute(
+                job, now, ignore_window=ignore_window, on_dispatch=on_dispatch
+            )
+        finally:
+            self._active.name = None
+            if job == "pm":
+                # Funded calls became proposals during the run; they go to
+                # Discord now, each with its own veto deadline (spec §9.4) --
+                # even when the run itself raised, so what it did create is
+                # posted (or expired) rather than left unposted all day.
+                # Guarded: a posting failure must not replace the run's own
+                # exception, and is re-raised below only when there is none.
+                try:
+                    posted = await post_proposals(
+                        self._store, self.notifier, self._rules, self._s.desk, self._clock(),
+                        self._window,
+                    )
+                except Exception as e:
+                    log.exception("posting the PM's proposals failed")
+                    post_error = e
+        if post_error is not None:
+            raise post_error
+        if posted is not None:
+            detail = {**detail, "proposals_posted": posted}
+        return verdict, detail
+
+    async def _ensure_paper_book(self, now: datetime) -> None:
+        """The paper book starts at the first PM run that actually dispatches,
+        with the real account's value as its cash (spec §10: legacy positions
+        count as cash)."""
+        acct = await self._store.latest_account()
+        if acct is not None:
+            await ensure_book(self._store, self._et(now).date(), acct.liquidation_value, now)
+
+    async def _bars_stale(self, now: datetime) -> bool:
+        """Did this evening's bars_refresh fail (or never run)? The evening
+        analysts screen and pitch off those bars; a chain on yesterday's bars
+        files pitches against a stale briefing."""
+        today = self._et(now).date()
+        rows = await self._store.fetchall(
+            "SELECT started_at, verdict FROM job_runs WHERE job='bars_refresh'"
+            " ORDER BY id DESC LIMIT 10"
+        )
+        for r in rows:
+            if self._et(datetime.fromisoformat(r["started_at"])).date() == today:
+                return str(r["verdict"]) in ("failed", "missed")
+        return False
+
+    async def _job_desk_chain(
+        self, chain: str, now: datetime, *, ignore_window: bool = False
+    ) -> tuple[Verdict, dict[str, Any]]:
+        """One engine job, several Claude jobs, strictly in order: each
+        sub-job gets its own `job_runs` row (so the ledger says which analyst
+        failed), and a failure moves the chain on rather than stopping it."""
+        label = "evening" if chain == "desk_evening" else "pre-open"
+        if self._jobs is None:
+            # A supported deployment, not a lost evening (see _job_claude).
+            return "noop", {"skipped": "no runner configured"}
+        if self.state.blind:
+            await self.notifier.post(
+                f"⚠️ desk {label} chain not run: the broker is blind (no working token)"
+            )
+            return "noop", {"skipped": "blind"}
+        if chain == "desk_evening" and await self._bars_stale(now):
+            await self.notifier.post(
+                f"⚠️ desk {label} chain not run: this evening's bars_refresh did not"
+                " complete, so every briefing would be stale"
+            )
+            return "noop", {"skipped": "bars stale"}
+        results: dict[str, str] = {}
+        for job in DESK_CHAINS[chain]:
+            started = self._clock()
+            try:
+                verdict, detail = await self._job_claude(job, started, ignore_window=ignore_window)
+            except Exception as e:
+                log.exception("desk chain %s: %s raised", chain, job)
+                verdict, detail = "failed", {"error": type(e).__name__}
+            await self._record(job, started, self._clock(), verdict, {**detail, "chain": chain})
+            results[job] = verdict
+        counts = await pitch_counts_since(self._store, now)
+        await self.notifier.post(desk_summary(chain, results, counts, self._et(now).date()))
+        ran = [v for v in results.values() if v not in ("noop", "missed")]
+        failed = [v for v in ran if v in FAILED_VERDICTS]
+        chain_verdict: Verdict
+        if ran and len(failed) == len(ran):
+            chain_verdict = "failed"
+        elif not ran:
+            # No analyst ran at all -- each lost its turn to a busy runner,
+            # its window, or a missing token. An evening with no analysts is
+            # a missed chain, not a `done` one that pings /ok.
+            chain_verdict = "missed"
+        else:
+            chain_verdict = "done"
+        return chain_verdict, {"jobs": results, "pitches": counts}
 
     # --- jobs --------------------------------------------------------------
 
@@ -619,6 +771,67 @@ class Engine:
             f" {counts.chunks_failed} of {counts.chunks} chunks failed"
         )
         return "done", counts_detail(counts)
+
+    async def _job_bars_refresh(self, now: datetime) -> tuple[Verdict, dict[str, Any]]:
+        """The desk's evening price history (trading-desk design §4). Scoring
+        runs on what this wrote (Task 6 extends this method)."""
+        symbols = await bars_symbols(
+            self._store, self._s.desk, await carried_symbols(self._store)
+        )
+        rep = await refresh_bars(
+            self._broker, self._store, symbols, self._s.desk, today=self._et(now).date()
+        )
+        detail: dict[str, Any] = {
+            "requested": rep.requested,
+            "fetched": rep.fetched,
+            "failed_n": len(rep.failed),
+            "failed": rep.failed[:20],
+        }
+        if rep.blind:
+            await self.notifier.post(
+                f"⚠️ bars_refresh: token died after {rep.fetched} of {rep.requested}"
+            )
+            return "failed", {**detail, "error": "BrokerUnauthorized"}
+        rep_score = await score(self._store)
+        detail["resolved"] = len(rep_score.resolved)
+        detail["stuck"] = rep_score.stuck[:10]
+        if rep_score.stuck:
+            await self.notifier.post(
+                f"⚠️ desk: {len(rep_score.stuck)} item(s) missing bars 3+ sessions — "
+                + ", ".join(rep_score.stuck[:10])
+            )
+        return "done", detail
+
+    async def _job_desk_watch(self, now: datetime) -> tuple[Verdict, dict[str, Any]]:
+        rep = await run_desk_watch(
+            store=self._store, broker=self._broker, notifier=self.notifier,
+            reactions=self._reactions, rules=self._rules, desk=self._s.desk,
+            reserve=self._s.engine.reserve_usd, window=self._window, now=now,
+        )
+        detail: dict[str, Any] = {
+            "filled": rep.filled, "skipped": rep.skipped, "exits": rep.exits,
+            "recommended": rep.recommended,
+        }
+        if rep.outside_rth:
+            # An early close: the schedule still fires until 15:55, but
+            # nothing may fill or exit on post-close quotes.
+            return "noop", {**detail, "skipped": "outside RTH"}
+        if rep.blind:
+            # Not `failed` every five minutes: the tick already reports BLIND,
+            # and a dead token is one state, not seventy-two failures a day.
+            return "noop", {**detail, "skipped_reason": "blind"}
+        return "done", detail
+
+    async def _scorecard_json(self) -> dict[str, Any]:
+        sc = await build_scorecard(
+            self._store, self._rules, self._s.desk, self._et(self._clock()).date()
+        )
+        return sc.model_dump(mode="json")
+
+    async def _job_scorecard_weekly(self, now: datetime) -> tuple[Verdict, dict[str, Any]]:
+        sc = await build_scorecard(self._store, self._rules, self._s.desk, self._et(now).date())
+        await self.notifier.post(render_scorecard(sc))
+        return "done", {"pm_calls": sc.pm_calls.n, "verdict": sc.checkpoint.verdict}
 
     # --- broker/window helpers ---------------------------------------------
 
@@ -861,8 +1074,11 @@ def build_engine(
     client: httpx.AsyncClient,
 ) -> Engine:
     shadow = settings.shadow.enabled
-    notifier = Notifier(
-        _discord_target(settings, shadow), client, "[shadow] " if shadow else ""
+    target = _discord_target(settings, shadow)
+    notifier = Notifier(target, client, "[shadow] " if shadow else "")
+    reactions: Reactions = (
+        DiscordReactions(target, client, settings.discord_approver_id)
+        if isinstance(target, BotChannel) else NoReactions()
     )
     return Engine(
         settings,
@@ -870,6 +1086,7 @@ def build_engine(
         store=Store(settings.engine.data_dir / "engine.db"),
         token=token_store(settings),
         notifier=notifier,
+        reactions=reactions,
         pinger=Pinger(
             None
             if settings.healthchecks_base_url is None
@@ -886,9 +1103,11 @@ def build_engine(
                 settings.runner.slack_s,
                 connect_timeout_s=settings.runner.connect_timeout_s,
                 # The bearer the runner presents BACK to the engine's own MCP
-                # mount. Every job in JOB_SPECS runs as the research role; the
-                # decide token is Plan 1's and is not handed out here.
+                # mount, one per MCP role.
                 role_token=settings.mcp_research_token,
+                role_tokens=(
+                    {"decide": settings.mcp_decide_token} if settings.mcp_decide_token else None
+                ),
             ),
             notifier,
             clock,

@@ -108,3 +108,26 @@ async def test_notifier_bot_never_raises() -> None:
         raise httpx.ConnectError("down")
 
     assert await Notifier(BotChannel("t", "1"), _client(h)).post("hi") is False
+
+
+async def test_post_message_returns_the_bot_message_id() -> None:
+    def h(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": "987654321", "content": "x"})
+
+    assert await Notifier(BotChannel("t", "1"), _client(h)).post_message("hi") == "987654321"
+
+
+async def test_post_message_asks_a_webhook_to_wait_for_the_message() -> None:
+    seen: dict[str, str] = {}
+
+    def h(req: httpx.Request) -> httpx.Response:
+        seen["url"] = str(req.url)
+        return httpx.Response(200, json={"id": "42"})
+
+    assert await Notifier("https://discord.test/hook", _client(h)).post_message("hi") == "42"
+    assert seen["url"].endswith("?wait=true")
+
+
+async def test_post_message_is_none_on_failure_and_without_a_target() -> None:
+    assert await Notifier(BotChannel("t", "1"), _client(lambda r: httpx.Response(500))).post_message("x") is None
+    assert await Notifier(None, _client(lambda r: httpx.Response(200))).post_message("x") is None

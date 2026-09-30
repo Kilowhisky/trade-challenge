@@ -205,10 +205,10 @@ def test_a_schedule_key_naming_no_job_is_found(tmp_path: Path) -> None:
     where "it did not come up" is discovered whenever someone next looks."""
     root = _mini_repo(tmp_path)
     cfg = root / "config.yml"
-    cfg.write_text(cfg.read_text().replace("  scout:", "  scoot:", 1))
+    cfg.write_text(cfg.read_text().replace("  tick:", "  tik:", 1))
     rep = run_checks(root)
     assert not rep.ok
-    assert any("'scoot'" in f.message for f in rep.findings if f.check == "schedule_vs_doc")
+    assert any("'tik'" in f.message for f in rep.findings if f.check == "schedule_vs_doc")
 
 
 def test_a_job_spec_with_no_schedule_entry_is_found(tmp_path: Path) -> None:
@@ -217,7 +217,7 @@ def test_a_job_spec_with_no_schedule_entry_is_found(tmp_path: Path) -> None:
     root = _mini_repo(tmp_path)
     cfg = root / "config.yml"
     cfg.write_text("\n".join(
-        line for line in cfg.read_text().splitlines() if not line.startswith("  catalyst:")
+        line for line in cfg.read_text().splitlines() if not line.startswith("  pm:")
     ))
     rep = run_checks(root)
     assert any(
@@ -225,28 +225,9 @@ def test_a_job_spec_with_no_schedule_entry_is_found(tmp_path: Path) -> None:
     )
 
 
-def test_research_cadence_drifting_from_its_command_file_is_found(tmp_path: Path) -> None:
+def test_a_retired_strategy_key_coming_back_is_found(tmp_path: Path) -> None:
     root = _mini_repo(tmp_path)
-    cfg = root / "config.yml"
-    cfg.write_text(
-        cfg.read_text().replace('"every 60m 09:57-14:57 weekdays"', '"every 60m 09:12-15:12 weekdays"')
-    )
+    rules = root / "rules.yml"
+    rules.write_text(rules.read_text().replace("strategy:\n", "strategy:\n  sleeve_core_pct: 50\n", 1))
     rep = run_checks(root)
-    assert not rep.ok
-    messages = [f.message for f in rep.findings if f.check == "schedule_vs_doc"]
-    assert any("hourly at :57" in m for m in messages)
-    assert any("hours 9-14" in m for m in messages)
-
-
-def test_a_command_file_that_stops_stating_the_cadence_is_found(tmp_path: Path) -> None:
-    """The check reads the doc's own words rather than restating them, so the
-    doc losing them is itself the finding — not a silently skipped check."""
-    root = _mini_repo(tmp_path)
-    doc = root / ".claude" / "commands" / "research.md"
-    doc.write_text(doc.read_text().replace("hourly at :57", "whenever"))
-    rep = run_checks(root)
-    assert any(
-        "no longer states the research cadence" in f.message
-        for f in rep.findings
-        if f.check == "schedule_vs_doc"
-    )
+    assert any("sleeve_core_pct" in f.message for f in rep.findings if f.check == "dead_keys")

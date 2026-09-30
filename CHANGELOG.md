@@ -435,6 +435,26 @@ manual's day 5 but unmarked as a *(strategy rule)*.
 
 ## Playbook — `strategy.md`
 
+### 2026-09-27 · The trading desk (strategy rewrite; no manual change)
+
+Six weeks produced four stock entries and no option trades. Causes, from the
+engine database: no order path since 2026-09-07; a funnel of vetoes with no
+rule that says yes; option rules whose intersection was empty at this account
+size; picks that lagged SPY; research effort spent rewriting documents
+(docs/superpowers/specs/2026-09-27-claude-trading-desk-design.md §1).
+
+Chris chose, 2026-09-27: test Claude as a trader; a swing style; four analysts
+split by approach plus a portfolio manager; a 10-minute veto window on entries
+(a §9 amendment, needed before real orders, not for the paper phase); a shared
+subscription with heavy runs outside market hours; a pre-registered checkpoint
+on 2026-12-31 once 40 PM calls are scored.
+
+strategy.md was rewritten around the desk. rules.yml: new desk keys; the
+strategy delta floor lowered 0.50 → 0.45 (= the manual floor); the sleeve,
+stall, ratchet, earnings-window, scout-window and catalyst-granularity keys
+retired and guarded. The scout, catalyst, research, pre-open, post-close and
+sector-tag jobs were retired. CLAUDE.md is unchanged.
+
 | Date | Change |
 |---|---|
 | 2026-08-13 | **Revision 2** — four-agent adversarial review incorporated. Stop ratchet adopted; §3.7 read as own-earnings only; the 9/8–9/9 catch-up branch rejected outright by Chris in calm conditions. |

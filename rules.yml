@@ -110,32 +110,37 @@ strategy:
   # Stricter than the manual by construction. Each must stay on the tight side
   # of the manual value it references; check-consistency.sh enforces that.
 
-  # Playbook §3 — sleeve ceilings, % of account value
-  sleeve_core_pct: 50
-  sleeve_catalyst_pct: 30
+  # The core/catalyst sleeves, the stall and ratchet exits, the earnings-timed
+  # option windows and the catalyst share granularity were retired 2026-09-27
+  # with the trading desk (strategy.md §12). engine/tc/rules/consistency.py
+  # fails the build if any of them returns.
+  #
+  # These two did NOT retire with them, but survive for a narrower reason:
+  # both are read only by the tightness-check tables
+  # (engine/tc/rules/consistency.py TIGHTNESS, scripts/check-consistency.sh)
+  # that assert every strategy value sits on the tight side of the manual
+  # value it references — not by the desk playbook, which never names either
+  # key. sleeve_leveraged_pct in particular ties to §3.5, a manual limit the
+  # desk currently never reaches: strategy.md §6 trades no leveraged or
+  # inverse ETFs at all.
   sleeve_options_open_pct: 30
   sleeve_leveraged_pct: 20
-  max_deployed_pct: 100
 
-  # Playbook §4 — selection
+  # strategy.md §3 — share funding requires daily ATR at or under this;
+  # a noisier name can only be expressed as an option.
   # Was "reject if 10% ÷ daily ATR% < 3", i.e. reject ATR% > 3.33 — a filter
   # that existed only because the stop was fixed at 10%. With an ATR-scaled
   # stop the binding constraint is the stop cap: reject a name only when
   # 2.5 x ATR% would exceed manual stop_trigger_max_pct.
   max_daily_atr_pct: 6
-  # Replaces the fixed $20-60 band, set when the catalyst sleeve was $270 and
-  # never rescaled. Expressed as granularity so it moves with capital: the
-  # sleeve must buy at least this many whole shares.
-  # Lowered 6 -> 3 on 2026-08-20 (Chris). At 6 the ceiling was sleeve/6 =
-  # ~$145, which blocked TGT and HD on granularity while both remained
-  # core-eligible -- a ceiling doing thesis work it was never meant to do.
-  # Cost accepted: a 3-share position scales coarsely (partial exits move in
-  # thirds), so the ratchet, not scaling, carries the risk management.
-  catalyst_min_whole_shares: 3
 
-  # Playbook §4 — takeover-stub rejection. A survivor whose latest session
+  # Read by engine/tc/loops/universe.py's weekly universe builder, not
+  # described in strategy.md — the write-up of core/catalyst selection this
+  # once lived under (old §4) was retired 2026-09-27 with the sleeves
+  # (strategy.md §12). Still live and still means what it always did:
+  # takeover-stub rejection. A survivor whose latest session
   # high-low range is under this percentage of its price is pinned, not
-  # quiet, and is rejected by /weekly-universe's --qualified-only pass.
+  # quiet, and is rejected by the weekly universe pass.
   #
   # Why it exists: on 2026-08-19, nine of fifteen names on the shortlist were
   # announced all-cash deal targets trading pinned under their deal price.
@@ -174,34 +179,59 @@ strategy:
   # evidence rather than guessed twice.
   working_universe_size: 500
 
-  # Playbook §5 — exits
-  stall_rule_consecutive_closes: 2
-  stall_rule_from_session: 4
-  ratchet_breakeven_at_gain_pct: 8
-  ratchet_entry_plus8_at_gain_pct: 15
-
-  # Playbook §6 — options, tighter than manual §3.2
-  option_min_delta: 0.50               # manual band floor is 0.45
+  # strategy.md §6 — Calls and options.
+  option_min_delta: 0.45               # = the manual band floor (2026-09-27, trading-desk design §9.3: selection ranks toward option_target_delta instead of flooring above the manual)
+  # leveraged_exit_session is NOT read by strategy.md §6 or any desk code —
+  # §6 trades no leveraged or inverse ETFs at all. It survives, like
+  # sleeve_leveraged_pct above, only because the tightness-check tables
+  # (engine/tc/rules/consistency.py TIGHTNESS, scripts/check-consistency.sh)
+  # assert it stays inside manual leveraged_max_hold_sessions (5).
   leveraged_exit_session: 4            # manual limit is 5
 
-  # Design spec §4 — expiry must clear the print, so a correct thesis is never
-  # FORCED to sell into the vol crush and can hold into the drift instead.
-  # Never the front weekly: that is where event vol is most concentrated.
-  option_expiry_min_days_past_earnings: 14
-  option_expiry_max_days_past_earnings: 28
-
-  # Design spec §4 — the option ENTRY window, and therefore the research
-  # window: IV ramps in the final ~2 weeks into a print, so we look at a name
-  # 3-6 weeks out in order to buy vol before it is bid up.
-  scout_entry_window_min_days: 21
-  scout_entry_window_max_days: 42
-
-  # Playbook §8 — monitoring cadence, seconds
+  # Not read by any current job. The old §8 "monitoring cadence" these three
+  # were sized for was retired with the sleeves 2026-09-27 (strategy.md
+  # §12); the v3 tick job instead runs on config.yml's fixed schedule
+  # (strategy.md §4, "every 15 min"). Retained un-consumed — verify with
+  # a grep for `tick_interval` before relying on any of them.
   tick_interval_naked_s: 60
   tick_interval_working_order_s: 300
   tick_interval_positions_s: 900
 
-  # Playbook §10 — endgame calendar DELETED 2026-08-31 alongside manual §8.
+  # Endgame calendar DELETED 2026-08-31 alongside manual §8 (CHANGELOG.md).
   # all_options_flat_by and last_leveraged_entry were dates in a contest that
   # no longer exists; §3.3's 5-DTE close and §3.5's 5-session hold are the
-  # clocks that actually bind, and both survive untouched.
+  # clocks that actually bind, and both survive untouched. (This block used
+  # to cite the old strategy.md §10, "Continuation" — the 2026-09-27 rewrite
+  # reused §10 for "The paper book and going live," an unrelated topic, so
+  # the reference is dropped rather than left pointing at the wrong section.)
+
+  # Trading desk (docs/superpowers/specs/2026-09-27-claude-trading-desk-design.md).
+  # §5 pitches
+  desk_max_pitches_per_analyst_run: 5
+  desk_preopen_max_new_pitches: 2
+  pitch_horizon_min_days: 2
+  pitch_horizon_max_days: 20
+  pitch_level_max_distance_pct: 30
+  # §6 calls
+  desk_max_new_calls_per_day: 5
+  # §9.2 sizing, % of account value (paper equity in the paper phase)
+  min_fundable_conviction: 3
+  size_shares_pct_conviction_3: 10
+  size_shares_pct_conviction_4: 15
+  size_shares_pct_conviction_5: 20
+  size_option_premium_pct_conviction_3: 5
+  size_option_premium_pct_conviction_4: 7.5
+  size_option_premium_pct_conviction_5: 10   # = manual option_single_position_pct
+  max_funded_positions: 8
+  # §9.3/§9.5 options
+  option_max_dte: 60
+  option_target_delta: 0.60
+  option_exit_reprice_minutes: 15
+  # §9.4 entries. max_entry_chase_pct bounds how far above the last price a
+  # PM may set max_entry_price (plan deviation: the spec names the field, not a bound).
+  veto_window_minutes: 10
+  max_entry_chase_pct: 5
+  # §8 checkpoint and §7.3 scorecard
+  checkpoint_min_pm_calls: 40
+  analyst_review_min_pitches: 15
+  scorecard_ci_min_n: 20

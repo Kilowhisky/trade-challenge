@@ -320,7 +320,20 @@ def mcp_servers(req: RunRequest) -> dict[str, Any]:
             # Trailing slash on purpose: /mcp/<role> without it answers a
             # 307 on every message.
             "url": f"{ENGINE_URL}/mcp/{req.mcp_role}/",
-            "headers": {"Authorization": f"Bearer {req.mcp_role_token}"},
+            "headers": {
+                "Authorization": f"Bearer {req.mcp_role_token}",
+                # The desk tools' one source of caller identity
+                # (tc/mcp/tools_desk.py `_caller_job`): this runner and the
+                # engine serving its MCP calls are not always the same
+                # process -- `tc run --once analyst_technical` dials the
+                # SERVING engine's HTTP mount from a separate one-off run, so
+                # that engine's in-memory ActiveJob (set only around calls it
+                # dispatches itself) is None even though a job plainly is
+                # running. Stamping the job here, on every call, is what lets
+                # the desk tools answer correctly regardless of which process
+                # fired the run.
+                "X-TC-Job": req.job,
+            },
         }
     }
 

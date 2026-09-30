@@ -413,3 +413,16 @@ async def test_api_ticks_malformed_date_is_400(tmp_path: Path, store: Store) -> 
     assert r.status_code == 400
     r2 = await _get(state, "/api/ticks?date=2026-13-40")
     assert r2.status_code == 400
+
+
+async def test_scorecard_is_served_when_the_engine_supplies_it(tmp_path: Path, store: Store) -> None:
+    async def sc() -> dict[str, Any]:
+        return {"asof": "2026-10-05"}
+
+    r = await _get(_state(tmp_path, store, scorecard=sc), "/api/scorecard")
+    assert r.status_code == 200 and r.json() == {"asof": "2026-10-05"}
+
+
+async def test_scorecard_is_503_on_an_engine_with_no_desk(tmp_path: Path, store: Store) -> None:
+    r = await _get(_state(tmp_path, store), "/api/scorecard")
+    assert r.status_code == 503

@@ -8,15 +8,29 @@ import pytest
 import yaml
 
 from tc.jobs.spec import JOB_SPECS
-from tc.mcp.registry import ROLE_TOOLS
+from tc.mcp.registry import ROLE_TOOLS, Role
 
 ROOT = Path(__file__).resolve().parents[3]
-LIVE_COMMANDS = ["research", "deep-research", "scout", "catalyst", "sector-tag"]
-LIVE_AGENTS = ["research-scout", "deep-research", "scout", "catalyst", "sector-tagger"]
+LIVE_COMMANDS: list[str] = []
+LIVE_AGENTS = [
+    "analyst-technical", "analyst-earnings", "analyst-news", "analyst-macro", "pm",
+]
+# The MCP role each live agent's tools are checked against. Everything not
+# listed runs as `research` (the analysts reuse that role and its bearer).
+AGENT_ROLE: dict[str, Role] = {"pm": "decide"}
+DESK_MODELS = {
+    "analyst-technical": "sonnet", "analyst-earnings": "sonnet", "analyst-news": "sonnet",
+    "analyst-macro": "sonnet", "pm": "opus",
+}
 RETIRED = [
     ".claude/commands/weekly-universe.md", ".claude/commands/tick.md",
     ".claude/agents/weekly-universe.md", ".claude/agents/tick-watch.md",
     ".claude/agents/session-close.md", ".claude/agents/trader.md",
+    ".claude/commands/research.md", ".claude/commands/deep-research.md",
+    ".claude/commands/scout.md", ".claude/commands/catalyst.md",
+    ".claude/commands/sector-tag.md", ".claude/agents/research-scout.md",
+    ".claude/agents/deep-research.md", ".claude/agents/scout.md",
+    ".claude/agents/catalyst.md", ".claude/agents/sector-tagger.md",
 ]
 
 
@@ -32,6 +46,10 @@ def live_files() -> list[Path]:
         [ROOT / ".claude" / "commands" / f"{n}.md" for n in LIVE_COMMANDS]
         + [ROOT / ".claude" / "agents" / f"{n}.md" for n in LIVE_AGENTS]
     )
+
+
+def _role_of(path: Path) -> Role:
+    return AGENT_ROLE.get(path.stem, "research") if path.parent.name == "agents" else "research"
 
 
 @pytest.mark.parametrize("path", live_files(), ids=lambda p: p.name)
@@ -64,9 +82,10 @@ def test_agent_tools_are_engine_tools_only(name: str) -> None:
     tools = [t.strip() for t in fm["tools"].split(",")]
     banned = {"Bash", "Write", "Edit", "NotebookEdit", "Glob", "Grep", "Task", "Agent"}
     assert not (set(tools) & banned), f"{name}: {sorted(set(tools) & banned)}"
+    role = AGENT_ROLE.get(name, "research")
     for t in tools:
         if t.startswith("mcp__engine__"):
-            assert t.removeprefix("mcp__engine__") in ROLE_TOOLS["research"], t
+            assert t.removeprefix("mcp__engine__") in ROLE_TOOLS[role], t
         else:
             assert t in {"Read", "WebSearch", "WebFetch"}, t
 
@@ -74,8 +93,21 @@ def test_agent_tools_are_engine_tools_only(name: str) -> None:
 @pytest.mark.parametrize("path", live_files(), ids=lambda p: p.name)
 def test_every_engine_tool_named_in_a_live_prompt_is_in_the_registry(path: Path) -> None:
     body = path.read_text()
+    role = _role_of(path)
     for name in re.findall(r"mcp__engine__([a-zA-Z_]+)", body):
-        assert name in ROLE_TOOLS["research"], f"{path} names unknown tool {name!r}"
+        assert name in ROLE_TOOLS[role], f"{path} names unknown tool {name!r}"
+
+
+@pytest.mark.parametrize("name,model", sorted(DESK_MODELS.items()))
+def test_desk_agents_run_on_the_models_the_design_chose(name: str, model: str) -> None:
+    assert frontmatter(ROOT / ".claude" / "agents" / f"{name}.md")["model"] == model
+
+
+@pytest.mark.parametrize("name", [n for n in DESK_MODELS if n != "pm"])
+def test_no_analyst_is_handed_a_funding_or_call_tool(name: str) -> None:
+    tools = frontmatter(ROOT / ".claude" / "agents" / f"{name}.md")["tools"]
+    for forbidden in ("call_submit", "option_candidates", "paper_book", "exit_request"):
+        assert forbidden not in tools, f"{name} holds {forbidden}"
 
 
 def test_every_job_spec_agent_exists_and_its_tools_are_a_subset() -> None:
@@ -92,9 +124,9 @@ def test_shared_agent_tools_equal_the_union_of_every_job_that_dispatches_it() ->
     """An agent file's `tools:` is the SDK-enforced ceiling (0c-sdk-facts
     §1.5/§5), not a per-job overlay -- one file's header has to work for
     every mode it might run in. When two JobSpecs name the same agent (e.g.
-    "preopen" and "postclose" both run `deep-research`), the fix is to widen
-    BOTH job specs to the union rather than narrow the frontmatter, so the
-    ceiling stays honest about what either mode can actually reach. This
+    "analyst_news" and "preopen_news" both run `analyst-news`), the fix is to
+    widen BOTH job specs to the union rather than narrow the frontmatter, so
+    the ceiling stays honest about what either mode can actually reach. This
     pins that invariant for every agent shared by 2+ jobs: its declared
     tools are exactly the union of those jobs' allowed_tools -- not a
     subset (a stale, narrower frontmatter silently strands a job's tools,
@@ -161,8 +193,3 @@ def test_tick_tombstone_does_not_carry_the_cadence_string_check_5_greps() -> Non
     # comparison; with the string present in a tombstone it would compare a
     # cadence no document owns any more.
     assert "**15 min** baseline" not in (ROOT / ".claude/commands/tick.md").read_text()
-
-
-def test_research_md_keeps_the_schedule_strings_check_5_greps() -> None:
-    body = (ROOT / ".claude/commands/research.md").read_text()
-    assert "hourly at :57" in body and "hours 9-14" in body

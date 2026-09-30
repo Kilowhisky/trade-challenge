@@ -6,13 +6,13 @@ moment an order or a re-auth needs it.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, time
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -87,6 +87,29 @@ class Expectation(BaseModel):
     window_sessions: int = 1
 
 
+class DeskConfig(BaseModel):
+    """The desk's non-numeric settings (trading-desk design §12.2).
+
+    rules.yml's loader accepts numbers only, so a list of tickers, a calendar
+    date and a clock window live here. Every numeric desk rule is in
+    rules.yml's strategy section and read through `Rules`."""
+
+    model_config = ConfigDict(extra="forbid")
+    etf_list: list[str] = Field(default_factory=list)
+    context_symbols: list[str] = Field(default_factory=list)
+    checkpoint_date: date = date(2026, 12, 31)
+    entry_window_start: time = time(10, 0)
+    entry_window_end: time = time(15, 0)
+    bars_universe_size: int = Field(default=400, ge=0)
+    bars_history_days: int = Field(default=260, ge=60)
+    bars_request_spacing_s: float = Field(default=0.5, ge=0)
+
+    @field_validator("etf_list", "context_symbols")
+    @classmethod
+    def _upper(cls, v: list[str]) -> list[str]:
+        return [s.strip().upper() for s in v if s.strip()]
+
+
 class FileConfig(BaseModel):
     """The whole of config.yml. Unknown keys are errors, not warnings."""
 
@@ -97,6 +120,7 @@ class FileConfig(BaseModel):
     schedule: dict[str, str] = Field(default_factory=dict)
     shadow: ShadowConfig = Field(default_factory=ShadowConfig)
     expectations: list[Expectation] = Field(default_factory=list)
+    desk: DeskConfig = Field(default_factory=DeskConfig)
 
 
 class Secrets(BaseSettings):
@@ -116,6 +140,9 @@ class Secrets(BaseSettings):
     discord_shadow_channel_id: str | None = None
     discord_webhook_url: AnyHttpUrl | None = None
     discord_shadow_webhook_url: AnyHttpUrl | None = None
+    # The Discord user whose ✅/❌ on a desk proposal counts. None: any
+    # non-bot user in the channel (the paper phase). Revised Plan 1 requires it.
+    discord_approver_id: str | None = None
     healthchecks_base_url: AnyHttpUrl | None = None
     # The runner's inbound bearer, and one bearer per MCP role. All optional:
     # an engine with no runner still ticks, closes the session and serves
@@ -144,6 +171,7 @@ class Settings(BaseModel):
     schedule: dict[str, str]
     shadow: ShadowConfig
     expectations: list[Expectation]
+    desk: DeskConfig
 
     # Read-only passthroughs so callers say s.schwab_app_key, not
     # s.secrets.schwab_app_key -- the split above is an internal concern.
@@ -174,6 +202,10 @@ class Settings(BaseModel):
     @property
     def discord_shadow_webhook_url(self) -> AnyHttpUrl | None:
         return self.secrets.discord_shadow_webhook_url
+
+    @property
+    def discord_approver_id(self) -> str | None:
+        return self.secrets.discord_approver_id
 
     @property
     def healthchecks_base_url(self) -> AnyHttpUrl | None:
@@ -235,6 +267,7 @@ def load_settings(config_path: Path, env_file: Path | None = None) -> Settings:
         schedule=file_cfg.schedule,
         shadow=file_cfg.shadow,
         expectations=file_cfg.expectations,
+        desk=file_cfg.desk,
     )
     # Fail fast (module docstring): a research/decide token collision is a
     # startup-time settings defect, not something that should wait to surface
