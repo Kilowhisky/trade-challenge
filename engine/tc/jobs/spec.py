@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import time
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from tc.mcp.registry import ROLE_TOOLS, Role
 
@@ -47,6 +47,16 @@ class AnalystVerdict(BaseModel):
     pitched: list[int]
     withdrawn: list[int]
     summary: str
+
+    @field_validator("pitched", "withdrawn", mode="before")
+    @classmethod
+    def _ids(cls, v: Any) -> Any:
+        """Accept `{"id": 42, "symbol": ...}` for `42`. Observed 2026-10-01:
+        the macro analyst filed five pitches and then echoed them back as
+        objects, which failed the verdict on a run that lost nothing."""
+        if isinstance(v, list):
+            return [x["id"] if isinstance(x, dict) and "id" in x else x for x in v]
+        return v
 
 
 class HeldDecision(BaseModel):

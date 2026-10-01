@@ -541,3 +541,23 @@ def test_classify_reads_the_reply_and_nothing_else() -> None:
     # A body missing `is_error` is not evidence the run succeeded.
     verdict, model, _ = classify(spec, RunnerReply(result=RunResultView()))
     assert verdict == "failed" and model is None
+
+
+def test_an_analyst_echoing_its_pitches_as_objects_still_returns_the_ids() -> None:
+    # 2026-10-01 analyst_macro: five pitches filed, then the verdict listed
+    # them as {"id", "symbol", "direction"} objects and was content_failed.
+    from tc.jobs.dispatch import _recover_verdict_from_text
+    from tc.jobs.spec import AnalystVerdict
+
+    text = (
+        "All five pitches filed successfully for the 2026-10-02 session. ```json "
+        '{ "pitched": [ {"id": 42, "symbol": "GDX", "direction": "down"}, '
+        '{"id": 43, "symbol": "FXI", "direction": "down"} ], "withdrawn": [], '
+        '"summary": "MACRO 2 pitches: GDX down, FXI down" } ```'
+    )
+    got = _recover_verdict_from_text(text, AnalystVerdict)
+    assert isinstance(got, AnalystVerdict)
+    assert got.pitched == [42, 43]
+    assert AnalystVerdict.model_json_schema()["properties"]["pitched"]["items"] == {
+        "type": "integer"
+    }

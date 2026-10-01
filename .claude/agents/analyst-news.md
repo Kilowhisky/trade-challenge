@@ -59,5 +59,6 @@ the pitch and retry once. Zero pitches is allowed with a reason in the summary.
 ## Return
 
 Return the JSON object matching the AnalystVerdict schema and nothing else:
-`pitched`, `withdrawn`, and a one-line `summary`, for example
+`pitched` -- a list of the integer ids `pitch_submit` returned, e.g. `[42, 43]`;
+`withdrawn` -- integer ids you withdrew; and a one-line `summary`, for example
 `NEWS 3 pitches: AVGO up (second-order to the NVDA guide), ...; withdrew 1`.

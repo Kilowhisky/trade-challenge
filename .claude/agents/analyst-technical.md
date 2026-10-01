@@ -71,6 +71,7 @@ engine refuses one filed between 09:30 and 16:00.
 ## Return
 
 Return the JSON object matching the AnalystVerdict schema and nothing else:
-`pitched` -- the ids `pitch_submit` returned; `withdrawn` -- ids you withdrew
+`pitched` -- a list of the integer ids `pitch_submit` returned, e.g. `[42, 43]`;
+`withdrawn` -- integer ids you withdrew
 (none, in an evening pass); `summary` -- one line, for example
 `TECHNICAL 3 pitches: NVDA up breakout, KRE down breakdown, XOM up pullback`.
