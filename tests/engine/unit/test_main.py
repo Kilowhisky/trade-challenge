@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+import threading
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal as D  # noqa: N817 -- brevity in a Decimal-heavy fixture table
@@ -1423,3 +1424,69 @@ async def test_build_engine_bot_token_without_a_channel_falls_back_to_the_webhoo
         )
         await eng.notifier.post("x")
     assert seen == ["https://shadow.example/h"]
+
+
+# --- a broker failure nobody anticipated ------------------------------------
+
+class StrangeWindowBroker(FakeBroker):
+    """The market-hours read fails with something outside the broker's error
+    hierarchy -- what a dead refresh token raised until 2026-10-05, when
+    authlib's OAuthError escaped the calendar read on every loop pass."""
+
+    async def market_window(self, d: date) -> MarketWindow:
+        raise RuntimeError("not a BrokerError")
+
+
+async def test_an_unexpected_calendar_failure_still_starts_and_still_schedules(
+    tmp_path: Path, store: Store, client: httpx.AsyncClient
+) -> None:
+    """The calendar read sits in front of the scheduler on every pass. When it
+    raised, the pass died before `scheduler.due()`: three days of no tick and
+    no token_check -- the two jobs that would have said the token was dead --
+    and one traceback a second instead. A guessed calendar is the answer to
+    ANY failure there, not only to the ones somebody listed."""
+    s = _settings(tmp_path)
+    await _seed(store)
+    eng = _engine(
+        s, store, StrangeWindowBroker(_fx(tmp_path), NOW), Clock(et(9, 32)),
+        RecordingNotifier(client), client,
+    )
+
+    await eng.start()  # must not raise
+    assert eng.window_is_fallback is True
+
+    await asyncio.wait_for(eng.run_for(1), 5)
+    assert [v for _, v, _ in await _job_runs(store, "tick")] == ["done"]
+    await eng.stop()
+
+
+def _live_non_daemon_threads() -> set[threading.Thread]:
+    return {
+        t for t in threading.enumerate()
+        if t is not threading.main_thread() and not t.daemon and t.is_alive()
+    }
+
+
+async def test_a_failed_start_closes_the_store_so_the_process_can_exit(
+    tmp_path: Path, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """aiosqlite runs each connection on a NON-daemon thread. When `start()`
+    raised inside `serve()`, nothing closed the store, so `main()` printed its
+    one-line error and returned 4 into an interpreter that could never exit:
+    a process Docker saw as running, with no HTTP surface, that no restart
+    policy would ever replace (2026-10-06)."""
+    from tc.mcp.registry import ROLE_TOOLS
+
+    monkeypatch.setitem(ROLE_TOOLS, "research", (*ROLE_TOOLS["research"], "not_a_tool"))
+    monkeypatch.setenv("TC_MODE", "paper")
+    monkeypatch.setenv("TC_FIXTURES", str(_fx(tmp_path)))
+    s = _settings(tmp_path, env_extra=MCP_ENV)
+    before = _live_non_daemon_threads()
+
+    with pytest.raises(RuntimeError, match="not_a_tool"):
+        await main.serve(s)
+
+    leftover = _live_non_daemon_threads() - before
+    for t in leftover:
+        t.join(timeout=2)
+    assert not {t for t in leftover if t.is_alive()}

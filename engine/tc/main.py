@@ -877,14 +877,22 @@ class Engine:
             self._window_is_fallback = False
             if was_fallback:
                 log.info("market_window(%s) answered; the fallback window is dropped", d)
-        except (BrokerError, OSError) as e:
-            # OSError covers the fixture broker in paper mode reading a day it
-            # has no hours file for. Either way: no calendar, so assume the
+        except Exception as e:
+            # Any failure, not a list of expected ones. This read sits in front
+            # of the scheduler on every pass, so an exception that escapes it
+            # stops EVERY job -- including token_check and the tick, the two
+            # that would report the problem. That happened for three days from
+            # 2026-10-05, when a dead refresh token raised authlib's OAuthError
+            # here. OSError is the fixture broker in paper mode reading a day
+            # it has no hours file for. Either way: no calendar, so assume the
             # weekday window and keep monitoring rather than stopping.
             if not was_fallback:
+                expected = isinstance(e, (BrokerError, OSError))
                 log.warning(
                     "market_window(%s) failed (%s); using the fallback window, retrying every %ds",
                     d, type(e).__name__, int(WINDOW_RETRY_S),
+                    # One traceback for the surprise, on the transition only.
+                    exc_info=not expected,
                 )
             self._window = fallback_window(d)
             self._window_is_fallback = True
@@ -1131,13 +1139,28 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+async def _start_or_stop(engine: Engine) -> None:
+    """`engine.start()`, undone if it raises.
+
+    `start()` opens the store first, and aiosqlite runs each connection on a
+    NON-daemon thread. A start that raised without a matching stop left that
+    thread running, so `main()` printed its error and returned into an
+    interpreter that could never exit: a process Docker reported as up, with
+    no HTTP surface, that no restart policy would replace (2026-10-06)."""
+    try:
+        await engine.start()
+    except BaseException:
+        await engine.stop()
+        raise
+
+
 async def serve(settings: Settings) -> None:
     host, port = check_bind(settings.engine.http_bind)
     token = token_store(settings)
     broker = make_broker(settings, token)
     async with httpx.AsyncClient() as client:
         engine = build_engine(settings, broker=broker, clock=_now, client=client)
-        await engine.start()
+        await _start_or_stop(engine)
         server = _Server(
             uvicorn.Config(
                 build_app(engine.state, mcp=engine.mcp), host=host, port=port,
@@ -1175,7 +1198,7 @@ async def run_once(settings: Settings, job: str, *, ignore_window: bool = False)
     broker = make_broker(settings, token)
     async with httpx.AsyncClient() as client:
         engine = build_engine(settings, broker=broker, clock=_now, client=client)
-        await engine.start()
+        await _start_or_stop(engine)
         try:
             verdict = await engine.run_job(job, ignore_window=ignore_window)
         finally:

@@ -3,11 +3,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 import httpx
+from authlib.common.errors import AuthlibBaseError
 from schwab import auth as schwab_auth
 from schwab.client import AsyncClient
 
@@ -142,14 +143,32 @@ class SchwabBroker:
             self._client = client
         return self._client
 
-    async def _guard(self, resp: httpx.Response) -> dict[str, Any] | list[Any]:
-        """`_raise_for`, plus: a 401 drops the bound client.
+    async def _guard(
+        self, call: Awaitable[httpx.Response]
+    ) -> dict[str, Any] | list[Any]:
+        """Run one schwab-py call and translate everything it can raise into
+        the broker's own errors, plus: a dead token drops the bound client.
 
         The token behind a live client is dead for good — schwab-py refreshes
         from the file it read at construction, so the client cannot recover on
         its own. Dropping it means the next call re-reads the file, which is
         what turns a phone re-auth into a working engine without a restart.
+
+        It takes the call, not the response, because a dead REFRESH token never
+        produces a response: authlib refreshes before the request, Schwab
+        answers the refresh POST with `invalid_grant`, and authlib raises its
+        own OAuthError. Outside the broker's hierarchy, that error escaped
+        every handler written for broker trouble (2026-10-05: no job ran for
+        three days, and a restart killed `serve()`). A transport failure
+        escaped the same way, and says nothing about the token.
         """
+        try:
+            resp = await call
+        except AuthlibBaseError as e:
+            await self.close()
+            raise BrokerUnauthorized(f"token refresh refused: {type(e).__name__}") from e
+        except httpx.HTTPError as e:
+            raise BrokerError(f"transport: {type(e).__name__}") from e
         try:
             return _raise_for(resp)
         except BrokerUnauthorized:
@@ -160,14 +179,14 @@ class SchwabBroker:
         return datetime.now(UTC)
 
     async def account_hashes(self) -> list[str]:
-        data = await self._guard(await self._c().get_account_numbers())
+        data = await self._guard(self._c().get_account_numbers())
         assert isinstance(data, list)
         return [str(x["hashValue"]) for x in data]
 
     async def account(self, account_hash: str) -> AccountSnapshot:
         c = self._c()
         data = await self._guard(
-            await c.get_account(account_hash, fields=[c.Account.Fields.POSITIONS])
+            c.get_account(account_hash, fields=[c.Account.Fields.POSITIONS])
         )
         assert isinstance(data, dict)
         return AccountSnapshot.from_payload(account_hash, data, self.now())
@@ -176,7 +195,7 @@ class SchwabBroker:
         self, account_hash: str, from_dt: datetime, to_dt: datetime
     ) -> list[OrderRow]:
         data = await self._guard(
-            await self._c().get_orders_for_account(
+            self._c().get_orders_for_account(
                 account_hash, from_entered_datetime=from_dt, to_entered_datetime=to_dt
             )
         )
@@ -186,7 +205,7 @@ class SchwabBroker:
     async def quotes(self, symbols: Sequence[str]) -> dict[str, Quote]:
         if not symbols:
             return {}
-        data = await self._guard(await self._c().get_quotes(list(symbols)))
+        data = await self._guard(self._c().get_quotes(list(symbols)))
         assert isinstance(data, dict)
         return {s: Quote.from_payload(s, q) for s, q in data.items() if "quote" in q}
 
@@ -208,7 +227,7 @@ class SchwabBroker:
             c.Quote.Fields.REFERENCE,
             c.Quote.Fields.REGULAR,
         ]
-        data = await self._guard(await c.get_quotes(list(symbols), fields=fields))
+        data = await self._guard(c.get_quotes(list(symbols), fields=fields))
         assert isinstance(data, dict)
         return {s: VerboseQuote.from_payload(s, b) for s, b in data.items()}
 
@@ -222,7 +241,7 @@ class SchwabBroker:
     ) -> OptionChainView:
         c = self._c()
         data = await self._guard(
-            await c.get_option_chain(
+            c.get_option_chain(
                 symbol,
                 contract_type=_enum_by_name(c.Options.ContractType, contract_type, "contract type"),
                 strike_count=strike_count,
@@ -234,14 +253,14 @@ class SchwabBroker:
         return OptionChainView.from_payload(symbol, data)
 
     async def expiration_chain(self, symbol: str) -> list[Expiration]:
-        data = await self._guard(await self._c().get_option_expiration_chain(symbol))
+        data = await self._guard(self._c().get_option_expiration_chain(symbol))
         assert isinstance(data, dict)
         return [Expiration.from_payload(e) for e in data.get("expirationList", [])]
 
     async def instruments(self, query: str, projection: str) -> list[Instrument]:
         c = self._c()
         data = await self._guard(
-            await c.get_instruments(
+            c.get_instruments(
                 query, _enum_by_value(c.Instrument.Projection, projection, "projection")
             )
         )
@@ -260,13 +279,13 @@ class SchwabBroker:
             raise BrokerError(f"unknown mover direction: {direction!r}")
         order = _enum_by_name(c.Movers.SortOrder, sorts[direction], "sort order")
         idx = _enum_by_name(c.Movers.Index, index, "mover index")
-        data = await self._guard(await c.get_movers(idx, sort_order=order))
+        data = await self._guard(c.get_movers(idx, sort_order=order))
         assert isinstance(data, dict)
         return [Mover.from_payload(m) for m in data.get("screeners", [])]
 
     async def market_window(self, d: date) -> MarketWindow:
         c = self._c()
-        data = await self._guard(await c.get_market_hours([c.MarketHours.Market.EQUITY], date=d))
+        data = await self._guard(c.get_market_hours([c.MarketHours.Market.EQUITY], date=d))
         assert isinstance(data, dict)
         return MarketWindow.from_payload(d, data)
 
@@ -276,7 +295,7 @@ class SchwabBroker:
         end = self.now()
         start = end - timedelta(days=days * 2 + 7)  # weekends/holidays; trimmed below
         data = await self._guard(
-            await self._c().get_price_history_every_day(
+            self._c().get_price_history_every_day(
                 symbol, start_datetime=start, end_datetime=end
             )
         )
