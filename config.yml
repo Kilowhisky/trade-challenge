@@ -23,7 +23,11 @@ token:
   # (brewhouse.wetzelrice.com, Caddy) can replace it later.
   callback_url: https://brewmaster.tail14458e.ts.net:8443/oauth/callback
 shadow:
-  enabled: true                # Phase 0: shadow webhook only, no #llm-yolo, no orders
+  # Off 2026-10-08 (Chris: "Turn off shadow"). It only ever tagged messages
+  # "[shadow] " and picked the channel, to tell this engine apart from v2 in
+  # #llm-yolo; v2 retired 2026-09-07. It gates no orders -- the desk's paper
+  # phase (trading-desk design §16) is what keeps orders off.
+  enabled: false
 schedule:                      # ET. weekdays = trading days per get_market_hours
   tick:          "every 15m 09:32-15:47 weekdays"
   session_close: "at 16:04 weekdays"
